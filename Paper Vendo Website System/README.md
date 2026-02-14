@@ -9,7 +9,7 @@ This is the web management interface for the Paper Vendo Machine.
 3. **Database**: 
    - Create a database named `paper_vendo_db` in phpMyAdmin.
    - Import `paper_vendo.sql` found in this folder.
-4. **Run**: Open **http://localhost/Paper Vendo Machine Capstone/Paper Vendo Website System** remove the 2 asterisk mga par
+4. **Run**: Open localhost/Paper Vendo Machine Capstone/Paper Vendo Website System
 
 ## 🔑 Login Credentials
 - **Username**: `admin`
