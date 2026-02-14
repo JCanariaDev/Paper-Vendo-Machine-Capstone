@@ -1,16 +1,6 @@
 /*
  * Paper Vendo Machine - Arduino Code
- * Handles: Coin acceptor, user buttons, LCD, and paper dispensing
- * Communicates with single ESP32 via SoftwareSerial.
- *
- * Sizes supported (Philippines HS): 
- *   1/4, crosswise, lengthwise, 1 whole
- *
- * Protocol with ESP32:
- *   -> REQ:BRAND_ID:SIZE_CODE
- *   <- DISP:SHEETS:COST
- *   -> DONE:BRAND_ID:SIZE_CODE:AMOUNT:SHEETS
- *   -> ERR:ERROR_MESSAGE (optional)
+ * Updated with IR SENSORS for Physical Stock Detection
  */
 
 #include <Wire.h>
@@ -21,295 +11,210 @@
 // ------------------------------------------------
 // PINS & CONFIG
 // ------------------------------------------------
-// Size selection buttons
-#define BTN_SIZE_Q        2   // 1/4 sheet
-#define BTN_SIZE_CROSS    3   // crosswise
-#define BTN_SIZE_LENGTH   4   // lengthwise
-#define BTN_SIZE_WHOLE    8   // 1 whole
+#define BTN_SIZE_Q        2  
+#define BTN_SIZE_CROSS    3  
+#define BTN_SIZE_LENGTH   4  
+#define BTN_SIZE_WHOLE    8  
+#define BTN_PEN           A0 
 
-// Coin Acceptor (P1 pulse)
+// SENSORS (IR OBSTACLE SENSORS)
+// Normally LOW if object detected, HIGH if empty (depending on sensor type)
+// We assume: LOW = OBJECT DETECTED, HIGH = EMPTY
+#define SENSOR_Q          A2
+#define SENSOR_CROSS      A3
+#define SENSOR_LENGTH     A4
+#define SENSOR_WHOLE      A5
+#define SENSOR_PEN        13
+
 #define COIN_PIN          5
 
-// Servos per size (each controls one paper bin / separation mechanism)
-Servo servoQ;
-Servo servoCross;
-Servo servoLength;
-Servo servoWhole;
+Servo servoQ, servoCross, servoLength, servoWhole, servoPen;
 
 #define SERVO_Q_PIN       9
 #define SERVO_CROSS_PIN   10
 #define SERVO_LENGTH_PIN  11
 #define SERVO_WHOLE_PIN   12
+#define SERVO_PEN_PIN     A1
 
-// LCD (I2C)
 LiquidCrystal_I2C lcd(0x27, 16, 2);
-
-// Serial to ESP32 (UNO uses SoftwareSerial)
-SoftwareSerial espSerial(6, 7); // RX, TX
-
-// ------------------------------------------------
-// LOGIC CONFIG (Mapping between button, brand, and size)
-// ------------------------------------------------
-// NOTE: These brand IDs must exist in `paper_settings` table.
-// Example mapping: all sizes use brand 1 by default.
-// You can change these IDs to match specific pad/brand per bin.
-const int SIZE_BUTTONS[4] = { BTN_SIZE_Q, BTN_SIZE_CROSS, BTN_SIZE_LENGTH, BTN_SIZE_WHOLE };
-const int SIZE_BRAND_ID[4] = { 1, 1, 1, 1 };  // brand_id for each bin
-const char* SIZE_CODES[4]  = { "1/4", "crosswise", "lengthwise", "1_whole" };
-
-Servo* SIZE_SERVOS[4] = { &servoQ, &servoCross, &servoLength, &servoWhole };
+SoftwareSerial espSerial(6, 7);
 
 // ------------------------------------------------
 // RUNTIME STATE
 // ------------------------------------------------
-volatile int credits = 0;          // Available pesos
-int pendingIndex = -1;             // Which size index is currently requested
-bool waitingForDispense = false;   // True after sending REQ until DONE
+volatile int credits = 0;
+bool waitingForDispense = false;
+int pendingIndex = -1; 
 
-// ------------------------------------------------
-// FORWARD DECLARATIONS
-// ------------------------------------------------
-void coinInterrupt();
-void updateLCD();
-void handleSizeButton(int index);
-void processEspMessage(String msg);
-void performDispense(int index, int sheets, int cost);
-void runSeparationCycle(Servo* s, int count);
-void resetServos();
+unsigned long lastSensorCheck = 0;
+const int SENSOR_INTERVAL = 5000; // Check every 5s
 
-// ------------------------------------------------
-// SETUP
-// ------------------------------------------------
 void setup() {
-  Serial.begin(9600);      // Debugging
-  espSerial.begin(9600);   // To ESP32
+  Serial.begin(9600);
+  espSerial.begin(9600);
 
-  // LCD
   lcd.init();
   lcd.backlight();
-  lcd.setCursor(0, 0);
-  lcd.print("Paper Vendo");
-  lcd.setCursor(0, 1);
-  lcd.print("Ready...");
-
-  // Inputs
-  for (int i = 0; i < 4; i++) {
-    pinMode(SIZE_BUTTONS[i], INPUT_PULLUP);
-  }
+  lcd.setCursor(0,0); lcd.print("Smart Vendo V2");
+  
+  pinMode(BTN_SIZE_Q, INPUT_PULLUP);
+  pinMode(BTN_SIZE_CROSS, INPUT_PULLUP);
+  pinMode(BTN_SIZE_LENGTH, INPUT_PULLUP);
+  pinMode(BTN_SIZE_WHOLE, INPUT_PULLUP);
+  pinMode(BTN_PEN, INPUT_PULLUP);
+  
+  // Sensors
+  pinMode(SENSOR_Q, INPUT);
+  pinMode(SENSOR_CROSS, INPUT);
+  pinMode(SENSOR_LENGTH, INPUT);
+  pinMode(SENSOR_WHOLE, INPUT);
+  pinMode(SENSOR_PEN, INPUT);
+  
   pinMode(COIN_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(COIN_PIN), coinInterrupt, RISING);
+  attachInterrupt(digitalPinToInterrupt(COIN_PIN), [](){ 
+    static unsigned long lastPulse = 0;
+    if (millis() - lastPulse > 50) { credits++; lastPulse = millis(); }
+  }, RISING);
 
-  // Servos
   servoQ.attach(SERVO_Q_PIN);
   servoCross.attach(SERVO_CROSS_PIN);
   servoLength.attach(SERVO_LENGTH_PIN);
   servoWhole.attach(SERVO_WHOLE_PIN);
+  servoPen.attach(SERVO_PEN_PIN);
+  
   resetServos();
-
-  delay(1000);
   updateLCD();
 }
 
-// ------------------------------------------------
-// MAIN LOOP
-// ------------------------------------------------
 void loop() {
-  // 1. Check size buttons
-  for (int i = 0; i < 4; i++) {
-    if (digitalRead(SIZE_BUTTONS[i]) == LOW) {
-      handleSizeButton(i);
-      delay(300); // basic debounce
-    }
+  if (!waitingForDispense) {
+    if (digitalRead(BTN_SIZE_Q) == LOW) handlePaper(0);
+    if (digitalRead(BTN_SIZE_CROSS) == LOW) handlePaper(1);
+    if (digitalRead(BTN_SIZE_LENGTH) == LOW) handlePaper(2);
+    if (digitalRead(BTN_SIZE_WHOLE) == LOW) handlePaper(3);
+    if (digitalRead(BTN_PEN) == LOW) handlePen();
   }
 
-  // 2. Check ESP32 responses
+  // Periodic sensor reporting to ESP32
+  if (millis() - lastSensorCheck > SENSOR_INTERVAL) {
+    reportSensors();
+    lastSensorCheck = millis();
+  }
+
   if (espSerial.available()) {
-    String resp = espSerial.readStringUntil('\n');
-    resp.trim();
-    if (resp.length() > 0) {
-      Serial.println("ESP32: " + resp);
-      processEspMessage(resp);
-    }
+    String msg = espSerial.readStringUntil('\n');
+    msg.trim();
+    if (msg.length() > 0) processEspMessage(msg);
   }
 }
 
-// ------------------------------------------------
-// INTERRUPTS & UI
-// ------------------------------------------------
-void coinInterrupt() {
-  static unsigned long lastPulse = 0;
-  unsigned long now = millis();
-
-  if (now - lastPulse > 50) { // debounce ~50ms
-    credits++;   // 1 peso per pulse
-    lastPulse = now;
-    updateLCD();
-  }
+void reportSensors() {
+  // Protocol: SENS:Q:CROSS:LENGTH:WHOLE:PEN
+  // 1 = EMPTY, 0 = GOOD
+  int q = digitalRead(SENSOR_Q);
+  int c = digitalRead(SENSOR_CROSS);
+  int l = digitalRead(SENSOR_LENGTH);
+  int w = digitalRead(SENSOR_WHOLE);
+  int p = digitalRead(SENSOR_PEN);
+  
+  espSerial.print("SENS:");
+  espSerial.print(q); espSerial.print(":");
+  espSerial.print(c); espSerial.print(":");
+  espSerial.print(l); espSerial.print(":");
+  espSerial.print(w); espSerial.print(":");
+  espSerial.println(p);
 }
 
-void updateLCD() {
-  lcd.setCursor(0, 0);
-  lcd.print("Credits: P");
-  lcd.print(credits);
-  lcd.print("   "); // clear tail
-
-  lcd.setCursor(0, 1);
-  lcd.print("Select size -> ");
-}
-
-// ------------------------------------------------
-// BUTTON HANDLING
-// ------------------------------------------------
-void handleSizeButton(int index) {
-  if (waitingForDispense) {
-    // Prevent sending another request while busy
-    lcd.setCursor(0, 1);
-    lcd.print("Please wait... ");
+void handlePaper(int index) {
+  int sensors[] = {SENSOR_Q, SENSOR_CROSS, SENSOR_LENGTH, SENSOR_WHOLE};
+  if (digitalRead(sensors[index]) == HIGH) { // Sensor detects empty
+    showMsg("Slot is Empty!");
     return;
   }
-
-  if (credits < 1) { // assume minimum 1 peso
-    lcd.setCursor(0, 0);
-    lcd.print("Insert P1 coin ");
-    lcd.setCursor(0, 1);
-    lcd.print("                ");
-    delay(1200);
-    updateLCD();
-    return;
-  }
-
-  int brandId = SIZE_BRAND_ID[index];
-  const char* sizeCode = SIZE_CODES[index];
-
-  lcd.setCursor(0, 0);
-  lcd.print("Checking ");
-  lcd.print(sizeCode);
-  lcd.print("    ");
-
-  // Send REQ:BRAND_ID:SIZE_CODE\n
-  espSerial.print("REQ:");
-  espSerial.print(brandId);
-  espSerial.print(":");
-  espSerial.println(sizeCode);
-
+  
+  if (credits < 1) { showMsg("Insert P1 Coin"); return; }
+  const char* sizes[] = {"1/4", "crosswise", "lengthwise", "1_whole"};
+  lcd.setCursor(0,0); lcd.print("Checking DB...  ");
+  espSerial.print("REQ:1:"); 
+  espSerial.println(sizes[index]);
   pendingIndex = index;
   waitingForDispense = true;
 }
 
-// ------------------------------------------------
-// PROCESS ESP32 MESSAGES
-// ------------------------------------------------
-void processEspMessage(String msg) {
-  if (msg.startsWith("DISP:")) {
-    // Format: DISP:SHEETS:COST
-    // Example: DISP:3:1   -> 3 sheets, cost 1 peso
-    int first = msg.indexOf(':');
-    int second = msg.indexOf(':', first + 1);
-
-    if (first > 0 && second > first) {
-      int sheets = msg.substring(first + 1, second).toInt();
-      int cost   = (int)msg.substring(second + 1).toFloat(); // pesos
-
-      if (pendingIndex >= 0) {
-        performDispense(pendingIndex, sheets, cost);
-      }
-    }
-  } else if (msg.startsWith("ERR:")) {
-    // Error from ESP32 (ex: InsufficientStock)
-    String err = msg.substring(4);
-    lcd.setCursor(0, 0);
-    lcd.print("Machine Error  ");
-    lcd.setCursor(0, 1);
-    lcd.print(err.substring(0, 16));
-    delay(2000);
-    updateLCD();
-    waitingForDispense = false;
-    pendingIndex = -1;
-  }
-}
-
-// ------------------------------------------------
-// DISPENSE & MECHANISM
-// ------------------------------------------------
-void performDispense(int index, int sheets, int cost) {
-  if (credits < cost) {
-    lcd.setCursor(0, 0);
-    lcd.print("Need P");
-    lcd.print(cost);
-    lcd.print(" more   ");
-    delay(1500);
-    updateLCD();
-    waitingForDispense = false;
-    pendingIndex = -1;
+void handlePen() {
+  if (digitalRead(SENSOR_PEN) == HIGH) {
+    showMsg("Pens are Empty!");
     return;
   }
-
-  lcd.setCursor(0, 0);
-  lcd.print("Dispensing...  ");
-  lcd.setCursor(0, 1);
-  lcd.print(SIZE_CODES[index]);
-  lcd.print(" x");
-  lcd.print(sheets);
-  lcd.print("      ");
-
-  // Deduct credits (pesos)
-  credits -= cost;
-  if (credits < 0) credits = 0;
-
-  // Run separation cycle (simulate cutting single sheets from pad)
-  Servo* s = SIZE_SERVOS[index];
-  runSeparationCycle(s, sheets);
-
-  // Notify ESP32 about success
-  int brandId = SIZE_BRAND_ID[index];
-  const char* sizeCode = SIZE_CODES[index];
-
-  espSerial.print("DONE:");
-  espSerial.print(brandId);
-  espSerial.print(":");
-  espSerial.print(sizeCode);
-  espSerial.print(":");
-  espSerial.print(cost);
-  espSerial.print(":");
-  espSerial.println(sheets);
-
-  // UI feedback
-  lcd.setCursor(0, 0);
-  lcd.print("Take your paper");
-  delay(1500);
-  updateLCD();
-
-  waitingForDispense = false;
-  pendingIndex = -1;
+  if (credits < 10) { showMsg("Need P10 for Pen"); return; }
+  lcd.setCursor(0,0); lcd.print("Checking DB...  ");
+  espSerial.println("REQ:PEN");
+  pendingIndex = 4;
+  waitingForDispense = true;
 }
 
-// Simulated separation / cutting cycle
-// For each sheet, servo moves forward to "peel" one sheet from the glued pad
-// then retracts back to neutral.
-void runSeparationCycle(Servo* s, int count) {
-  const int FEED_ANGLE = 120;   // forward push angle
-  const int NEUTRAL_ANGLE = 10; // resting position
+void processEspMessage(String msg) {
+  if (msg.startsWith("DISP:")) {
+    int first = msg.indexOf(':');
+    int second = msg.indexOf(':', first + 1);
+    int sheets = msg.substring(first + 1, second).toInt();
+    int cost = msg.substring(second + 1).toInt();
+    if (credits >= cost) dispensePaper(pendingIndex, sheets, cost);
+    else showMsg("Low Credit");
+  } 
+  else if (msg.startsWith("DISP_PEN:")) {
+    int cost = msg.substring(9).toInt();
+    if (credits >= cost) dispensePen(cost);
+    else showMsg("Need P10 for Pen");
+  }
+  else if (msg.startsWith("ERR:")) {
+    showMsg(msg.substring(4));
+  }
+  waitingForDispense = false;
+}
 
+void dispensePaper(int index, int sheets, int cost) {
+  showMsg("Dispensing...   ");
+  credits -= cost;
+  Servo* servos[] = {&servoQ, &servoCross, &servoLength, &servoWhole};
+  runCycle(servos[index], sheets);
+  
+  const char* sizes[] = {"1/4", "crosswise", "lengthwise", "1_whole"};
+  espSerial.print("DONE:paper:1:"); 
+  espSerial.print(sizes[index]); espSerial.print(":"); 
+  espSerial.print(cost); espSerial.print(":"); 
+  espSerial.println(sheets);
+  showMsg("Success! Take it");
+}
+
+void dispensePen(int cost) {
+  showMsg("Dispensing Pen  ");
+  credits -= cost;
+  runCycle(&servoPen, 1);
+  espSerial.print("DONE:pen:1:"); 
+  espSerial.print(cost); espSerial.print(":"); 
+  espSerial.println(1);
+  showMsg("Success! Take it");
+}
+
+void runCycle(Servo* s, int count) {
   for (int i = 0; i < count; i++) {
-    // Push to separate one sheet
-    s->write(FEED_ANGLE);
-    delay(500);   // tune based on real hardware
-
-    // Small vibration wiggle to help break glue
-    s->write(NEUTRAL_ANGLE + 15);
-    delay(150);
-    s->write(FEED_ANGLE - 15);
-    delay(150);
-
-    // Return to neutral
-    s->write(NEUTRAL_ANGLE);
-    delay(500);
+    s->write(120); delay(600);
+    s->write(10); delay(600);
   }
 }
 
 void resetServos() {
-  servoQ.write(10);
-  servoCross.write(10);
-  servoLength.write(10);
-  servoWhole.write(10);
+  servoQ.write(10); servoCross.write(10); servoLength.write(10); servoWhole.write(10); servoPen.write(10);
+}
+
+void updateLCD() {
+  lcd.setCursor(0, 0); lcd.print("Credits: P"); lcd.print(credits); lcd.print("    ");
+  lcd.setCursor(0, 1); lcd.print("Ready to Serve  ");
+}
+
+void showMsg(String m) {
+  lcd.setCursor(0, 1); lcd.print(m + "               ");
+  delay(2000);
+  updateLCD();
 }
