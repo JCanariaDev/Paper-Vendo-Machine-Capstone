@@ -14,7 +14,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
     exit;
 }
 
-require_once __DIR__ . '/../Paper Vendo Website System/db_connect.php';
+// --- DATABASE CONNECTION ---
+// On Local: Api Folder and Website are in subfolders
+// On Hosting: If you put api.php in the same folder as db_connect.php, use the commented line.
+if (file_exists(__DIR__ . '/../Paper Vendo Website System/db_connect.php')) {
+    require_once __DIR__ . '/../Paper Vendo Website System/db_connect.php';
+} else {
+    require_once 'db_connect.php'; // Fallback if files are moved to the same directory
+}
 
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';

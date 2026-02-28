@@ -1,9 +1,20 @@
 <?php
 // db_connect.php
-$servername = "localhost"; // Change this if needed
-$username = "root";        // Default XAMPP user
-$password = "";            // Default XAMPP password
-$dbname = "paper_vendo_db"; // Make sure to create this DB in phpMyAdmin
+// --- LOCAL CONFIGURATION (XAMPP) ---
+$servername = "localhost";
+$username = "root";
+$password = "";
+$dbname = "paper_vendo_db";
+define('BASE_URL', '/Paper%20Vendo%20Machine%20Capstone/Paper%20Vendo%20Website%20System/');
+
+// --- HOSTING CONFIGURATION (Uncomment to use) ---
+/*
+$servername = "sqlXXX.epizy.com";     // e.g., sql301.epizy.com
+$username   = "epiz_XXXXXXXX";        // e.g., epiz_12345678
+$password   = "your_hosting_pass";   
+$dbname     = "epiz_XXXXXXXX_db";
+define('BASE_URL', '/');             // Adjust if in a subfolder like /paper-vendo/
+*/
 
 $conn = new mysqli($servername, $username, $password, $dbname);
 

@@ -6,12 +6,19 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 
 const char* ssid = "YOUR_WIFI_SSID";
 const char* password = "YOUR_WIFI_PASSWORD";
+// --- LOCAL CONFIGURATION (XAMPP) ---
 #define SERVER_IP "192.168.1.100"
 const String API_BASE = String("http://") + SERVER_IP + "/Paper%20Vendo%20Machine%20Capstone/Api%20Folder/api.php";
+
+// --- HOSTING CONFIGURATION (Uncomment to use) ---
+/*
+const String API_BASE = "https://yourdomain.infinityfreeapp.com/Api%20Folder/api.php";
+*/
 
 #define RXD2 16
 #define TXD2 17
@@ -101,7 +108,17 @@ void handleArduinoProtocol(String msg) {
 
 void updatePhysicalStatus(String type, int id, String status) {
     HTTPClient http;
+    
+    // --- FOR HTTPS/SSL (Uncomment if using Hosting) ---
+    /*
+    WiFiClientSecure client;
+    client.setInsecure(); // Skips certificate validation (good for testing)
+    http.begin(client, API_BASE + "?action=update_sensor_status");
+    */
+    
+    // --- FOR LOCAL HTTP ---
     http.begin(API_BASE + "?action=update_sensor_status");
+    
     http.addHeader("Content-Type", "application/json");
     String json = "{\"item_type\":\"" + type + "\",\"item_id\":" + String(id) + ",\"status\":\"" + status + "\"}";
     http.POST(json);

@@ -1,10 +1,12 @@
 <?php
 session_start();
+require_once 'db_connect.php'; // Ensure BASE_URL is defined
+
 if (!isset($_SESSION['admin_id'])) {
-    header("Location: index.php");
+    $redirect = defined('BASE_URL') ? BASE_URL . "index.php" : "index.php";
+    header("Location: $redirect");
     exit;
 }
-require_once 'db_connect.php';
 
 // Fetch current user details if needed for navbar
 $current_user_id = $_SESSION['admin_id'];

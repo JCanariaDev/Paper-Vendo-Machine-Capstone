@@ -25,7 +25,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
              $log_stmt->bind_param("i", $row['id']);
              $log_stmt->execute();
              
-             header("Location: dashboard.php");
+             header("Location: " . BASE_URL . "dashboard.php");
              exit;
         } else {
             $error = "Incorrect password.";
