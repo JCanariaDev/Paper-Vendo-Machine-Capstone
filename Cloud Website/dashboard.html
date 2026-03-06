@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Cloud Dashboard - Paper Vendo</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <div class="dashboard-wrapper">
+        <!-- Sidebar -->
+        <div id="sidebar">
+            <div class="sidebar-header">
+                <i class="fas fa-leaf"></i> VENDO CLOUD
+            </div>
+            <ul class="sidebar-menu">
+                <li><a href="dashboard.html" class="active"><i class="fas fa-th-large"></i> Dashboard</a></li>
+                <li><a href="inventory.html"><i class="fas fa-sliders-h"></i> Inventory</a></li>
+                <li><a href="transactions.html"><i class="fas fa-history"></i> History</a></li>
+                <li><a href="users.html"><i class="fas fa-user-friends"></i> Admins</a></li>
+                <li><a href="#" onclick="auth.logout()"><i class="fas fa-power-off"></i> Logout</a></li>
+            </ul>
+        </div>
+
+        <div id="content">
+            <!-- Header -->
+            <div class="topbar">
+                <h2 id="pageTitle">Dashboard</h2>
+                <div style="display:flex; align-items:center;">
+                    <div class="theme-toggle" onclick="theme.toggle()"></div>
+                    <div class="user-profile">
+                        <div class="user-info">
+                            <span class="user-name" id="displayUsername">Admin</span>
+                            <span class="user-role" id="displayRole">Super Admin</span>
+                        </div>
+                        <div class="user-avatar" id="displayInitial">A</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="container-fluid">
+                <!-- SENSOR ALERTS -->
+                <div id="alertsContainer"></div>
+
+                <div class="row">
+                    <div class="col-xl-4 col-md-6 mb-4">
+                        <div class="card border-left-success h-100 py-2">
+                            <div class="card-body">
+                                <div class="text-xs text-success text-uppercase mb-1">Total Sales</div>
+                                <div class="h5 mb-0 font-weight-bold" id="totalSales">₱0.00</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-xl-4 col-md-6 mb-4">
+                        <div class="card border-left-info h-100 py-2">
+                            <div class="card-body">
+                                <div class="text-xs text-info text-uppercase mb-1">Papers Dispensed</div>
+                                <div class="h5 mb-0 font-weight-bold" id="totalPapers">0</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-xl-4 col-md-12 mb-4">
+                        <div class="card border-left-success h-100 py-2" id="connectionCard">
+                            <div class="card-body">
+                                <div class="text-xs text-uppercase mb-1">Machine Connection</div>
+                                <div class="h5 mb-0 font-weight-bold" id="connectionStatus">Checking...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-xl-8">
+                        <div class="card mb-4">
+                            <div class="card-header">
+                                <h6>Weekly Sales Trend (Cloud Live)</h6>
+                            </div>
+                            <div class="card-body"><canvas id="myAreaChart"></canvas></div>
+                        </div>
+                    </div>
+                    <div class="col-xl-4">
+                        <div class="card mb-4">
+                            <div class="card-header">
+                                <h6>Live Stock & Sensor Status</h6>
+                            </div>
+                            <div class="card-body" id="stockContainer">
+                                <!-- Loaded via JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script>
+        const user = auth.check();
+        if (user) {
+            document.getElementById('displayUsername').innerText = user.username;
+            // Clean the role (remove underscore and capitalize)
+            let cleanRole = user.role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+            document.getElementById('displayRole').innerText = cleanRole;
+            document.getElementById('displayInitial').innerText = user.username.charAt(0).toUpperCase();
+        }
+
+        async function initDashboard() {
+            // 1. Fetch Sales Totals
+            const sales = await supabaseRequest('sales_transactions', 'GET', null, '?select=amount_paid,qty_dispensed,item_type');
+            let total = 0, papers = 0;
+            sales.forEach(s => {
+                total += parseFloat(s.amount_paid);
+                if (s.item_type === 'paper') papers += s.qty_dispensed;
+            });
+            document.getElementById('totalSales').innerText = `₱${total.toLocaleString()}`;
+            document.getElementById('totalPapers').innerText = papers.toLocaleString();
+
+            // 2. Fetch Machine Status
+            const status = await supabaseRequest('machine_status', 'GET');
+            const heartbeatObj = status.find(s => s.status_key === 'last_heartbeat');
+            if (heartbeatObj) {
+                const lastHeart = new Date(heartbeatObj.status_value);
+                const isOnline = (new Date() - lastHeart) < 120000; // 2 minutes
+                document.getElementById('connectionStatus').innerText = isOnline ? "Online (Active)" : "Offline (Disconnected)";
+                document.getElementById('connectionCard').className = `card border-left-${isOnline ? 'success' : 'danger'} h-100 py-2`;
+            }
+
+            // 3. Fetch Stock & Alerts
+            const stock = await supabaseRequest('paper_settings', 'GET');
+            const stockDiv = document.getElementById('stockContainer');
+            const alertsDiv = document.getElementById('alertsContainer');
+            stockDiv.innerHTML = '';
+            alertsDiv.innerHTML = '';
+
+            stock.forEach(item => {
+                const percent = (item.current_stock / item.max_capacity) * 100;
+                const statusColor = item.physical_status === 'Empty' ? 'var(--danger)' : 'var(--success)';
+
+                // Add Stock Row
+                stockDiv.innerHTML += `
+                    <div class='mb-3'>
+                        <div class='d-flex justify-content-between mb-1'>
+                            <small class='font-weight-bold'>${item.brand_name}</small>
+                            <span class='badge' style='background:${statusColor}; color:white;'>${item.physical_status}</span>
+                        </div>
+                        <div class='progress' style='height:6px; background:#334155; border-radius:5px;'>
+                            <div style='width:${percent}%; background:var(--primary); height:100%; border-radius:5px;'></div>
+                        </div>
+                    </div>`;
+
+                // Add Alert if physical empty but DB has stock
+                if (item.physical_status === 'Empty' && item.current_stock > 0) {
+                    alertsDiv.innerHTML = `
+                        <div class="card bg-danger text-white border-0 shadow-lg mb-4">
+                            <div class="card-body py-3 d-flex align-items-center">
+                                <i class="fas fa-exclamation-triangle fa-2x mr-3"></i>
+                                <div><h6 class="m-0 font-weight-bold">Hardware Alert: Panel Empty</h6>
+                                <p class="m-0 small">The sensor for ${item.brand_name} reports empty, but DB shows ${item.current_stock} pcs.</p></div>
+                            </div>
+                        </div>`;
+                }
+            });
+
+            // 4. Weekly Chart
+            updateChart(sales);
+        }
+
+        function updateChart(salesData) {
+            const ctx = document.getElementById("myAreaChart");
+            const labels = [];
+            const data = [];
+            for (let i = 6; i >= 0; i--) {
+                const d = new Date();
+                d.setDate(d.getDate() - i);
+                labels.push(d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+
+                const daySales = salesData.filter(s => {
+                    const sd = new Date(s.transaction_date); // Note: Need transaction_date in select
+                    return sd.toDateString() === d.toDateString();
+                }).reduce((sum, s) => sum + parseFloat(s.amount_paid), 0);
+                data.push(daySales);
+            }
+
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{ label: "Earnings", tension: 0.4, borderColor: "#4f46e5", data: data, fill: true, backgroundColor: "rgba(79, 110, 229, 0.05)" }]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        initDashboard();
+        // Auto refresh every 30 seconds
+        setInterval(initDashboard, 30000);
+    </script>
+</body>
+
+</html>

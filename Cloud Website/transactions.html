@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Cloud Transactions - Paper Vendo</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" rel="stylesheet">
+</head>
+
+<body>
+    <div class="dashboard-wrapper">
+        <div id="sidebar">
+            <div class="sidebar-header"><i class="fas fa-leaf"></i> VENDO CLOUD</div>
+            <ul class="sidebar-menu">
+                <li><a href="dashboard.html"><i class="fas fa-th-large"></i> Dashboard</a></li>
+                <li><a href="inventory.html"><i class="fas fa-sliders-h"></i> Inventory</a></li>
+                <li><a href="transactions.html" class="active"><i class="fas fa-history"></i> History</a></li>
+                <li><a href="users.html"><i class="fas fa-user-friends"></i> Admins</a></li>
+                <li><a href="#" onclick="auth.logout()"><i class="fas fa-power-off"></i> Logout</a></li>
+            </ul>
+        </div>
+
+        <div id="content">
+            <div class="topbar">
+                <h2>History</h2>
+                <div style="display:flex; align-items:center;">
+                    <div class="theme-toggle" onclick="theme.toggle()"></div>
+                    <div class="user-profile">
+                        <div class="user-info">
+                            <span class="user-name" id="displayUsername">Admin</span>
+                            <span class="user-role" id="displayRole">Staff</span>
+                        </div>
+                        <div class="user-avatar" id="displayInitial">A</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="container-fluid">
+                <div class="card">
+                    <div class="card-header">
+                        <h6>Transaction Logs (Cloud)</h6>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Date & Time</th>
+                                    <th>Item Type</th>
+                                    <th>Brand/Details</th>
+                                    <th>Qty</th>
+                                    <th>Amount Paid</th>
+                                </tr>
+                            </thead>
+                            <tbody id="transactionTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script>
+        const user = auth.check();
+        if (user) {
+            document.getElementById('displayUsername').innerText = user.username;
+            let cleanRole = user.role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+            document.getElementById('displayRole').innerText = cleanRole;
+            document.getElementById('displayInitial').innerText = user.username.charAt(0).toUpperCase();
+        }
+
+        async function loadTransactions() {
+            // Fetch sales with joined paper brand names
+            // Note: Postgres/Supabase syntax for joins is select=*,table(column)
+            const transactions = await supabaseRequest('sales_transactions', 'GET', null, '?select=*,paper_settings(brand_name)&order=transaction_date.desc');
+            const table = document.getElementById('transactionTable');
+            table.innerHTML = '';
+
+            transactions.forEach(t => {
+                const date = new Date(t.transaction_date).toLocaleString();
+                const details = t.item_type === 'paper'
+                    ? `${t.paper_settings ? t.paper_settings.brand_name : 'Unknown'} (${t.paper_size})`
+                    : 'Ballpen';
+
+                table.innerHTML += `
+                    <tr>
+                        <td>${date}</td>
+                        <td style="text-transform: capitalize;">${t.item_type}</td>
+                        <td>${details}</td>
+                        <td>${t.qty_dispensed}</td>
+                        <td class="text-success font-weight-bold">₱${parseFloat(t.amount_paid).toFixed(2)}</td>
+                    </tr>`;
+            });
+        }
+
+        loadTransactions();
+    </script>
+</body>
+
+</html>

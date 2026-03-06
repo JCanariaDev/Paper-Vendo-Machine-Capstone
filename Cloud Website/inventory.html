@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Cloud Inventory - Paper Vendo</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" rel="stylesheet">
+</head>
+
+<body>
+    <div class="dashboard-wrapper">
+        <!-- Sidebar and Header (Same as dashboard) -->
+        <div id="sidebar">
+            <div class="sidebar-header"><i class="fas fa-leaf"></i> VENDO CLOUD</div>
+            <ul class="sidebar-menu">
+                <li><a href="dashboard.html"><i class="fas fa-th-large"></i> Dashboard</a></li>
+                <li><a href="inventory.html" class="active"><i class="fas fa-sliders-h"></i> Inventory</a></li>
+                <li><a href="transactions.html"><i class="fas fa-history"></i> History</a></li>
+                <li><a href="users.html"><i class="fas fa-user-friends"></i> Admins</a></li>
+                <li><a href="#" onclick="auth.logout()"><i class="fas fa-power-off"></i> Logout</a></li>
+            </ul>
+        </div>
+
+        <div id="content">
+            <div class="topbar">
+                <h2>Inventory</h2>
+                <div style="display:flex; align-items:center;">
+                    <div class="theme-toggle" onclick="theme.toggle()"></div>
+                    <div class="user-profile">
+                        <div class="user-info">
+                            <span class="user-name" id="displayUsername">Admin</span>
+                            <span class="user-role" id="displayRole">Staff</span>
+                        </div>
+                        <div class="user-avatar" id="displayInitial">A</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="container-fluid">
+                <!-- PAPER INVENTORY -->
+                <div class="card">
+                    <div class="card-header">
+                        <h6>Paper Stock & Pricing</h6>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Brand</th>
+                                    <th>Size</th>
+                                    <th>Price</th>
+                                    <th>Sheets/Unit</th>
+                                    <th>Stock</th>
+                                    <th>Sensor</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="inventoryTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- BALLPEN INVENTORY -->
+                <div class="card">
+                    <div class="card-header">
+                        <h6>Ballpen Stock & Pricing</h6>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Item Name</th>
+                                    <th>Price</th>
+                                    <th>Stock</th>
+                                    <th>Sensor Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="penTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Edit/Add -->
+    <div id="itemModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <h3 id="modalTitle">Edit Item</h3>
+            <form id="itemForm">
+                <input type="hidden" id="itemId">
+                <div class="form-group">
+                    <label>Brand Name</label>
+                    <input type="text" id="brandName" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label>Stock Quantity</label>
+                    <input type="number" id="stockQty" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label>Price (₱)</label>
+                    <input type="number" id="price" class="form-control" step="0.01" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">Save Changes</button>
+            </form>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script>
+        const user = auth.check();
+        if (user) {
+            document.getElementById('displayUsername').innerText = user.username;
+            let cleanRole = user.role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+            document.getElementById('displayRole').innerText = cleanRole;
+            document.getElementById('displayInitial').innerText = user.username.charAt(0).toUpperCase();
+        }
+
+        async function loadInventory() {
+            // Load Papers
+            const papers = await supabaseRequest('paper_settings', 'GET');
+            const pTable = document.getElementById('inventoryTable');
+            pTable.innerHTML = '';
+            papers.forEach(item => {
+                pTable.innerHTML += `
+                    <tr>
+                        <td>${item.brand_name}</td>
+                        <td>${item.paper_size}</td>
+                        <td>₱${item.cost_per_unit}</td>
+                        <td>${item.sheets_per_unit}</td>
+                        <td><span class="badge ${item.current_stock < 10 ? 'badge-danger' : 'badge-primary'}">${item.current_stock}</span></td>
+                        <td><span class="badge ${item.physical_status === 'Empty' ? 'badge-danger' : 'badge-success'}">${item.physical_status}</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-primary" onclick='editItem(${JSON.stringify(item)}, "paper")'><i class="fas fa-edit"></i></button>
+                        </td>
+                    </tr>`;
+            });
+
+            // Load Pens
+            const pens = await supabaseRequest('ballpen_settings', 'GET');
+            const penTable = document.getElementById('penTable');
+            penTable.innerHTML = '';
+            pens.forEach(item => {
+                penTable.innerHTML += `
+                    <tr>
+                        <td>${item.item_name}</td>
+                        <td>₱${item.cost_per_unit}</td>
+                        <td><span class="badge ${item.current_stock < 5 ? 'badge-danger' : 'badge-primary'}">${item.current_stock}</span></td>
+                        <td><span class="badge ${item.physical_status === 'Empty' ? 'badge-danger' : 'badge-success'}">${item.physical_status}</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-primary" onclick='editItem(${JSON.stringify(item)}, "ballpen")'><i class="fas fa-edit"></i></button>
+                        </td>
+                    </tr>`;
+            });
+        }
+
+        let currentType = 'paper';
+        function editItem(item, type) {
+            currentType = type;
+            document.getElementById('itemId').value = item.id;
+            document.getElementById('brandName').value = type === 'paper' ? item.brand_name : item.item_name;
+            document.getElementById('stockQty').value = item.current_stock;
+            document.getElementById('price').value = item.cost_per_unit;
+            document.getElementById('modalTitle').innerText = type === 'paper' ? 'Edit Paper' : 'Edit Ballpen';
+            document.getElementById('itemModal').style.display = 'block';
+        }
+
+        document.getElementById('itemForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const id = document.getElementById('itemId').value;
+            const table = currentType === 'paper' ? 'paper_settings' : 'ballpen_settings';
+            const data = {
+                current_stock: parseInt(document.getElementById('stockQty').value),
+                cost_per_unit: parseFloat(document.getElementById('price').value)
+            };
+
+            if (currentType === 'paper') data.brand_name = document.getElementById('brandName').value;
+            else data.item_name = document.getElementById('brandName').value;
+
+            await supabaseRequest(table, 'PATCH', data, `?id=eq.${id}`);
+            closeModal();
+            loadInventory();
+        });
+
+        function closeModal() { document.getElementById('itemModal').style.display = 'none'; }
+        loadInventory();
+    </script>
+</body>
+
+</html>
