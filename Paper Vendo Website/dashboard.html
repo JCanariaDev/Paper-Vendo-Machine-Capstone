@@ -28,7 +28,12 @@
         <div id="content">
             <!-- Header -->
             <div class="topbar">
-                <h2 id="pageTitle">Dashboard</h2>
+                <div style="display:flex; align-items:center;">
+                    <button class="mobile-toggle" onclick="document.getElementById('sidebar').classList.toggle('show')">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <h2 id="pageTitle">Dashboard</h2>
+                </div>
                 <div style="display:flex; align-items:center;">
                     <div class="theme-toggle" onclick="theme.toggle()"></div>
                     <div class="user-profile">
