@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Cloud User Management - Paper Vendo</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" rel="stylesheet">
+</head>
+
+<body>
+    <div class="dashboard-wrapper">
+        <div id="sidebar">
+            <div class="sidebar-header"><i class="fas fa-leaf"></i> VENDO CLOUD</div>
+            <ul class="sidebar-menu">
+                <li><a href="dashboard.html"><i class="fas fa-th-large"></i> Dashboard</a></li>
+                <li><a href="inventory.html"><i class="fas fa-sliders-h"></i> Inventory</a></li>
+                <li><a href="transactions.html"><i class="fas fa-history"></i> History</a></li>
+                <li><a href="users.html" class="active"><i class="fas fa-user-friends"></i> Admins</a></li>
+                <li><a href="#" onclick="auth.logout()"><i class="fas fa-power-off"></i> Logout</a></li>
+            </ul>
+        </div>
+
+        <div id="content">
+            <div class="topbar">
+                <h2>Admins</h2>
+                <div style="display:flex; align-items:center;">
+                    <div class="theme-toggle" onclick="theme.toggle()"></div>
+                    <div class="user-profile">
+                        <div class="user-info">
+                            <span class="user-name" id="displayUsername">Admin</span>
+                            <span class="user-role" id="displayRole">Staff</span>
+                        </div>
+                        <div class="user-avatar" id="displayInitial">A</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="container-fluid">
+                <div class="card">
+                    <div class="card-header">
+                        <h6>System Administrators</h6>
+                        <button class="btn btn-primary btn-sm" onclick="openUserModal()"><i
+                                class="fas fa-user-plus"></i> Add Admin</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Username</th>
+                                    <th>Role</th>
+                                    <th>Created At</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="userTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Edit/Add User -->
+    <div id="userModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeUserModal()">&times;</span>
+            <h3 id="userModalTitle">Add Administrator</h3>
+            <form id="userForm">
+                <input type="hidden" id="userId">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="usernameField" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="passwordField" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label>Role</label>
+                    <select id="roleField" class="form-control">
+                        <option value="admin">Administrator</option>
+                        <option value="super_admin">Super Admin</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">Save User</button>
+            </form>
+        </div>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script>
+        const user = auth.check();
+        if (user) {
+            document.getElementById('displayUsername').innerText = user.username;
+            let cleanRole = user.role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+            document.getElementById('displayRole').innerText = cleanRole;
+            document.getElementById('displayInitial').innerText = user.username.charAt(0).toUpperCase();
+        }
+
+        async function loadUsers() {
+            const users = await supabaseRequest('admins', 'GET');
+            const table = document.getElementById('userTable');
+            table.innerHTML = '';
+
+            users.forEach(u => {
+                const date = new Date(u.created_at).toLocaleDateString();
+                table.innerHTML += `
+                    <tr>
+                        <td>${u.id}</td>
+                        <td>${u.username}</td>
+                        <td style="text-transform: capitalize;">${u.role.replace('_', ' ')}</td>
+                        <td>${date}</td>
+                        <td>
+                            <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id})">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </td>
+                    </tr>`;
+            });
+        }
+
+        async function deleteUser(id) {
+            if (id === user.id) {
+                alert("You cannot delete your own account!");
+                return;
+            }
+            if (confirm("Are you sure you want to remove this administrator?")) {
+                await supabaseRequest('admins', 'DELETE', null, `?id=eq.${id}`);
+                loadUsers();
+            }
+        }
+
+        function openUserModal() {
+            document.getElementById('userModal').style.display = 'block';
+        }
+
+        function closeUserModal() {
+            document.getElementById('userModal').style.display = 'none';
+        }
+
+        document.getElementById('userForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const data = {
+                username: document.getElementById('usernameField').value,
+                password: document.getElementById('passwordField').value,
+                role: document.getElementById('roleField').value
+            };
+
+            await supabaseRequest('admins', 'POST', data);
+            closeUserModal();
+            loadUsers();
+        });
+
+        loadUsers();
+    </script>
+</body>
+
+</html>

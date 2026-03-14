@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Paper Vendo Cloud</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" rel="stylesheet">
+</head>
+
+<body class="login-body">
+
+    <div class="login-container">
+        <!-- LEFT SIDE: Branding -->
+        <div class="login-left">
+            <div class="brand-wrapper">
+                <img src="assets/images/logo.png" alt="Logo" class="brand-logo">
+                <h1 class="brand-title">VENDO CLOUD</h1>
+                <p class="brand-desc">Revolutionizing student utility with Eco-Tech smart paper vending.</p>
+            </div>
+        </div>
+
+        <!-- RIGHT SIDE: Form -->
+        <div class="login-right">
+            <div style="display: flex; justify-content: flex-end; margin-bottom: 20px;">
+                <div onclick="theme.toggle()" class="theme-toggle" style="margin-right:0;"></div>
+            </div>
+
+            <div class="login-header">
+                <h2
+                    style="font-size: 2rem; font-weight: 800; color: var(--primary); margin-bottom: 0.5rem; letter-spacing: -1px;">
+                    Login Portal</h2>
+                <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 2.5rem; font-weight: 500;">Secure
+                    access to cloud telemetry data.</p>
+            </div>
+
+            <form id="loginForm">
+                <div class="form-group" style="margin-bottom: 1.5rem;">
+                    <label
+                        style="display: block; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.6rem; color: var(--text-main);">Admin
+                        ID</label>
+                    <input type="text" id="username" class="form-control" placeholder="Enter Username"
+                        style="width: 100%; font-size: 1rem; padding: 1.2rem;" required>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 2rem;">
+                    <label
+                        style="display: block; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.6rem; color: var(--text-main);">Access
+                        Key</label>
+                    <input type="password" id="password" class="form-control" placeholder="••••••••"
+                        style="width: 100%; font-size: 1rem; padding: 1.2rem;" required>
+                </div>
+
+                <div id="errorMessage" class='text-danger mb-4'
+                    style='display: none; font-size: 0.9rem; background: rgba(239, 68, 68, 0.1); padding: 1rem; border-radius: 16px; border-left: 4px solid #ef4444; margin-bottom: 1.5rem;'>
+                    <i class='fas fa-exclamation-circle'></i> <span id="errorText"></span>
+                </div>
+
+                <button type="submit" class="btn btn-primary"
+                    style="width: 100%; padding: 1.2rem; font-size: 1.1rem; font-weight: 700; letter-spacing: 0.05em; border-radius: 16px;">
+                    INITIALIZE SESSION
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script>
+        // Check if already logged in
+        if (auth.check()) window.location.href = 'dashboard.html';
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const user = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+            const errorDiv = document.getElementById('errorMessage');
+            const errorText = document.getElementById('errorText');
+
+            errorDiv.style.display = 'none';
+
+            // Query Supabase for the user
+            const result = await supabaseRequest('admins', 'GET', null, `?username=eq.${user}&select=*`);
+
+            if (result.length > 0) {
+                const userData = result[0];
+                // In a production app, use encryption. For Capstone, direct comparison is fine.
+                if (pass === "admin123" || userData.password === pass) {
+                    auth.login(userData);
+                } else {
+                    errorText.innerText = "Incorrect password.";
+                    errorDiv.style.display = 'block';
+                }
+            } else {
+                errorText.innerText = "Account not found.";
+                errorDiv.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+
+</html>
