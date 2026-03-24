@@ -48,8 +48,25 @@ const auth = {
         const user = localStorage.getItem('vendo_user');
         if (!user && !window.location.pathname.includes('index.html')) {
             window.location.href = 'index.html';
+            return null;
         }
-        return user ? JSON.parse(user) : null;
+        
+        const parsedUser = user ? JSON.parse(user) : null;
+        
+        // Background Security Check: Verify this session hasn't been spoofed
+        if (parsedUser && !window.location.pathname.includes('index.html')) {
+            supabaseRequest('admins', 'GET', null, `?username=eq.${parsedUser.username}&password=eq.${parsedUser.password}&select=id`)
+                .then(result => {
+                    // If the database returns 0 matches for this username/password combo, or an error happens
+                    if (!result || result.error || result.length === 0) {
+                        console.warn("Spoofed or invalid session detected. Logging out automatically.");
+                        auth.logout();
+                    }
+                })
+                .catch(err => console.error("Session verification failed", err));
+        }
+
+        return parsedUser;
     }
 };
 

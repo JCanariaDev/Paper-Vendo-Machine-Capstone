@@ -71,8 +71,33 @@ INSERT INTO machine_status (status_key, status_value) VALUES
 ('wifi_signal', 'Excellent')
 ON CONFLICT (status_key) DO NOTHING;
 
--- Enable Realtime for Cloud Dashboard
-ALTER PUBLICATION supabase_realtime ADD TABLE paper_settings;
-ALTER PUBLICATION supabase_realtime ADD TABLE ballpen_settings;
-ALTER PUBLICATION supabase_realtime ADD TABLE machine_status;
-ALTER PUBLICATION supabase_realtime ADD TABLE sales_transactions;
+-- Enable Realtime for Cloud Dashboard (Run only once, uncomment if needed)
+-- ALTER PUBLICATION supabase_realtime ADD TABLE paper_settings;
+-- ALTER PUBLICATION supabase_realtime ADD TABLE ballpen_settings;
+-- ALTER PUBLICATION supabase_realtime ADD TABLE machine_status;
+-- ALTER PUBLICATION supabase_realtime ADD TABLE sales_transactions;
+
+-- 7. Triggers for Auto-Decrementing Stock
+-- Function to subtract stock automatically
+CREATE OR REPLACE FUNCTION deduct_inventory_stock()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.item_type = 'paper' THEN
+        UPDATE paper_settings 
+        SET current_stock = GREATEST(current_stock - NEW.qty_dispensed, 0)
+        WHERE id = NEW.brand_id AND paper_size = NEW.paper_size;
+    ELSIF NEW.item_type = 'pen' THEN
+        UPDATE ballpen_settings
+        SET current_stock = GREATEST(current_stock - NEW.qty_dispensed, 0)
+        WHERE id = NEW.brand_id;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger to fire the function after inserting a sale
+DROP TRIGGER IF EXISTS trg_deduct_inventory ON sales_transactions;
+CREATE TRIGGER trg_deduct_inventory
+AFTER INSERT ON sales_transactions
+FOR EACH ROW
+EXECUTE FUNCTION deduct_inventory_stock();
