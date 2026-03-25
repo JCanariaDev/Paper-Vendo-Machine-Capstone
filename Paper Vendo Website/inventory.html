@@ -10,6 +10,9 @@
 </head>
 
 <body>
+    <!-- Mobile Overlay -->
+    <div class="sidebar-overlay" onclick="document.getElementById('sidebar').classList.remove('show'); this.classList.remove('show');"></div>
+
     <div class="dashboard-wrapper">
         <!-- Sidebar and Header (Same as dashboard) -->
         <div id="sidebar">
@@ -19,6 +22,7 @@
                 <li><a href="inventory.html" class="active"><i class="fas fa-sliders-h"></i> Inventory</a></li>
                 <li><a href="transactions.html"><i class="fas fa-history"></i> History</a></li>
                 <li><a href="users.html"><i class="fas fa-user-friends"></i> Admins</a></li>
+                <li><a href="machine.html"><i class="fas fa-satellite-dish"></i> Machine Status</a></li>
                 <li><a href="#" onclick="auth.logout()"><i class="fas fa-power-off"></i> Logout</a></li>
             </ul>
         </div>
@@ -26,7 +30,7 @@
         <div id="content">
             <div class="topbar">
                 <div style="display:flex; align-items:center;">
-                    <button class="mobile-toggle" onclick="document.getElementById('sidebar').classList.toggle('show')">
+                    <button class="mobile-toggle" onclick="document.getElementById('sidebar').classList.toggle('show'); document.querySelector('.sidebar-overlay').classList.toggle('show');">
                         <i class="fas fa-bars"></i>
                     </button>
                     <h2>Inventory</h2>

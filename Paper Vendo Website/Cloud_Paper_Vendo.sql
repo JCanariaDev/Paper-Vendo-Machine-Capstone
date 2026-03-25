@@ -59,9 +59,14 @@ INSERT INTO paper_settings (brand_name, paper_size, cost_per_unit, sheets_per_un
 ('Budget Brand (White)', '1/4',       1.00, 4, 100, 500),
 ('Budget Brand (White)', 'crosswise', 1.00, 3, 100, 500),
 ('Budget Brand (White)', 'lengthwise',1.00, 3, 100, 500),
-('Budget Brand (White)', '1_whole',   1.00, 2, 100, 500);
+('Budget Brand (White)', '1_whole',   1.00, 2, 100, 500),
+('Standard Brand (Yellow)', '1/4',       2.00, 4, 100, 500),
+('Standard Brand (Yellow)', 'crosswise', 2.00, 3, 100, 500),
+('Standard Brand (Yellow)', 'lengthwise',2.00, 3, 100, 500),
+('Standard Brand (Yellow)', '1_whole',   2.00, 2, 100, 500);
 
 INSERT INTO ballpen_settings (item_name, cost_per_unit, current_stock, max_capacity) VALUES
+('Budget Ballpen', 5.00, 50, 100),
 ('Standard Ballpen', 10.00, 50, 100);
 
 INSERT INTO machine_status (status_key, status_value) VALUES 
