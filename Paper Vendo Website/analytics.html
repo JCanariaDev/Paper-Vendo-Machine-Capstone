@@ -206,15 +206,23 @@
         let standardSalesData = []; // Store it globally for exports
 
         async function initAnalytics() {
-            // Load all transactions
-            standardSalesData = await supabaseRequest('sales_transactions', 'GET', null, '?select=*,paper_settings(brand_name),ballpen_settings(item_name)');
-            
-            if (!standardSalesData || standardSalesData.length === 0) {
-                console.log("No data found, showing demo data.");
+            try {
+                // Pre-render demo data first so it's not blank
                 showMockData();
-            } else {
-                buildTimeChart(standardSalesData);
-                buildProductChart(standardSalesData);
+
+                // Load all transactions
+                standardSalesData = await supabaseRequest('sales_transactions', 'GET', null, '?select=*,paper_settings(brand_name),ballpen_settings(item_name)');
+                
+                if (standardSalesData && standardSalesData.length > 0) {
+                    console.log("Live data found, updating charts.");
+                    buildTimeChart(standardSalesData);
+                    buildProductChart(standardSalesData);
+                } else {
+                    console.log("No data found, keeping demo data.");
+                }
+            } catch (err) {
+                console.error("Supabase error:", err);
+                // Demo data stays if fetch fails
             }
         }
 
@@ -254,9 +262,11 @@
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: isMock ? 'Demo Data: Hourly Earnings (₱)' : 'Total Hourly Earnings (₱)',
+                        label: isMock ? 'DEMO DATA (Hourly)' : 'Total Hourly Earnings (₱)',
                         data: hourBuckets,
-                        backgroundColor: isMock ? 'rgba(148, 163, 184, 0.5)' : 'rgba(16, 185, 129, 0.7)',
+                        backgroundColor: isMock ? 'rgba(74, 222, 128, 0.3)' : 'rgba(16, 185, 129, 0.7)',
+                        borderColor: isMock ? 'rgba(74, 222, 128, 0.8)' : 'rgba(16, 185, 129, 1)',
+                        borderWidth: isMock ? 1 : 0,
                         borderRadius: 6
                     }]
                 },
@@ -269,9 +279,9 @@
                     plugins: {
                         title: {
                             display: isMock,
-                            text: 'NO LIVE DATA YET - DISPLAYING SAMPLE TRENDS',
-                            color: '#e2e8f0',
-                            font: { weight: 'bold' }
+                            text: '--- PREVIEW: NO LIVE SALES YET ---',
+                            color: '#10b981',
+                            font: { weight: 'bold', size: 14 }
                         }
                     }
                 }
