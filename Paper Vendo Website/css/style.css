@@ -160,7 +160,7 @@ body {
 }
 
 #pageTitle {
-    font-size: 1.5rem;
+    font-size: clamp(1.1rem, 4vw, 1.5rem);
     font-weight: 700;
     color: var(--text-main);
     letter-spacing: -0.02em;
@@ -630,7 +630,8 @@ body {
 
 @media (max-width: 991px) {
     #sidebar {
-        transform: translateX(-100%);
+        transform: translateX(-101%);
+        width: 280px;
     }
     
     #sidebar.show {
@@ -660,32 +661,104 @@ body {
     #content {
         margin-left: 0;
         width: 100%;
+        padding-top: 64px;
     }
     
+    .topbar {
+        position: fixed;
+        width: 100%;
+        left: 0;
+        padding: 0 1rem;
+        height: 64px;
+        background: var(--bg-card);
+        border-bottom: 1px solid var(--border-color);
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    }
+
     .mobile-toggle {
         display: block;
-        margin-right: 15px;
+        margin-right: 12px;
+        font-size: 1.25rem;
     }
-    
+
+    #pageTitle {
+        font-size: 1.15rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 150px;
+    }
+
     .container-fluid {
-        padding: 1.5rem;
+        padding: 1rem;
     }
 
-    .login-container {
-        flex-direction: column;
-        border-radius: 20px;
+    .card {
+        margin-bottom: 1rem;
+        border-radius: 16px;
     }
 
-    .login-left {
-        padding: 3rem 2rem;
+    .card-body {
+        padding: 1rem;
     }
 
-    .login-right {
-        padding: 3rem 2rem;
+    .h5.font-weight-bold {
+        font-size: 1rem;
     }
     
-    .login-left .brand-title {
-        font-size: 2rem;
+    .table-responsive {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        margin: 0 -1rem;
+        padding: 0 1rem;
+        border: none;
+    }
+
+    .table th, .table td {
+        white-space: nowrap;
+        padding: 0.75rem;
+        font-size: 0.8rem;
+    }
+
+    /* Hide less important columns on mobile if needed */
+    .hide-mobile {
+        display: none !important;
+    }
+
+    .user-info {
+        display: none;
+    }
+
+    .user-avatar {
+        width: 32px;
+        height: 32px;
+        font-size: 0.85rem;
+    }
+
+    .theme-toggle {
+        margin-right: 10px;
+        transform: scale(0.9);
+    }
+    
+    /* Login Mobile Adjustments */
+    .modern-login-card {
+        padding: 2.5rem 1.5rem;
+        margin: 1rem;
+    }
+
+    .brand-title {
+        font-size: 1.5rem;
+    }
+}
+
+/* Fix for very small screens */
+@media (max-width: 375px) {
+    #pageTitle {
+        max-width: 100px;
+    }
+    
+    .topbar {
+        gap: 5px;
     }
 }
 
