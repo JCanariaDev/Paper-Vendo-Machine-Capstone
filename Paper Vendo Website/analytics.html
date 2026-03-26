@@ -160,13 +160,13 @@
 
                 <div class="row mt-4">
                     <!-- Peak Buying Hours -->
-                    <div class="col-md-8 mb-4">
+                    <div class="col-12 mb-4">
                         <div class="card h-100">
                             <div class="card-header">
                                 <h6>Peak Demand Hours (When do students buy most?)</h6>
                             </div>
                             <div class="card-body">
-                                <div class="chart-container">
+                                <div class="chart-container" style="height: 400px;">
                                     <canvas id="timeChart"></canvas>
                                 </div>
                             </div>
@@ -174,13 +174,13 @@
                     </div>
 
                     <!-- Best Selling Items -->
-                    <div class="col-md-4 mb-4">
+                    <div class="col-12 mb-4">
                         <div class="card h-100">
                             <div class="card-header">
-                                <h6>Best-Selling Products</h6>
+                                <h6>Best-Selling Products Breakdown</h6>
                             </div>
                             <div class="card-body" style="display: flex; justify-content: center; align-items: center;">
-                                <div class="chart-container" style="height: 250px;">
+                                <div class="chart-container" style="height: 450px;">
                                     <canvas id="productChart"></canvas>
                                 </div>
                             </div>
@@ -209,20 +209,38 @@
             // Load all transactions
             standardSalesData = await supabaseRequest('sales_transactions', 'GET', null, '?select=*,paper_settings(brand_name),ballpen_settings(item_name)');
             
-            buildTimeChart(standardSalesData);
-            buildProductChart(standardSalesData);
+            if (!standardSalesData || standardSalesData.length === 0) {
+                console.log("No data found, showing demo data.");
+                showMockData();
+            } else {
+                buildTimeChart(standardSalesData);
+                buildProductChart(standardSalesData);
+            }
         }
 
-        function buildTimeChart(sales) {
+        function showMockData() {
+            // Dummy data for visual indicator when system is new
+            const mockSales = [];
+            // Create some random-ish data for charts
+            buildTimeChart([], true); 
+            buildProductChart([], true);
+        }
+
+        function buildTimeChart(sales, isMock = false) {
             const ctx = document.getElementById('timeChart').getContext('2d');
             
             // Bucket by Hour (0 to 23)
             let hourBuckets = new Array(24).fill(0);
             
-            sales.forEach(sale => {
-                let hour = new Date(sale.transaction_date).getHours();
-                hourBuckets[hour] += parseFloat(sale.amount_paid);
-            });
+            if (isMock) {
+                // Generate a "Bell Curve" of fake data for Peak Hours (mid-day peaks)
+                hourBuckets = hourBuckets.map((v, i) => (i > 7 && i < 18) ? Math.floor(Math.random() * 50) + 10 : 0);
+            } else {
+                sales.forEach(sale => {
+                    let hour = new Date(sale.transaction_date).getHours();
+                    hourBuckets[hour] += parseFloat(sale.amount_paid);
+                });
+            }
 
             // Convert military time to AM/PM labels
             let labels = hourBuckets.map((v, i) => {
@@ -236,9 +254,9 @@
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: 'Total Hourly Earnings (₱)',
+                        label: isMock ? 'Demo Data: Hourly Earnings (₱)' : 'Total Hourly Earnings (₱)',
                         data: hourBuckets,
-                        backgroundColor: 'rgba(16, 185, 129, 0.7)',
+                        backgroundColor: isMock ? 'rgba(148, 163, 184, 0.5)' : 'rgba(16, 185, 129, 0.7)',
                         borderRadius: 6
                     }]
                 },
@@ -247,23 +265,37 @@
                     maintainAspectRatio: false,
                     scales: {
                         y: { beginAtZero: true }
+                    },
+                    plugins: {
+                        title: {
+                            display: isMock,
+                            text: 'NO LIVE DATA YET - DISPLAYING SAMPLE TRENDS',
+                            color: '#e2e8f0',
+                            font: { weight: 'bold' }
+                        }
                     }
                 }
             });
         }
 
-        function buildProductChart(sales) {
+        function buildProductChart(sales, isMock = false) {
             const ctx = document.getElementById('productChart').getContext('2d');
             
-            let itemsCount = {};
-            sales.forEach(sale => {
-                let name = sale.item_type === 'paper' ? (sale.paper_size || "Paper") : "Pen";
-                if (!itemsCount[name]) itemsCount[name] = 0;
-                itemsCount[name] += sale.qty_dispensed;
-            });
-
-            const labels = Object.keys(itemsCount);
-            const data = Object.values(itemsCount);
+            let labels, data;
+            
+            if (isMock) {
+                labels = ["1/4 Paper", "Crosswise", "Lengthwise", "1 Whole", "Ballpen"];
+                data = [30, 25, 15, 10, 20];
+            } else {
+                let itemsCount = {};
+                sales.forEach(sale => {
+                    let name = sale.item_type === 'paper' ? (sale.paper_size || "Paper") : "Pen";
+                    if (!itemsCount[name]) itemsCount[name] = 0;
+                    itemsCount[name] += sale.qty_dispensed;
+                });
+                labels = Object.keys(itemsCount);
+                data = Object.values(itemsCount);
+            }
 
             new Chart(ctx, {
                 type: 'doughnut',
@@ -271,9 +303,9 @@
                     labels: labels,
                     datasets: [{
                         data: data,
-                        backgroundColor: [
-                            '#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'
-                        ],
+                        backgroundColor: isMock ? 
+                            ['#475569', '#64748b', '#94a3b8', '#cbd5e1', '#e2e8f0'] :
+                            ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'],
                         borderWidth: 0
                     }]
                 },
@@ -281,7 +313,12 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { position: 'bottom' }
+                        legend: { position: 'bottom' },
+                        title: {
+                            display: isMock,
+                            text: 'SAMPLE PRODUCT RATIO',
+                            color: '#94a3b8'
+                        }
                     }
                 }
             });
