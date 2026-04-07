@@ -1,7 +1,3 @@
-/*
- * Paper Vendo Machine - Arduino Code
- * Updated with IR SENSORS for Physical Stock Detection
- */
 
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>

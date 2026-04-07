@@ -1,8 +1,4 @@
-/* 
-   Paper Vendo Machine - Cloud Edition
-   Direct Supabase Integration (No PHP Middleman)
-   Mirrors the structure of main.cpp
-*/
+
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -11,8 +7,8 @@
 #include <ArduinoJson.h>
 
 // --- WIFI CONFIGURATION ---
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
+const char* ssid = "WIFI_SSID";
+const char* password = "WIFI_PASSWORD";
 
 // --- SUPABASE CONFIGURATION ---
 const String SUPABASE_URL = "https://iqbieobtvrkmfjoenwrq.supabase.co/rest/v1/";
