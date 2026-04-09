@@ -115,6 +115,10 @@
                     <label>Price (₱)</label>
                     <input type="number" id="price" class="form-control" step="0.01" required>
                 </div>
+                <div class="form-group" id="sheetsGroup">
+                    <label>Sheets Per Unit</label>
+                    <input type="number" id="sheetsPerUnit" class="form-control">
+                </div>
                 <button type="submit" class="btn btn-primary btn-block">Save Changes</button>
             </form>
         </div>
@@ -175,6 +179,16 @@
             document.getElementById('brandName').value = type === 'paper' ? item.brand_name : item.item_name;
             document.getElementById('stockQty').value = item.current_stock;
             document.getElementById('price').value = item.cost_per_unit;
+            
+            // Handle Sheets Per Unit (Paper only)
+            const sheetsGroup = document.getElementById('sheetsGroup');
+            if (type === 'paper') {
+                sheetsGroup.style.display = 'block';
+                document.getElementById('sheetsPerUnit').value = item.sheets_per_unit;
+            } else {
+                sheetsGroup.style.display = 'none';
+            }
+            
             document.getElementById('modalTitle').innerText = type === 'paper' ? 'Edit Paper' : 'Edit Ballpen';
             document.getElementById('itemModal').style.display = 'block';
         }
@@ -188,8 +202,12 @@
                 cost_per_unit: parseFloat(document.getElementById('price').value)
             };
 
-            if (currentType === 'paper') data.brand_name = document.getElementById('brandName').value;
-            else data.item_name = document.getElementById('brandName').value;
+            if (currentType === 'paper') {
+                data.brand_name = document.getElementById('brandName').value;
+                data.sheets_per_unit = parseInt(document.getElementById('sheetsPerUnit').value);
+            } else {
+                data.item_name = document.getElementById('brandName').value;
+            }
 
             await supabaseRequest(table, 'PATCH', data, `?id=eq.${id}`);
             closeModal();
