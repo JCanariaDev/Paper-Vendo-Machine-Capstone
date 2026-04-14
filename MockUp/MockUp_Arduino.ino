@@ -1,32 +1,24 @@
-/*
-  MockUp_Arduino.ino
-  Description: Simple test for one compartment (Ballpen).
-  Connect a button between Pin 2 and GND.
-*/
-
-const int buttonPin = 2; // The button for "Buy Ballpen"
+const int buttonPin = 2;
 
 void setup() {
-  Serial.begin(9600); // Communicate with ESP32 at 9600 baud
-  pinMode(buttonPin, INPUT_PULLUP); // Use internal pullup, button connects Pin 2 to GND
+  Serial.begin(9600);  // This talks to your LAPTOP
+  Serial1.begin(9600); // This talks to the ESP32 (Pin 18)
   
-  Serial.println("Arduino Ready! Press the button to buy a ballpen.");
+  pinMode(buttonPin, INPUT_PULLUP);
+  Serial.println("Arduino Mega Ready! Using TX1 (Pin 18) to talk to ESP32.");
 }
 
 void loop() {
-  // Check if button is pressed (LOW because of INPUT_PULLUP)
   if (digitalRead(buttonPin) == LOW) {
-    delay(50); // Debounce
+    delay(50); 
     if (digitalRead(buttonPin) == LOW) {
       
-      // Send a simulated "DONE" message to the ESP32
-      // Format: DONE:TYPE:ID:NAME:PRICE:QTY
-      // We simulate buying 1 Standard Ballpen (ID 2 in our SQL) for 10 Pesos
-      Serial.println("DONE:pen:2:Standard Ballpen:10.0:1");
+      // We use Serial1 to send the message to the ESP32!
+      Serial1.println("DONE:pen:2:Standard Ballpen:10.0:1");
       
-      Serial.println("Arduino Sent: SOLD! Waiting for next press...");
+      // We use Serial to show YOU what happened on the laptop
+      Serial.println(">>> Button Pressed! Sending signal to ESP32 over Pin 18...");
       
-      // Wait for release
       while(digitalRead(buttonPin) == LOW); 
       delay(500); 
     }
