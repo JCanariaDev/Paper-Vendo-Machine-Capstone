@@ -18,8 +18,8 @@ const char* password = "lancelot";
 //const char* password = "HericoAA24";
 
 // --- SUPABASE CONFIG ---
-const String supabase_url = "https://iqbieobtvrkmfjoenwrq.supabase.co";
-const String supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxYmllb2J0dnJrbWZqb2Vud3JxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3NTE1MDMsImV4cCI6MjA4ODMyNzUwM30.bBldTEWeaw3LLyUMtDWwDML3uKL_ofV7sRKd6JrfMZo";
+const String supabase_url = "https://jowpzdynbdeznuvohrpx.supabase.co";
+const String supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impvd3B6ZHluYmRlem51dm9ocnB4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxMTExNDYsImV4cCI6MjA5MTY4NzE0Nn0.plD8ehYQsBgzfXrXBHJpqHanQF5GPKYlM53I1t3wfO0";
 
 void setup() {
   Serial.begin(115200);
