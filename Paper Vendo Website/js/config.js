@@ -3,17 +3,20 @@
    Project: Paper Vendo Cloud
 */
 
-const SUPABASE_URL = "https://iqbieobtvrkmfjoenwrq.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxYmllb2J0dnJrbWZqb2Vud3JxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3NTE1MDMsImV4cCI6MjA4ODMyNzUwM30.bBldTEWeaw3LLyUMtDWwDML3uKL_ofV7sRKd6JrfMZo";
+
+//Change url and key
+const NEW_SUPABASE_URL = "https://jowpzdynbdeznuvohrpx.supabase.co";
+const NEW_SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impvd3B6ZHluYmRlem51dm9ocnB4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxMTExNDYsImV4cCI6MjA5MTY4NzE0Nn0.plD8ehYQsBgzfXrXBHJpqHanQF5GPKYlM53I1t3wfO0";
+
 
 // Helper to handle all API requests
 async function supabaseRequest(table, method = 'GET', data = null, query = '') {
-    const url = `${SUPABASE_URL}/rest/v1/${table}${query}`;
+    const url = `${NEW_SUPABASE_URL}/rest/v1/${table}${query}`;
     const options = {
         method: method,
         headers: {
-            "apikey": SUPABASE_KEY,
-            "Authorization": `Bearer ${SUPABASE_KEY}`,
+            "apikey": NEW_SUPABASE_KEY,
+            "Authorization": `Bearer ${NEW_SUPABASE_KEY}`,
             "Content-Type": "application/json",
             "Prefer": "return=representation"
         }
@@ -50,9 +53,9 @@ const auth = {
             window.location.href = 'index.html';
             return null;
         }
-        
+
         const parsedUser = user ? JSON.parse(user) : null;
-        
+
         // Background Security Check: Verify this session hasn't been spoofed
         if (parsedUser && !window.location.pathname.includes('index.html')) {
             supabaseRequest('admins', 'GET', null, `?username=eq.${parsedUser.username}&password=eq.${parsedUser.password}&select=id`)
