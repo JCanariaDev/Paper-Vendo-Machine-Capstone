@@ -10,8 +10,11 @@
 */
 
 // --- WIFI CONFIG ---
-const char* ssid = "realme C3";
-const char* password = "lancelot";
+// const char* ssid = "realme C3";
+// const char* password = "lancelot";
+
+const char* ssid = "HericoSnap 2.4G";
+const char* password = "HericoAA24";
 
 // --- SUPABASE CONFIG ---
 const String supabase_url = "https://iqbieobtvrkmfjoenwrq.supabase.co";

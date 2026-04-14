@@ -14,6 +14,9 @@
 const char* ssid = "realme C3";
 const char* password = "lancelot";
 
+//const char* ssid = "HericoSnap 2.4G";
+//const char* password = "HericoAA24";
+
 // --- SUPABASE CONFIG ---
 const String supabase_url = "https://iqbieobtvrkmfjoenwrq.supabase.co";
 const String supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxYmllb2J0dnJrbWZqb2Vud3JxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3NTE1MDMsImV4cCI6MjA4ODMyNzUwM30.bBldTEWeaw3LLyUMtDWwDML3uKL_ofV7sRKd6JrfMZo";
