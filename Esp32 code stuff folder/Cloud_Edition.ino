@@ -11,8 +11,8 @@ const char* ssid = "WIFI_SSID";
 const char* password = "WIFI_PASSWORD";
 
 // --- SUPABASE CONFIGURATION ---
-const String SUPABASE_URL = "https://iqbieobtvrkmfjoenwrq.supabase.co/rest/v1/";
-const String SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxYmllb2J0dnJrbWZqb2Vud3JxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3NTE1MDMsImV4cCI6MjA4ODMyNzUwM30.bBldTEWeaw3LLyUMtDWwDML3uKL_ofV7sRKd6JrfMZo";
+const String SUPABASE_URL = "https://jowpzdynbdeznuvohrpx.supabase.co/rest/v1/";
+const String SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impvd3B6ZHluYmRlem51dm9ocnB4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxMTExNDYsImV4cCI6MjA5MTY4NzE0Nn0.plD8ehYQsBgzfXrXBHJpqHanQF5GPKYlM53I1t3wfO0";
 
 #define RXD2 16
 #define TXD2 17
