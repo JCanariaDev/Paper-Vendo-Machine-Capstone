@@ -1,3 +1,12 @@
+-- NUKE EVERYTHING (For a clean reset)
+DROP TRIGGER IF EXISTS trg_deduct_inventory ON sales_transactions;
+DROP FUNCTION IF EXISTS deduct_inventory_stock();
+DROP TABLE IF EXISTS sales_transactions;
+DROP TABLE IF EXISTS paper_settings;
+DROP TABLE IF EXISTS ballpen_settings;
+DROP TABLE IF EXISTS machine_status;
+DROP TABLE IF EXISTS admins;
+
 -- 1. Create Admins Table
 CREATE TABLE IF NOT EXISTS admins (
     id SERIAL PRIMARY KEY,

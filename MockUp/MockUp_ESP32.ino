@@ -22,7 +22,10 @@ const String supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdX
 
 void setup() {
   Serial.begin(115200);   // Debug output to Serial Monitor
-  Serial2.begin(9600);    // Receive data from Arduino on Pin 16 (RX2)
+  
+  // Explicitly tell the ESP32 to use Pin 16 as the "Ear" (RX)
+  Serial2.begin(9600, SERIAL_8N1, 16, 17); 
+  Serial2.setTimeout(100); // Wait a bit longer for the full message
   
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
@@ -42,12 +45,24 @@ void loop() {
     Serial.print("Arudino Signal: ");
     Serial.println(incoming);
     
-    // Check for the "DONE" command from Arduino
-    // Format: DONE:TYPE:ID:NAME:PRICE:QTY
-    if (incoming.startsWith("DONE:")) {
-      Serial.println(">>> TRANSACTION DETECTED! Sending to Supabase...");
+    // Check for "REQUEST" from Arduino (Handshake start)
+    // Format: REQ:TYPE:ID:COINS
+    if (incoming.startsWith("REQ:")) {
+      int typeIdx = incoming.indexOf(':', 0) + 1;
+      int idIdx = incoming.indexOf(':', typeIdx) + 1;
+      int coinIdx = incoming.indexOf(':', idIdx) + 1;
       
-      // We parse the message (e.g., DONE:pen:2:Standard Ballpen:10.0:1)
+      String type = incoming.substring(typeIdx, idIdx - 1);
+      String id = incoming.substring(idIdx, coinIdx - 1);
+      float userCoins = incoming.substring(coinIdx).toFloat();
+      
+      Serial.print(">>> CLOUD CHECK for Item ID: "); Serial.println(id);
+      fetchItemData(type, id, userCoins);
+    }
+    
+    // Check for the "DONE" command from Arduino (Final log)
+    if (incoming.startsWith("DONE:")) {
+      // ... (Existing parsing code)
       int typeIdx = incoming.indexOf(':', 0) + 1;
       int idIdx = incoming.indexOf(':', typeIdx) + 1;
       int nameIdx = incoming.indexOf(':', idIdx) + 1;
@@ -60,10 +75,62 @@ void loop() {
       String price = incoming.substring(priceIdx, qtyIdx - 1);
       String qty = incoming.substring(qtyIdx);
       
-      // LOG IT!
       logTransaction(type, id, name, price, qty);
     }
   }
+}
+
+void fetchItemData(String type, String id, float userCoins) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  
+  HTTPClient http;
+  String table = (type == "paper") ? "paper_settings" : "ballpen_settings";
+  
+  // Specific columns for each table to avoid SQL errors
+  String selectCols = (type == "paper") ? "cost_per_unit,sheets_per_unit,paper_size" : "cost_per_unit,item_name";
+  String url = supabase_url + "/rest/v1/" + table + "?id=eq." + id + "&select=" + selectCols;
+  
+  Serial.print(">>> Fetching from: "); Serial.println(url);
+  
+  http.begin(client, url);
+  http.addHeader("apikey", supabase_key);
+  http.addHeader("Authorization", "Bearer " + supabase_key);
+  
+  int httpCode = http.GET();
+  Serial.print(">>> Cloud Response Code: "); Serial.println(httpCode);
+  
+  if (httpCode == 200) {
+    String payload = http.getString();
+    Serial.print(">>> Data Received: "); Serial.println(payload);
+    
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, payload);
+    
+    if (doc.size() > 0) {
+      float cost = doc[0]["cost_per_unit"];
+      int sheets = (type == "paper") ? (int)doc[0]["sheets_per_unit"] : 1;
+      String name = (type == "paper") ? doc[0]["paper_size"].as<String>() : doc[0]["item_name"].as<String>();
+      
+      if (userCoins >= cost) {
+        Serial.println(">>> CREDIT OK!");
+        Serial2.print("DISPENSE:");
+        Serial2.print(sheets); Serial2.print(":");
+        Serial2.print(cost); Serial2.print(":");
+        Serial2.println(name);
+      } else {
+        Serial.println(">>> CREDIT TOO LOW");
+        Serial2.println("ERR:LOW_CREDIT");
+      }
+    } else {
+      Serial.println(">>> ITEM NOT FOUND");
+      Serial2.println("ERR:ID_NOT_FOUND");
+    }
+  } else {
+    Serial.print(">>> CLOUD ERROR: "); Serial.println(http.errorToString(httpCode));
+    Serial2.println("ERR:CLOUD_FAIL");
+  }
+  http.end();
 }
 
 void logTransaction(String type, String id, String name, String price, String qty) {
@@ -80,8 +147,8 @@ void logTransaction(String type, String id, String name, String price, String qt
   http.addHeader("Content-Type", "application/json");
 
   // Create JSON Payload
-  // We use the brand_id column for the item's ID in settings table
-  String jsonBody = "{\"item_type\":\"" + type + "\", \"brand_id\":" + id + ", \"amount_paid\":" + price + ", \"qty_dispensed\":" + qty + "}";
+  // We include paper_size so the Paper Trigger can find the right row
+  String jsonBody = "{\"item_type\":\"" + type + "\", \"brand_id\":" + id + ", \"paper_size\":\"" + name + "\", \"amount_paid\":" + price + ", \"qty_dispensed\":" + qty + "}";
 
   int httpCode = http.POST(jsonBody);
   
