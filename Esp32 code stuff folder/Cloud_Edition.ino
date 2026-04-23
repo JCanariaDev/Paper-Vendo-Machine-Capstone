@@ -1,224 +1,141 @@
-
-
-#include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 
-// --- WIFI CONFIGURATION ---
-const char* ssid = "WIFI_SSID";
-const char* password = "WIFI_PASSWORD";
+/*
+  Cloud_Edition.ino - Final Production Version
+  Gateway for Paper Vendo Machine
+*/
 
-// --- SUPABASE CONFIGURATION ---
-const String SUPABASE_URL = "https://jowpzdynbdeznuvohrpx.supabase.co/rest/v1/";
-const String SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impvd3B6ZHluYmRlem51dm9ocnB4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxMTExNDYsImV4cCI6MjA5MTY4NzE0Nn0.plD8ehYQsBgzfXrXBHJpqHanQF5GPKYlM53I1t3wfO0";
+// --- WIFI CONFIG ---
+const char* ssid = "realme C3";
+const char* password = "lancelot";
 
-#define RXD2 16
-#define TXD2 17
-
-unsigned long lastHeartbeat = 0;
+// --- SUPABASE CONFIG ---
+const String supabase_url = "https://jowpzdynbdeznuvohrpx.supabase.co";
+const String supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impvd3B6ZHluYmRlem51dm9ocnB4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxMTExNDYsImV4cCI6MjA5MTY4NzE0Nn0.plD8ehYQsBgzfXrXBHJpqHanQF5GPKYlM53I1t3wfO0";
 
 void setup() {
-    Serial.begin(115200);
-    Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
-    connectWiFi();
-    Serial.println("ESP32 Cloud Ready");
+  Serial.begin(115200);   
+  // Serial2 for Mega (RX=16, TX=17)
+  Serial2.begin(9600, SERIAL_8N1, 16, 17); 
+  
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Connected! Machine Online.");
 }
 
 void loop() {
-    if (WiFi.status() != WL_CONNECTED) connectWiFi();
-
-    if (Serial2.available()) {
-        String msg = Serial2.readStringUntil('\n');
-        msg.trim();
-        if (msg.length() > 0) {
-            Serial.println("Arduino -> ESP32: " + msg);
-            if (msg.startsWith("SENS:")) processSensorReport(msg);
-            else if (msg.length() > 0) handleArduinoProtocol(msg);
-        }
-    }
-
-    if (millis() - lastHeartbeat > 30000) { 
-        updateMachineStatus("Running");
-        lastHeartbeat = millis();
-    }
-}
-
-// --------------------------------------------------------------------------------
-// PROTOCOL HANDLERS
-// --------------------------------------------------------------------------------
-
-void processSensorReport(String msg) {
-    // Protocol: SENS:Q:CROSS:LENGTH:WHOLE:PEN
-    // 1=Empty, 0=Good
-    int values[5];
-    int count = 0;
-    int startIdx = 5;
-    for (int i = 0; i < 5; i++) {
-        int nextColon = msg.indexOf(':', startIdx);
-        if (nextColon == -1) nextColon = msg.length();
-        values[i] = msg.substring(startIdx, nextColon).toInt();
-        startIdx = nextColon + 1;
-    }
-
-    // Update 4 paper slots (Assuming IDs 1,2,3,4)
-    updatePhysicalStatus("paper", 1, values[0] == 1 ? "Empty" : "Good");
-    updatePhysicalStatus("paper", 2, values[1] == 1 ? "Empty" : "Good");
-    updatePhysicalStatus("paper", 3, values[2] == 1 ? "Empty" : "Good");
-    updatePhysicalStatus("paper", 4, values[3] == 1 ? "Empty" : "Good");
-    // Update 1 pen slot (Small modification: Assuming ballpen ID is 1)
-    updatePhysicalStatus("ballpen", 1, values[4] == 1 ? "Empty" : "Good");
-}
-
-void handleArduinoProtocol(String msg) {
-    if (msg.startsWith("REQ:")) {
-        if (msg.substring(4) == "PEN") {
-            requestComputation("ballpen", 1, "");
-        } else {
-            int firstColon = msg.indexOf(':');
-            int secondColon = msg.indexOf(':', firstColon + 1);
-            int bid = msg.substring(firstColon+1, secondColon).toInt();
-            String size = msg.substring(secondColon+1);
-            requestComputation("paper", bid, size);
-        }
+  if (Serial2.available()) {
+    String incoming = Serial2.readStringUntil('\n');
+    incoming.trim();
+    
+    if (incoming.startsWith("REQ:")) {
+      handleRequest(incoming);
     } 
-    else if (msg.startsWith("DONE:")) {
-        registerTransaction(msg);
+    else if (incoming.startsWith("DONE:")) {
+      handleLog(incoming);
     }
+  }
 }
 
-// --------------------------------------------------------------------------------
-// CLOUD OPERATIONS (SUPABASE)
-// --------------------------------------------------------------------------------
-
-void updatePhysicalStatus(String type, int id, String status) {
-    HTTPClient http;
-    WiFiClientSecure client;
-    client.setInsecure();
-
-    String table = (type == "paper") ? "paper_settings" : "ballpen_settings";
-    String url = SUPABASE_URL + table + "?id=eq." + String(id);
-    
-    http.begin(client, url);
-    http.addHeader("apikey", SUPABASE_KEY);
-    http.addHeader("Authorization", "Bearer " + SUPABASE_KEY);
-    http.addHeader("Content-Type", "application/json");
-
-    String json = "{\"physical_status\":\"" + status + "\"}";
-    http.PATCH(json);
-    http.end();
+void handleRequest(String msg) {
+  // Format: REQ:TYPE:ID:COINS
+  int first = msg.indexOf(':');
+  int second = msg.indexOf(':', first + 1);
+  int third = msg.indexOf(':', second + 1);
+  
+  String type = msg.substring(first + 1, second);
+  String id = msg.substring(second + 1, third);
+  float coins = msg.substring(third + 1).toFloat();
+  
+  fetchAndValidate(type, id, coins);
 }
 
-void requestComputation(String type, int id, String size) {
-    HTTPClient http;
-    WiFiClientSecure client;
-    client.setInsecure();
-
-    String url;
-    if (type == "paper") {
-        url = SUPABASE_URL + "paper_settings?id=eq." + String(id) + "&paper_size=eq." + size + "&select=sheets_per_unit,cost_per_unit";
-    } else {
-        url = SUPABASE_URL + "ballpen_settings?id=eq." + String(id) + "&select=cost_per_unit";
-    }
-
-    http.begin(client, url);
-    http.addHeader("apikey", SUPABASE_KEY);
-    http.addHeader("Authorization", "Bearer " + SUPABASE_KEY);
+void fetchAndValidate(String type, String id, float coins) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  
+  String table = (type == "paper") ? "paper_settings" : "ballpen_settings";
+  String cols = (type == "paper") ? "cost_per_unit,sheets_per_unit,paper_size" : "cost_per_unit,item_name";
+  String url = supabase_url + "/rest/v1/" + table + "?id=eq." + id + "&select=" + cols;
+  
+  http.begin(client, url);
+  http.addHeader("apikey", supabase_key);
+  http.addHeader("Authorization", "Bearer " + supabase_key);
+  
+  int httpCode = http.GET();
+  if (httpCode == 200) {
+    String payload = http.getString();
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, payload);
     
-    int code = http.GET();
-    if (code == 200) {
-        String payload = http.getString();
-        DynamicJsonDocument doc(512);
-        deserializeJson(doc, payload);
-        
-        if (doc.size() > 0) {
-            if (type == "paper") {
-                int sheets = doc[0]["sheets_per_unit"];
-                int cost = doc[0]["cost_per_unit"];
-                Serial2.println("DISP:" + String(sheets) + ":" + String(cost));
-            } else {
-                int cost = doc[0]["cost_per_unit"];
-                Serial2.println("DISP_PEN:" + String(cost));
-            }
+    if (doc.size() > 0) {
+      float cost = doc[0]["cost_per_unit"];
+      String name = (type == "paper") ? doc[0]["paper_size"].as<String>() : doc[0]["item_name"].as<String>();
+      
+      if (coins >= cost) {
+        if (type == "paper") {
+          // --- BULK PAPER LOGIC ---
+          int units = (int)(coins / cost);
+          int sheetsPerUnit = doc[0]["sheets_per_unit"];
+          int totalSheets = units * sheetsPerUnit;
+          float totalCost = units * cost;
+          
+          Serial2.print("DISPENSE:");
+          Serial2.print(totalSheets); Serial2.print(":");
+          Serial2.print(totalCost); Serial2.print(":");
+          Serial2.println(name);
         } else {
-            Serial2.println("ERR:No Stock Data");
+          // --- PEN LOGIC (1 unit + Change) ---
+          Serial2.print("DISPENSE:1:");
+          Serial2.print(cost); Serial2.print(":");
+          Serial2.println(name);
         }
+      } else {
+        Serial2.println("ERR:LOW_CREDIT");
+      }
     } else {
-        Serial2.println("ERR:Cloud Error");
+      Serial2.println("ERR:NOT_FOUND");
     }
-    http.end();
+  } else {
+    Serial2.println("ERR:CLOUD_ERROR");
+  }
+  http.end();
 }
 
-void registerTransaction(String msg) {
-    // Protocol: DONE:TYPE:ID:SIZE:AMT:QTY (for paper) OR DONE:pen:ID:AMT:QTY (for pen)
-    HTTPClient http;
-    WiFiClientSecure client;
-    client.setInsecure();
-
-    int parts[7];
-    int count = 0;
-    int pos = 0;
-    while ((pos = msg.indexOf(':', pos)) != -1 && count < 7) {
-        parts[count++] = pos;
-        pos++;
-    }
-
-    String type = msg.substring(parts[0]+1, parts[1]);
-    int id = msg.substring(parts[1]+1, parts[2]).toInt();
-    
-    String size = "";
-    float cost = 0;
-    int qty = 0;
-
-    if (type == "paper") {
-        size = msg.substring(parts[2]+1, parts[3]);
-        cost = msg.substring(parts[3]+1, parts[4]).toFloat();
-        qty = msg.substring(parts[4]+1).toInt();
-    } else { // Pen doesn't send size
-        cost = msg.substring(parts[2]+1, parts[3]).toFloat();
-        qty = msg.substring(parts[3]+1).toInt();
-    }
-
-    http.begin(client, SUPABASE_URL + "sales_transactions");
-    http.addHeader("apikey", SUPABASE_KEY);
-    http.addHeader("Authorization", "Bearer " + SUPABASE_KEY);
-    http.addHeader("Content-Type", "application/json");
-
-    DynamicJsonDocument doc(256);
-    doc["item_type"] = type;
-    doc["brand_id"] = id;
-    if (type == "paper") doc["paper_size"] = size;
-    doc["amount_paid"] = cost;
-    doc["qty_dispensed"] = qty;
-
-    String payload;
-    serializeJson(doc, payload);
-    http.POST(payload);
-    http.end();
-}
-
-void updateMachineStatus(String s) {
-    HTTPClient http;
-    WiFiClientSecure client;
-    client.setInsecure();
-
-    String url = SUPABASE_URL + "machine_status?status_key=eq.last_heartbeat";
-    http.begin(client, url);
-    http.addHeader("apikey", SUPABASE_KEY);
-    http.addHeader("Authorization", "Bearer " + SUPABASE_KEY);
-    http.addHeader("Content-Type", "application/json");
-
-    String timeJson = "{\"status_value\":\"" + String(millis()) + "\"}"; 
-    http.PATCH(timeJson);
-    http.end();
-}
-
-void connectWiFi() {
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-    }
-    Serial.println("\nWiFi Connected");
+void handleLog(String msg) {
+  // Format: DONE:TYPE:ID:NAME:PRICE:QTY
+  int t1 = msg.indexOf(':') + 1;
+  int t2 = msg.indexOf(':', t1);
+  int t3 = msg.indexOf(':', t2 + 1);
+  int t4 = msg.indexOf(':', t3 + 1);
+  int t5 = msg.indexOf(':', t4 + 1);
+  
+  String type = msg.substring(t1, t2);
+  String id = msg.substring(t2 + 1, t3);
+  String name = msg.substring(t3 + 1, t4);
+  String price = msg.substring(t4 + 1, t5);
+  String qty = msg.substring(t5 + 1);
+  
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  String url = supabase_url + "/rest/v1/sales_transactions";
+  
+  http.begin(client, url);
+  http.addHeader("apikey", supabase_key);
+  http.addHeader("Authorization", "Bearer " + supabase_key);
+  http.addHeader("Content-Type", "application/json");
+  
+  String body = "{\"item_type\":\"" + type + "\", \"brand_id\":" + id + ", \"paper_size\":\"" + name + "\", \"amount_paid\":" + price + ", \"qty_dispensed\":" + qty + "}";
+  http.POST(body);
+  http.end();
+  Serial.println(">>> TRANSACTION LOGGED.");
 }

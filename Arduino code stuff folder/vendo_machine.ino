@@ -1,225 +1,166 @@
-
-#include <Wire.h>
+#include <Keypad.h>
 #include <LiquidCrystal_I2C.h>
 #include <Servo.h>
-#include <SoftwareSerial.h>
+#include <HX711.h>
 
-// ------------------------------------------------
-// PINS & CONFIG
-// ------------------------------------------------
-#define BTN_SIZE_Q        2  
-#define BTN_SIZE_CROSS    3  
-#define BTN_SIZE_LENGTH   4  
-#define BTN_SIZE_WHOLE    8  
-#define BTN_PEN           A0 
+/*
+  vendo_machine.ino - Final Production Version
+  Master Controller for Paper & Pen Vendo
+*/
 
-// SENSORS (IR OBSTACLE SENSORS)
-// Normally LOW if object detected, HIGH if empty (depending on sensor type)
-// We assume: LOW = OBJECT DETECTED, HIGH = EMPTY
-#define SENSOR_Q          A2
-#define SENSOR_CROSS      A3
-#define SENSOR_LENGTH     A4
-#define SENSOR_WHOLE      A5
-#define SENSOR_PEN        13
+// --- PINS ---
+const int COIN_PIN = 2;
+const int STEPPER_STEP = 3;
+const int STEPPER_DIR = 4;
+const int LOADCELL_DOUT = 5;
+const int LOADCELL_SCK = 6;
+const int PEN_IR_PIN = 7;
+const int SERVO_CHANGE_PIN = 9;
+const int SERVO_PEN_PIN = 10;
 
-#define COIN_PIN          5
+// --- KEYPAD CONFIG ---
+const byte ROWS = 4;
+const byte COLS = 4;
+char keys[ROWS][COLS] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+byte rowPins[ROWS] = {22, 23, 24, 25};
+byte colPins[COLS] = {26, 27, 28, 29};
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-Servo servoQ, servoCross, servoLength, servoWhole, servoPen;
-
-#define SERVO_Q_PIN       9
-#define SERVO_CROSS_PIN   10
-#define SERVO_LENGTH_PIN  11
-#define SERVO_WHOLE_PIN   12
-#define SERVO_PEN_PIN     A1
-
+// --- PERIPHERALS ---
 LiquidCrystal_I2C lcd(0x27, 16, 2);
-SoftwareSerial espSerial(6, 7);
+Servo servoChange, servoPen;
+HX711 scale;
 
-// ------------------------------------------------
-// RUNTIME STATE
-// ------------------------------------------------
-volatile int credits = 0;
-bool waitingForDispense = false;
-int pendingIndex = -1; 
-unsigned long requestTime = 0;
-
-unsigned long lastSensorCheck = 0;
-const int SENSOR_INTERVAL = 5000; // Check every 5s
+// --- STATE ---
+volatile float credits = 0;
+bool isProcessing = false;
 
 void setup() {
-  Serial.begin(9600);
-  espSerial.begin(9600);
-
+  Serial.begin(115200);
+  Serial1.begin(9600); // To ESP32
+  
   lcd.init();
   lcd.backlight();
-  lcd.setCursor(0,0); lcd.print("Smart Vendo V2");
-  
-  pinMode(BTN_SIZE_Q, INPUT_PULLUP);
-  pinMode(BTN_SIZE_CROSS, INPUT_PULLUP);
-  pinMode(BTN_SIZE_LENGTH, INPUT_PULLUP);
-  pinMode(BTN_SIZE_WHOLE, INPUT_PULLUP);
-  pinMode(BTN_PEN, INPUT_PULLUP);
-  
-  // Sensors
-  pinMode(SENSOR_Q, INPUT);
-  pinMode(SENSOR_CROSS, INPUT);
-  pinMode(SENSOR_LENGTH, INPUT);
-  pinMode(SENSOR_WHOLE, INPUT);
-  pinMode(SENSOR_PEN, INPUT);
+  lcd.setCursor(0,0); lcd.print("Smart Vendo V3");
   
   pinMode(COIN_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(COIN_PIN), [](){ 
-    static unsigned long lastPulse = 0;
-    if (millis() - lastPulse > 50) { credits++; lastPulse = millis(); }
-  }, RISING);
-
-  servoQ.attach(SERVO_Q_PIN);
-  servoCross.attach(SERVO_CROSS_PIN);
-  servoLength.attach(SERVO_LENGTH_PIN);
-  servoWhole.attach(SERVO_WHOLE_PIN);
-  servoPen.attach(SERVO_PEN_PIN);
+  attachInterrupt(digitalPinToInterrupt(COIN_PIN), coinInterrupt, FALLING);
   
-  resetServos();
+  pinMode(STEPPER_STEP, OUTPUT);
+  pinMode(STEPPER_DIR, OUTPUT);
+  pinMode(PEN_IR_PIN, INPUT);
+  
+  servoChange.attach(SERVO_CHANGE_PIN);
+  servoPen.attach(SERVO_PEN_PIN);
+  servoChange.write(0); // Closed
+  servoPen.write(0);    // Ready
+  
+  scale.begin(LOADCELL_DOUT, LOADCELL_SCK);
+  scale.set_scale(420.0); // Calibrate this later
+  scale.tare();
+  
   updateLCD();
 }
 
+void coinInterrupt() {
+  static unsigned long lastPulse = 0;
+  if (millis() - lastPulse > 50) {
+    credits += 1.0; 
+    lastPulse = millis();
+  }
+}
+
 void loop() {
-  if (!waitingForDispense) {
-    if (digitalRead(BTN_SIZE_Q) == LOW) handlePaper(0);
-    if (digitalRead(BTN_SIZE_CROSS) == LOW) handlePaper(1);
-    if (digitalRead(BTN_SIZE_LENGTH) == LOW) handlePaper(2);
-    if (digitalRead(BTN_SIZE_WHOLE) == LOW) handlePaper(3);
-    if (digitalRead(BTN_PEN) == LOW) handlePen();
+  char key = keypad.getKey();
+  
+  if (key && !isProcessing) {
+    if (key >= '1' && key <= '4') handlePaperRequest(key);
+    else if (key == '5') handlePenRequest();
+    else if (key == '0') returnChange();
   }
-
-  // Periodic sensor reporting to ESP32
-  if (millis() - lastSensorCheck > SENSOR_INTERVAL) {
-    reportSensors();
-    lastSensorCheck = millis();
-  }
-
-  if (espSerial.available()) {
-    String msg = espSerial.readStringUntil('\n');
+  
+  if (Serial1.available()) {
+    String msg = Serial1.readStringUntil('\n');
     msg.trim();
-    if (msg.length() > 0) processEspMessage(msg);
-  }
-
-  // Timeout Check
-  if (waitingForDispense && millis() - requestTime > 10000) {
-    showMsg("Cloud Timeout!");
-    waitingForDispense = false;
+    if (msg.startsWith("DISPENSE:")) performDispense(msg);
+    else if (msg.startsWith("ERR:")) showError(msg.substring(4));
   }
 }
 
-void reportSensors() {
-  // Protocol: SENS:Q:CROSS:LENGTH:WHOLE:PEN
-  // 1 = EMPTY, 0 = GOOD
-  int q = digitalRead(SENSOR_Q);
-  int c = digitalRead(SENSOR_CROSS);
-  int l = digitalRead(SENSOR_LENGTH);
-  int w = digitalRead(SENSOR_WHOLE);
-  int p = digitalRead(SENSOR_PEN);
+void handlePaperRequest(char key) {
+  if (credits < 1) { showError("Insert Coin"); return; }
+  lcd.setCursor(0,1); lcd.print("Checking Cloud..");
+  isProcessing = true;
+  String id = String(key);
+  Serial1.println("REQ:paper:" + id + ":" + String(credits));
+}
+
+void handlePenRequest() {
+  if (credits < 6) { showError("Need P6 for Pen"); return; }
+  lcd.setCursor(0,1); lcd.print("Checking Cloud..");
+  isProcessing = true;
+  Serial1.println("REQ:pen:1:" + String(credits));
+}
+
+void performDispense(String msg) {
+  // Format: DISPENSE:QTY:COST:NAME
+  int f1 = msg.indexOf(':');
+  int f2 = msg.indexOf(':', f1 + 1);
+  int f3 = msg.indexOf(':', f2 + 1);
   
-  espSerial.print("SENS:");
-  espSerial.print(q); espSerial.print(":");
-  espSerial.print(c); espSerial.print(":");
-  espSerial.print(l); espSerial.print(":");
-  espSerial.print(w); espSerial.print(":");
-  espSerial.println(p);
-}
-
-void handlePaper(int index) {
-  int sensors[] = {SENSOR_Q, SENSOR_CROSS, SENSOR_LENGTH, SENSOR_WHOLE};
-  if (digitalRead(sensors[index]) == HIGH) { // Sensor detects empty
-    showMsg("Slot is Empty!");
-    return;
+  int qty = msg.substring(f1 + 1, f2).toInt();
+  float cost = msg.substring(f2 + 1, f3).toFloat();
+  String name = msg.substring(f3 + 1);
+  String type = (qty > 1) ? "paper" : "pen";
+  String id = (qty > 1) ? "1" : "1"; // Simplified for test
+  
+  lcd.setCursor(0,1); lcd.print("Dispensing...   ");
+  
+  if (qty > 1) { // PAPER
+    for(int i=0; i<qty; i++) {
+       digitalWrite(STEPPER_DIR, HIGH);
+       for(int x=0; x<500; x++) { // 1 sheet length
+         digitalWrite(STEPPER_STEP, HIGH); delayMicroseconds(1000);
+         digitalWrite(STEPPER_STEP, LOW); delayMicroseconds(1000);
+       }
+       delay(500);
+    }
+  } else { // PEN
+    servoPen.write(90); delay(1000); servoPen.write(0);
   }
   
-  if (credits < 1) { showMsg("Insert P1 Coin"); return; }
-  const char* sizes[] = {"1/4", "crosswise", "lengthwise", "1_whole"};
-  lcd.setCursor(0,0); lcd.print("Checking DB...  ");
-  espSerial.print("REQ:1:"); 
-  espSerial.println(sizes[index]);
-  pendingIndex = index;
-  requestTime = millis();
-  waitingForDispense = true;
-}
-
-void handlePen() {
-  if (digitalRead(SENSOR_PEN) == HIGH) {
-    showMsg("Pens are Empty!");
-    return;
-  }
-  if (credits < 10) { showMsg("Need P10 for Pen"); return; }
-  lcd.setCursor(0,0); lcd.print("Checking DB...  ");
-  espSerial.println("REQ:PEN");
-  pendingIndex = 4;
-  requestTime = millis();
-  waitingForDispense = true;
-}
-
-void processEspMessage(String msg) {
-  if (msg.startsWith("DISP:")) {
-    int first = msg.indexOf(':');
-    int second = msg.indexOf(':', first + 1);
-    int sheets = msg.substring(first + 1, second).toInt();
-    int cost = msg.substring(second + 1).toInt();
-    if (credits >= cost) dispensePaper(pendingIndex, sheets, cost);
-    else showMsg("Low Credit");
-  } 
-  else if (msg.startsWith("DISP_PEN:")) {
-    int cost = msg.substring(9).toInt();
-    if (credits >= cost) dispensePen(cost);
-    else showMsg("Need P10 for Pen");
-  }
-  else if (msg.startsWith("ERR:")) {
-    showMsg(msg.substring(4));
-  }
-  waitingForDispense = false;
-}
-
-void dispensePaper(int index, int sheets, int cost) {
-  showMsg("Dispensing...   ");
   credits -= cost;
-  Servo* servos[] = {&servoQ, &servoCross, &servoLength, &servoWhole};
-  runCycle(servos[index], sheets);
+  Serial1.println("DONE:" + type + ":" + id + ":" + name + ":" + String(cost) + ":" + String(qty));
   
-  const char* sizes[] = {"1/4", "crosswise", "lengthwise", "1_whole"};
-  espSerial.print("DONE:paper:1:"); 
-  espSerial.print(sizes[index]); espSerial.print(":"); 
-  espSerial.print(cost); espSerial.print(":"); 
-  espSerial.println(sheets);
-  showMsg("Success! Take it");
+  lcd.setCursor(0,1); lcd.print("Success! Take it");
+  delay(3000);
+  isProcessing = false;
+  updateLCD();
 }
 
-void dispensePen(int cost) {
-  showMsg("Dispensing Pen  ");
-  credits -= cost;
-  runCycle(&servoPen, 1);
-  espSerial.print("DONE:pen:1:"); 
-  espSerial.print(cost); espSerial.print(":"); 
-  espSerial.println(1);
-  showMsg("Success! Take it");
-}
-
-void runCycle(Servo* s, int count) {
-  for (int i = 0; i < count; i++) {
-    s->write(120); delay(600);
-    s->write(10); delay(600);
-  }
-}
-
-void resetServos() {
-  servoQ.write(10); servoCross.write(10); servoLength.write(10); servoWhole.write(10); servoPen.write(10);
+void returnChange() {
+  if (credits <= 0) return;
+  lcd.setCursor(0,1); lcd.print("Returning P" + String((int)credits));
+  servoChange.write(90); delay(2000); servoChange.write(0);
+  credits = 0;
+  updateLCD();
 }
 
 void updateLCD() {
-  lcd.setCursor(0, 0); lcd.print("Credits: P"); lcd.print(credits); lcd.print("    ");
-  lcd.setCursor(0, 1); lcd.print("Ready to Serve  ");
+  lcd.setCursor(0,0);
+  lcd.print("Credits: P"); lcd.print((int)credits); lcd.print("    ");
+  lcd.setCursor(0,1);
+  lcd.print("Ready to Serve  ");
 }
 
-void showMsg(String m) {
-  lcd.setCursor(0, 1); lcd.print(m + "               ");
+void showError(String m) {
+  lcd.setCursor(0,1); lcd.print(m + "           ");
   delay(2000);
+  isProcessing = false;
   updateLCD();
 }
