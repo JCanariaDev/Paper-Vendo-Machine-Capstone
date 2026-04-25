@@ -1,4 +1,3 @@
-#include <Keypad.h>
 #include <LiquidCrystal_I2C.h>
 #include <Servo.h>
 #include <HX711.h>
@@ -7,7 +6,7 @@
 /*
   vendo_machine.ino - Final Production Version
   Master Controller for Paper & Pen Vendo
-  UPDATED: Compatible with 28BYJ-48 5V Stepper
+  UPDATED: Replaced 4x4 Keypad with 10 Individual Push Buttons
 */
 
 // --- PINS ---
@@ -19,22 +18,21 @@ const int SERVO_CHANGE_PIN = 9;
 const int SERVO_PEN_PIN = 10;
 // Stepper Pins: 3, 4, 11, 12
 
+// --- 10 BUTTON PINS ---
+const int BTN_P_B_14 = 30; // Budget 1/4
+const int BTN_P_B_12 = 31; // Budget 1/2
+const int BTN_P_B_L  = 32; // Budget Long
+const int BTN_P_B_S  = 33; // Budget Short
+const int BTN_P_S_14 = 34; // Std 1/4
+const int BTN_P_S_12 = 35; // Std 1/2
+const int BTN_P_S_L  = 36; // Std Long
+const int BTN_P_S_S  = 37; // Std Short
+const int BTN_B_B    = 38; // Budget Pen
+const int BTN_B_S    = 39; // Std Pen
+
 // --- STEPPER CONFIG ---
 const int stepsPerRevolution = 2048;
 Stepper myStepper(stepsPerRevolution, 3, 11, 4, 12);
-
-// --- KEYPAD CONFIG ---
-const byte ROWS = 4;
-const byte COLS = 4;
-char keys[ROWS][COLS] = {
-  {'1','2','3','A'},
-  {'4','5','6','B'},
-  {'7','8','9','C'},
-  {'*','0','#','D'}
-};
-byte rowPins[ROWS] = {22, 23, 24, 25};
-byte colPins[COLS] = {27, 26, 28, 29}; // Swapped 26 and 27 to match test results
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 // --- PERIPHERALS ---
 LiquidCrystal_I2C lcd(0x27, 16, 2);
@@ -51,19 +49,21 @@ void setup() {
   
   myStepper.setSpeed(15);
   
+  // Setup 10 buttons with Pullups
+  for(int i=30; i<=39; i++) pinMode(i, INPUT_PULLUP);
+  
   lcd.init();
   lcd.backlight();
   lcd.setCursor(0,0); lcd.print("Smart Vendo V3");
   
   pinMode(COIN_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(COIN_PIN), coinInterrupt, FALLING);
-  
   pinMode(PEN_IR_PIN, INPUT);
   
   servoChange.attach(SERVO_CHANGE_PIN);
   servoPen.attach(SERVO_PEN_PIN);
-  servoChange.write(0); // Closed
-  servoPen.write(0);    // Ready
+  servoChange.write(0);
+  servoPen.write(0);
   
   scale.begin(LOADCELL_DOUT, LOADCELL_SCK);
   scale.set_scale(420.0); 
@@ -81,12 +81,8 @@ void coinInterrupt() {
 }
 
 void loop() {
-  char key = keypad.getKey();
-  
-  if (key && !isProcessing) {
-    if (key >= '1' && key <= '4') handlePaperRequest(key);
-    else if (key == '5') handlePenRequest();
-    else if (key == '0') returnChange();
+  if (!isProcessing) {
+    checkButtons();
   }
   
   if (Serial1.available()) {
@@ -97,23 +93,32 @@ void loop() {
   }
 }
 
-void handlePaperRequest(char key) {
+void checkButtons() {
+  // Budget Paper (IDs 1-4)
+  if(digitalRead(BTN_P_B_14) == LOW) handleRequest("paper", "1");
+  else if(digitalRead(BTN_P_B_12) == LOW) handleRequest("paper", "2");
+  else if(digitalRead(BTN_P_B_L)  == LOW) handleRequest("paper", "3");
+  else if(digitalRead(BTN_P_B_S)  == LOW) handleRequest("paper", "4");
+  
+  // Std Paper (IDs 5-8)
+  else if(digitalRead(BTN_P_S_14) == LOW) handleRequest("paper", "5");
+  else if(digitalRead(BTN_P_S_12) == LOW) handleRequest("paper", "6");
+  else if(digitalRead(BTN_P_S_L)  == LOW) handleRequest("paper", "7");
+  else if(digitalRead(BTN_P_S_S)  == LOW) handleRequest("paper", "8");
+  
+  // Ballpens (IDs 1-2)
+  else if(digitalRead(BTN_B_B) == LOW) handleRequest("pen", "1");
+  else if(digitalRead(BTN_B_S) == LOW) handleRequest("pen", "2");
+}
+
+void handleRequest(String type, String id) {
   if (credits < 1) { showError("Insert Coin"); return; }
   lcd.setCursor(0,1); lcd.print("Checking Cloud..");
   isProcessing = true;
-  String id = String(key);
-  Serial1.println("REQ:paper:" + id + ":" + String(credits));
-}
-
-void handlePenRequest() {
-  if (credits < 6) { showError("Need P6 for Pen"); return; }
-  lcd.setCursor(0,1); lcd.print("Checking Cloud..");
-  isProcessing = true;
-  Serial1.println("REQ:pen:1:" + String(credits));
+  Serial1.println("REQ:" + type + ":" + id + ":" + String(credits));
 }
 
 void performDispense(String msg) {
-  // Format: DISPENSE:QTY:COST:NAME
   int f1 = msg.indexOf(':');
   int f2 = msg.indexOf(':', f1 + 1);
   int f3 = msg.indexOf(':', f2 + 1);
@@ -125,7 +130,6 @@ void performDispense(String msg) {
   lcd.setCursor(0,1); lcd.print("Dispensing...   ");
   
   if (totalSheets > 1) { // PAPER
-    // Rotate stepper for total sheets (approx 2048 steps per sheet)
     myStepper.step(totalSheets * 2048);
     stopStepper(); 
     Serial1.println("DONE:paper:1:" + name + ":" + String(cost) + ":" + String(totalSheets));
@@ -142,18 +146,7 @@ void performDispense(String msg) {
 }
 
 void stopStepper() {
-  digitalWrite(3, LOW);
-  digitalWrite(4, LOW);
-  digitalWrite(11, LOW);
-  digitalWrite(12, LOW);
-}
-
-void returnChange() {
-  if (credits <= 0) return;
-  lcd.setCursor(0,1); lcd.print("Returning P" + String((int)credits));
-  servoChange.write(90); delay(2000); servoChange.write(0);
-  credits = 0;
-  updateLCD();
+  digitalWrite(3, LOW); digitalWrite(4, LOW); digitalWrite(11, LOW); digitalWrite(12, LOW);
 }
 
 void updateLCD() {
