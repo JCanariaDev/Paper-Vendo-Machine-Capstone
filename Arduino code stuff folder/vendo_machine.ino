@@ -66,7 +66,7 @@ void setup() {
   servoPen.write(0);
   
   scale.begin(LOADCELL_DOUT, LOADCELL_SCK);
-  scale.set_scale(420.0); 
+  scale.set_scale(730.0); // Calibrated factor from test
   scale.tare();
   
   updateLCD();
