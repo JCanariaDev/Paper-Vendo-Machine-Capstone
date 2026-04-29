@@ -1,3 +1,4 @@
+#include <Keypad.h>
 #include <LiquidCrystal_I2C.h>
 #include <Servo.h>
 #include <HX711.h>
@@ -6,7 +7,7 @@
 /*
   vendo_machine.ino - Final Production Version
   Master Controller for Paper & Pen Vendo
-  UPDATED: Replaced 4x4 Keypad with 10 Individual Push Buttons
+  UPDATED: Reverted back to 4x4 Membrane Keypad
 */
 
 // --- PINS ---
@@ -18,17 +19,22 @@ const int SERVO_CHANGE_PIN = 9;
 const int SERVO_PEN_PIN = 10;
 // Stepper Pins: 3, 4, 11, 12
 
-// --- 10 BUTTON PINS ---
-const int BTN_P_B_14 = 30; // Budget 1/4
-const int BTN_P_B_12 = 31; // Budget 1/2
-const int BTN_P_B_L  = 32; // Budget Long
-const int BTN_P_B_S  = 33; // Budget Short
-const int BTN_P_S_14 = 34; // Std 1/4
-const int BTN_P_S_12 = 35; // Std 1/2
-const int BTN_P_S_L  = 36; // Std Long
-const int BTN_P_S_S  = 37; // Std Short
-const int BTN_B_B    = 38; // Budget Pen
-const int BTN_B_S    = 39; // Std Pen
+// --- TEST BYPASS BUTTONS ---
+const int BTN_TEST_PAPER = 30; // Request Budget 1/4 Paper
+const int BTN_TEST_PEN = 38;   // Request Budget Pen
+
+// --- KEYPAD CONFIG ---
+const byte ROWS = 4;
+const byte COLS = 4;
+char keys[ROWS][COLS] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+byte rowPins[ROWS] = {22, 23, 24, 25};
+byte colPins[COLS] = {27, 26, 28, 29}; // Swapped 26 and 27 to match your successful test
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 // --- STEPPER CONFIG ---
 const int stepsPerRevolution = 2048;
@@ -46,11 +52,12 @@ bool isProcessing = false;
 void setup() {
   Serial.begin(115200);
   Serial1.begin(9600); // To ESP32
+  Serial.println("--- SYSTEM STARTING ---");
   
   myStepper.setSpeed(15);
   
-  // Setup 10 buttons with Pullups
-  for(int i=30; i<=39; i++) pinMode(i, INPUT_PULLUP);
+  pinMode(BTN_TEST_PAPER, INPUT_PULLUP);
+  pinMode(BTN_TEST_PEN, INPUT_PULLUP);
   
   lcd.init();
   lcd.backlight();
@@ -66,9 +73,10 @@ void setup() {
   servoPen.write(0);
   
   scale.begin(LOADCELL_DOUT, LOADCELL_SCK);
-  scale.set_scale(730.0); // Calibrated factor from test
+  scale.set_scale(730.0); // Calibrated factor from your test
   scale.tare();
   
+  Serial.println("Scale initialized. Machine Ready!");
   updateLCD();
 }
 
@@ -81,8 +89,39 @@ void coinInterrupt() {
 }
 
 void loop() {
+  // --- Check if coins were inserted ---
+  static float lastCredits = -1;
+  if (credits != lastCredits) {
+    lastCredits = credits;
+    updateLCD();
+    Serial.println("Credits inserted! Total: P" + String((int)credits));
+  }
+
+  // --- Check Test Push Buttons (Bypass Coin Logic) ---
   if (!isProcessing) {
-    checkButtons();
+    if (digitalRead(BTN_TEST_PAPER) == LOW) {
+      Serial.println("Test Button Pressed: Paper!");
+      credits += 10.0; // Give fake credits to bypass
+      handleRequest("paper", "1"); // Request Budget 1/4 Paper
+      delay(500); // Debounce
+    }
+    else if (digitalRead(BTN_TEST_PEN) == LOW) {
+      Serial.println("Test Button Pressed: Pen!");
+      credits += 10.0; // Give fake credits to bypass
+      handleRequest("pen", "1"); // Request Budget Pen
+      delay(500); // Debounce
+    }
+  }
+
+  char key = keypad.getKey();
+  
+  if (key && !isProcessing) {
+    if (key >= '1' && key <= '8') {
+      handleRequest("paper", String(key));
+    }
+    else if (key == 'A') handleRequest("pen", "1"); // Budget Pen
+    else if (key == 'B') handleRequest("pen", "2"); // Standard Pen
+    else if (key == '0') returnChange();
   }
   
   if (Serial1.available()) {
@@ -93,28 +132,11 @@ void loop() {
   }
 }
 
-void checkButtons() {
-  // Budget Paper (IDs 1-4)
-  if(digitalRead(BTN_P_B_14) == LOW) handleRequest("paper", "1");
-  else if(digitalRead(BTN_P_B_12) == LOW) handleRequest("paper", "2");
-  else if(digitalRead(BTN_P_B_L)  == LOW) handleRequest("paper", "3");
-  else if(digitalRead(BTN_P_B_S)  == LOW) handleRequest("paper", "4");
-  
-  // Std Paper (IDs 5-8)
-  else if(digitalRead(BTN_P_S_14) == LOW) handleRequest("paper", "5");
-  else if(digitalRead(BTN_P_S_12) == LOW) handleRequest("paper", "6");
-  else if(digitalRead(BTN_P_S_L)  == LOW) handleRequest("paper", "7");
-  else if(digitalRead(BTN_P_S_S)  == LOW) handleRequest("paper", "8");
-  
-  // Ballpens (IDs 1-2)
-  else if(digitalRead(BTN_B_B) == LOW) handleRequest("pen", "1");
-  else if(digitalRead(BTN_B_S) == LOW) handleRequest("pen", "2");
-}
-
 void handleRequest(String type, String id) {
   if (credits < 1) { showError("Insert Coin"); return; }
   lcd.setCursor(0,1); lcd.print("Checking Cloud..");
   isProcessing = true;
+  Serial.println("Sending REQ to Cloud: " + type + " ID: " + id + " Credits: " + String(credits));
   Serial1.println("REQ:" + type + ":" + id + ":" + String(credits));
 }
 
@@ -128,13 +150,19 @@ void performDispense(String msg) {
   String name = msg.substring(f3 + 1);
   
   lcd.setCursor(0,1); lcd.print("Dispensing...   ");
+  Serial.println("Received from Cloud: DISPENSE " + String(totalSheets) + " of " + name);
   
   if (totalSheets > 1) { // PAPER
-    myStepper.step(totalSheets * 2048);
-    stopStepper(); 
+    // Paper logic is paused since Stepper is now used for the Pen Dispenser
+    Serial.println("Paper requested, logging DONE to cloud...");
     Serial1.println("DONE:paper:1:" + name + ":" + String(cost) + ":" + String(totalSheets));
   } else { // PEN
-    servoPen.write(90); delay(1000); servoPen.write(0);
+    // Stepper Motor Pen Dispenser (Revolver Drum Mechanism)
+    // A full circle is 2048 steps. If you have 12 slots: 2048 / 12 = 171 steps
+    Serial.println("Pen requested. Spinning Stepper motor 171 steps...");
+    myStepper.step(171); 
+    stopStepper();
+    Serial.println("Pen dispensed. Logging DONE to cloud...");
     Serial1.println("DONE:pen:1:" + name + ":" + String(cost) + ":1");
   }
   
@@ -147,6 +175,14 @@ void performDispense(String msg) {
 
 void stopStepper() {
   digitalWrite(3, LOW); digitalWrite(4, LOW); digitalWrite(11, LOW); digitalWrite(12, LOW);
+}
+
+void returnChange() {
+  if (credits <= 0) return;
+  lcd.setCursor(0,1); lcd.print("Returning P" + String((int)credits));
+  servoChange.write(90); delay(2000); servoChange.write(0);
+  credits = 0;
+  updateLCD();
 }
 
 void updateLCD() {
