@@ -54,7 +54,7 @@ void setup() {
   Serial1.begin(9600); // To ESP32
   Serial.println("--- SYSTEM STARTING ---");
   
-  myStepper.setSpeed(15);
+  myStepper.setSpeed(10); // Lowered to 10 RPM to fix the vibration and increase torque
   
   pinMode(BTN_TEST_PAPER, INPUT_PULLUP);
   pinMode(BTN_TEST_PEN, INPUT_PULLUP);
@@ -157,10 +157,10 @@ void performDispense(String msg) {
     Serial.println("Paper requested, logging DONE to cloud...");
     Serial1.println("DONE:paper:1:" + name + ":" + String(cost) + ":" + String(totalSheets));
   } else { // PEN
-    // Stepper Motor Pen Dispenser (Revolver Drum Mechanism)
-    // A full circle is 2048 steps. If you have 12 slots: 2048 / 12 = 171 steps
-    Serial.println("Pen requested. Spinning Stepper motor 171 steps...");
-    myStepper.step(171); 
+    // Stepper Motor Pen Dispenser (Gumball / Disc Mechanism)
+    // 512 steps = 90 degree turn. Perfect for a gumball-style pick-and-drop.
+    Serial.println("Pen requested. Spinning Gumball Stepper 512 steps...");
+    myStepper.step(512); 
     stopStepper();
     Serial.println("Pen dispensed. Logging DONE to cloud...");
     Serial1.println("DONE:pen:1:" + name + ":" + String(cost) + ":1");
