@@ -122,6 +122,18 @@ void loop() {
     else if (key == 'A') handleRequest("pen", "1"); // Budget Pen
     else if (key == 'B') handleRequest("pen", "2"); // Standard Pen
     else if (key == '0') returnChange();
+    
+    // --- Alignment Nudge Features ---
+    else if (key == '*') {
+      Serial.println("Nudging Stepper FORWARD...");
+      myStepper.step(20);
+      stopStepper();
+    }
+    else if (key == '#') {
+      Serial.println("Nudging Stepper BACKWARD...");
+      myStepper.step(-20);
+      stopStepper();
+    }
   }
   
   if (Serial1.available()) {
@@ -157,12 +169,18 @@ void performDispense(String msg) {
     Serial.println("Paper requested, logging DONE to cloud...");
     Serial1.println("DONE:paper:1:" + name + ":" + String(cost) + ":" + String(totalSheets));
   } else { // PEN
-    // Stepper Motor Pen Dispenser (Gumball / Disc Mechanism)
-    // 512 steps = 90 degree turn. Perfect for a gumball-style pick-and-drop.
-    Serial.println("Pen requested. Spinning Gumball Stepper 512 steps...");
-    myStepper.step(512); 
+    // Stepper Motor Pen Dispenser (Oscillating / Return Mechanism)
+    // 1024 steps = 180 degree turn (Top to Bottom)
+    Serial.println("Pen requested. Moving to DROP position (180 deg)...");
+    myStepper.step(1024); 
+    
+    delay(1000); // Wait for pen to fall
+    
+    Serial.println("Returning to CATCH position at Top...");
+    myStepper.step(-1024); 
+    
     stopStepper();
-    Serial.println("Pen dispensed. Logging DONE to cloud...");
+    Serial.println("Pen dispensed and Reset! Logging DONE to cloud...");
     Serial1.println("DONE:pen:1:" + name + ":" + String(cost) + ":1");
   }
   
