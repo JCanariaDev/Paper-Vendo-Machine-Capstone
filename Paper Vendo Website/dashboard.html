@@ -131,13 +131,10 @@
 
             // 2. Fetch Machine Status
             const status = await supabaseRequest('machine_status', 'GET');
-            const heartbeatObj = status.find(s => s.status_key === 'last_heartbeat');
-            if (heartbeatObj) {
-                const lastHeart = new Date(heartbeatObj.status_value);
-                const isOnline = (new Date() - lastHeart) < 120000; // 2 minutes
-                document.getElementById('connectionStatus').innerText = isOnline ? "Online (Active)" : "Offline (Disconnected)";
-                document.getElementById('connectionCard').className = `card border-left-${isOnline ? 'success' : 'danger'} h-100 py-2`;
-            }
+            const runningObj = status.find(s => s.status_key === 'is_running');
+            const isOnline = runningObj && runningObj.status_value === "Online";
+            document.getElementById('connectionStatus').innerText = isOnline ? "Connected (Live)" : "Disconnected";
+            document.getElementById('connectionCard').className = `card border-left-${isOnline ? 'success' : 'danger'} h-100 py-2`;
 
             // 3. Fetch Stock & Alerts
             const stock = await supabaseRequest('paper_settings', 'GET');

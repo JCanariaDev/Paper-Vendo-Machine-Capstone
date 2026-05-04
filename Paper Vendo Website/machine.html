@@ -128,24 +128,6 @@
                                     <i class="fas fa-wifi"></i>
                                 </div>
                             </div>
-                            <div class="status-pill">
-                                <div>
-                                    <p class="text-xs mb-1">Hardware Error Codes</p>
-                                    <h5 class="mb-0 text-danger" id="m_errors">None</h5>
-                                </div>
-                                <div class="icon-box text-danger">
-                                    <i class="fas fa-exclamation-triangle"></i>
-                                </div>
-                            </div>
-                            <div class="status-pill">
-                                <div>
-                                    <p class="text-xs mb-1">Last Heartbeat Ping</p>
-                                    <h5 class="mb-0" id="m_heartbeat">--</h5>
-                                </div>
-                                <div class="icon-box text-primary">
-                                    <i class="fas fa-clock"></i>
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -170,33 +152,19 @@
             const data = {};
             status.forEach(row => { data[row.status_key] = row.status_value; });
 
-            // Evaluate Heartbeat
-            if (data['last_heartbeat']) {
-                const lastHeart = new Date(data['last_heartbeat']);
-                const secondsAgo = Math.floor((new Date() - lastHeart) / 1000);
-                const isOnline = secondsAgo < 120; // 2 minutes timeout
-                
-                document.getElementById('m_status').innerText = isOnline ? "Online (Active)" : "Offline (Disconnected)";
-                document.getElementById('m_status').className = isOnline ? "text-success mb-0 font-weight-bold" : "text-danger mb-0 font-weight-bold";
-                
-                const pulse = document.getElementById('m_pulse');
-                if (isOnline) {
-                    pulse.classList.remove('offline');
-                } else {
-                    pulse.classList.add('offline');
-                }
-                
-                document.getElementById('m_heartbeat').innerText = isOnline ? "Just now" : `${Math.floor(secondsAgo / 60)} mins ago`;
+            // Connection State Update
+            const isOnline = data['is_running'] === "Online";
+            document.getElementById('m_status').innerText = isOnline ? "Connected (Live)" : "Disconnected";
+            document.getElementById('m_status').className = isOnline ? "text-success mb-0 font-weight-bold" : "text-danger mb-0 font-weight-bold";
+            
+            const pulse = document.getElementById('m_pulse');
+            if (isOnline) {
+                pulse.classList.remove('offline');
+            } else {
+                pulse.classList.add('offline');
             }
 
             document.getElementById('m_wifi').innerText = data['wifi_signal'] || "Unknown";
-            document.getElementById('m_errors').innerText = data['current_error'] || "None";
-            
-            if (data['current_error'] && data['current_error'] !== "None") {
-                document.getElementById('m_errors').className = "text-danger mb-0 font-weight-bold";
-            } else {
-                document.getElementById('m_errors').className = "text-success mb-0 font-weight-bold";
-            }
         }
 
         fetchMachineData();

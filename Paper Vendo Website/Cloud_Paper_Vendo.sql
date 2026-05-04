@@ -79,9 +79,7 @@ INSERT INTO ballpen_settings (item_name, cost_per_unit, current_stock, max_capac
 ('Standard Ballpen', 10.00, 50, 100);
 
 INSERT INTO machine_status (status_key, status_value) VALUES 
-('is_running', 'Running'),
-('last_heartbeat', NOW()::text),
-('current_error', 'None'),
+('is_running', 'Connected'),
 ('wifi_signal', 'Excellent')
 ON CONFLICT (status_key) DO NOTHING;
 

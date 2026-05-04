@@ -16,6 +16,9 @@ const char* password = "lancelot";
 const String supabase_url = "https://jowpzdynbdeznuvohrpx.supabase.co";
 const String supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impvd3B6ZHluYmRlem51dm9ocnB4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxMTExNDYsImV4cCI6MjA5MTY4NzE0Nn0.plD8ehYQsBgzfXrXBHJpqHanQF5GPKYlM53I1t3wfO0";
 
+unsigned long lastStatusUpdate = 0;
+const unsigned long statusInterval = 60000; // Update status every 60 seconds
+
 void setup() {
   Serial.begin(115200);   
   // Serial2 for Mega (RX=16, TX=17)
@@ -28,6 +31,7 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("\nWiFi Connected! Machine Online.");
+  updateMachineStatus(); // Update status on startup
 }
 
 void loop() {
@@ -41,6 +45,12 @@ void loop() {
     else if (incoming.startsWith("DONE:")) {
       handleLog(incoming);
     }
+  }
+
+  // Periodic Status Update
+  if (millis() - lastStatusUpdate > statusInterval) {
+    updateMachineStatus();
+    lastStatusUpdate = millis();
   }
 }
 
@@ -138,4 +148,34 @@ void handleLog(String msg) {
   http.POST(body);
   http.end();
   Serial.println(">>> TRANSACTION LOGGED.");
+}
+
+void updateMachineStatus() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  long rssi = WiFi.RSSI();
+  String strength;
+  if (rssi >= -50) strength = "Excellent";
+  else if (rssi >= -60) strength = "Good";
+  else if (rssi >= -70) strength = "Fair";
+  else strength = "Poor";
+
+  updateStatusKey("is_running", "Online");
+  updateStatusKey("wifi_signal", strength + " (" + String(rssi) + " dBm)");
+}
+
+void updateStatusKey(String key, String value) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  String url = supabase_url + "/rest/v1/machine_status?status_key=eq." + key;
+
+  http.begin(client, url);
+  http.addHeader("apikey", supabase_key);
+  http.addHeader("Authorization", "Bearer " + supabase_key);
+  http.addHeader("Content-Type", "application/json");
+
+  String body = "{\"status_value\":\"" + value + "\", \"updated_at\":\"now()\"}";
+  int httpCode = http.PATCH(body);
+  http.end();
 }
