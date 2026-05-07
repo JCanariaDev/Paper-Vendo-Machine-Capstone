@@ -174,14 +174,34 @@ void performDispense(String msg) {
     Serial.println("Pen requested. Moving to DROP position (180 deg)...");
     myStepper.step(1024); 
     
-    delay(1000); // Wait for pen to fall
+    // --- WAIT FOR IR SENSOR DETECTION ---
+    Serial.println("Waiting for pen drop detection...");
+    unsigned long startTime = millis();
+    bool detected = false;
+    
+    // Wait up to 5 seconds for the IR sensor (active LOW)
+    while (millis() - startTime < 5000) {
+      if (digitalRead(PEN_IR_PIN) == LOW) { // IR beam broken
+        detected = true;
+        Serial.println(">>> PEN DROP DETECTED! <<<");
+        break;
+      }
+    }
+    
+    delay(500); // Small pause for physical stability
     
     Serial.println("Returning to CATCH position at Top...");
     myStepper.step(-1024); 
-    
     stopStepper();
-    Serial.println("Pen dispensed and Reset! Logging DONE to cloud...");
-    Serial1.println("DONE:pen:1:" + name + ":" + String(cost) + ":1");
+
+    if (detected) {
+      Serial.println("Dispense Successful! Logging to cloud...");
+      Serial1.println("DONE:pen:1:" + name + ":" + String(cost) + ":1");
+    } else {
+      Serial.println("ERROR: No pen detected by IR sensor!");
+      showError("Dispense Failed");
+      return; // Stop here, don't deduct credits
+    }
   }
   
   credits -= cost;
