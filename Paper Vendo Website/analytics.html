@@ -203,45 +203,41 @@
             document.getElementById('displayInitial').innerText = user.username.charAt(0).toUpperCase();
         }
 
-        let standardSalesData = []; // Store it globally for exports
+        let standardSalesData = [];
+        let chartInstances = {}; // Track charts to prevent overlapping
 
         async function initAnalytics() {
             try {
-                // Pre-render demo data first so it's not blank
-                showMockData();
-
-                // Load all transactions
-                standardSalesData = await supabaseRequest('sales_transactions', 'GET', null, '?select=*,paper_settings(brand_name),ballpen_settings(item_name)');
+                // Fetch live data with joined settings
+                const sales = await supabaseRequest('sales_transactions', 'GET', null, '?select=*,paper_settings(brand_name),ballpen_settings(item_name)&order=transaction_date.desc');
                 
-                if (standardSalesData && standardSalesData.length > 0) {
-                    console.log("Live data found, updating charts.");
-                    buildTimeChart(standardSalesData);
-                    buildProductChart(standardSalesData);
+                if (sales && sales.length > 0 && !sales.error) {
+                    standardSalesData = sales;
+                    console.log("Live data loaded:", sales.length, "transactions");
+                    buildTimeChart(sales);
+                    buildProductChart(sales);
                 } else {
-                    console.log("No data found, keeping demo data.");
+                    console.warn("No live sales found. Showing Demo data.");
+                    showMockData();
                 }
             } catch (err) {
                 console.error("Supabase error:", err);
-                // Demo data stays if fetch fails
+                showMockData();
             }
         }
 
         function showMockData() {
-            // Dummy data for visual indicator when system is new
-            const mockSales = [];
-            // Create some random-ish data for charts
             buildTimeChart([], true); 
             buildProductChart([], true);
         }
 
         function buildTimeChart(sales, isMock = false) {
             const ctx = document.getElementById('timeChart').getContext('2d');
+            if (chartInstances['time']) chartInstances['time'].destroy();
             
-            // Bucket by Hour (0 to 23)
             let hourBuckets = new Array(24).fill(0);
             
             if (isMock) {
-                // Generate a "Bell Curve" of fake data for Peak Hours (mid-day peaks)
                 hourBuckets = hourBuckets.map((v, i) => (i > 7 && i < 18) ? Math.floor(Math.random() * 50) + 10 : 0);
             } else {
                 sales.forEach(sale => {
@@ -250,180 +246,136 @@
                 });
             }
 
-            // Convert military time to AM/PM labels
             let labels = hourBuckets.map((v, i) => {
                 let suffix = i >= 12 ? "PM" : "AM";
                 let civil = i % 12 || 12;
-                return `${civil} ${suffix}`;
+                return `${civil}${suffix}`;
             });
 
-            new Chart(ctx, {
+            chartInstances['time'] = new Chart(ctx, {
                 type: 'bar',
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: isMock ? 'DEMO DATA (Hourly)' : 'Total Hourly Earnings (₱)',
+                        label: isMock ? 'DEMO DATA (Hourly Earnings ₱)' : 'Actual Hourly Earnings (₱)',
                         data: hourBuckets,
-                        backgroundColor: isMock ? 'rgba(74, 222, 128, 0.3)' : 'rgba(16, 185, 129, 0.7)',
-                        borderColor: isMock ? 'rgba(74, 222, 128, 0.8)' : 'rgba(16, 185, 129, 1)',
-                        borderWidth: isMock ? 1 : 0,
-                        borderRadius: 6
+                        backgroundColor: '#10b981',
+                        borderRadius: 5
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    scales: {
-                        y: { beginAtZero: true }
-                    },
-                    plugins: {
-                        title: {
-                            display: isMock,
-                            text: '--- PREVIEW: NO LIVE SALES YET ---',
-                            color: '#10b981',
-                            font: { weight: 'bold', size: 14 }
-                        }
-                    }
+                    scales: { y: { beginAtZero: true } }
                 }
             });
         }
 
         function buildProductChart(sales, isMock = false) {
             const ctx = document.getElementById('productChart').getContext('2d');
+            if (chartInstances['product']) chartInstances['product'].destroy();
             
             let labels, data;
             
             if (isMock) {
                 labels = ["1/4 Paper", "Crosswise", "Lengthwise", "1 Whole", "Ballpen"];
-                data = [30, 25, 15, 10, 20];
+                data = [35, 20, 15, 10, 20];
             } else {
                 let itemsCount = {};
                 sales.forEach(sale => {
-                    let name = sale.item_type === 'paper' ? (sale.paper_size || "Paper") : "Pen";
-                    if (!itemsCount[name]) itemsCount[name] = 0;
-                    itemsCount[name] += sale.qty_dispensed;
+                    let brand = sale.paper_settings ? sale.paper_settings.brand_name : (sale.ballpen_settings ? "Ballpen" : "Unknown");
+                    let name = sale.item_type === 'paper' ? `${brand} (${sale.paper_size})` : "Ballpen";
+                    itemsCount[name] = (itemsCount[name] || 0) + sale.qty_dispensed;
                 });
                 labels = Object.keys(itemsCount);
                 data = Object.values(itemsCount);
             }
 
-            new Chart(ctx, {
+            chartInstances['product'] = new Chart(ctx, {
                 type: 'doughnut',
                 data: {
                     labels: labels,
                     datasets: [{
                         data: data,
-                        backgroundColor: isMock ? 
-                            ['#475569', '#64748b', '#94a3b8', '#cbd5e1', '#e2e8f0'] :
-                            ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'],
-                        borderWidth: 0
+                        backgroundColor: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'],
+                        hoverOffset: 10
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: {
-                        legend: { position: 'bottom' },
-                        title: {
-                            display: isMock,
-                            text: 'SAMPLE PRODUCT RATIO',
-                            color: '#94a3b8'
-                        }
-                    }
+                    plugins: { legend: { position: 'bottom' } }
                 }
             });
         }
 
-        // --- EXPORT TO CSV (RAW DATA) ---
         function exportCSV() {
-            if (standardSalesData.length === 0) return alert("Wait for data to load.");
+            if (standardSalesData.length === 0) return alert("No data available for export.");
             
-            let csvContent = "data:text/csv;charset=utf-8,";
-            csvContent += "Transaction ID,Item Type,Product Size,Amount Paid(PHP),Qty Dispensed,Date\n";
-
+            let csv = "Transaction ID,Date,Type,Product,Price,Qty\n";
             standardSalesData.forEach(s => {
-                let d = new Date(s.transaction_date).toLocaleString();
-                let size = s.paper_size || "N/A";
-                let row = `${s.id},${s.item_type},${size},${s.amount_paid},${s.qty_dispensed},"${d}"`;
-                csvContent += row + "\r\n";
+                let date = new Date(s.transaction_date).toLocaleString().replace(',', '');
+                let product = s.item_type === 'paper' ? `Paper ${s.paper_size}` : "Ballpen";
+                csv += `${s.id},${date},${s.item_type},${product},${s.amount_paid},${s.qty_dispensed}\n`;
             });
 
-            var encodedUri = encodeURI(csvContent);
-            var link = document.createElement("a");
-            link.setAttribute("href", encodedUri);
-            link.setAttribute("download", `Raw_Machine_Transactions_${new Date().toISOString().split('T')[0]}.csv`);
-            document.body.appendChild(link);
-            link.click();
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `Vendo_Full_Report_${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
         }
 
-        // --- EXPORT TO PDF (SUMMARIZED REPORT) ---
-        function exportPDF() {
-            if (standardSalesData.length === 0) return alert("Wait for data to load.");
+        async function exportPDF() {
+            if (standardSalesData.length === 0) return alert("No data available for export.");
+            
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF();
-
-            // Computations for Summary
-            let totalRevenue = 0;
-            let totalPapers = 0;
-            let totalPens = 0;
-            let productCounts = {};
-
+            
+            // Computations
+            let totalRev = 0, totalQty = 0;
+            let productStats = {};
             standardSalesData.forEach(s => {
-                totalRevenue += parseFloat(s.amount_paid);
-                if (s.item_type === 'paper') {
-                    totalPapers += s.qty_dispensed;
-                    let size = s.paper_size || "Paper";
-                    productCounts[size] = (productCounts[size] || 0) + s.qty_dispensed;
-                } else {
-                    totalPens += s.qty_dispensed;
-                    productCounts["Pen"] = (productCounts["Pen"] || 0) + s.qty_dispensed;
-                }
+                totalRev += parseFloat(s.amount_paid);
+                totalQty += s.qty_dispensed;
+                let key = s.item_type === 'paper' ? s.paper_size : "Ballpen";
+                productStats[key] = (productStats[key] || 0) + s.qty_dispensed;
             });
+            let topItem = Object.keys(productStats).reduce((a, b) => productStats[a] > productStats[b] ? a : b);
 
-            // Find Best Seller
-            let bestSeller = Object.keys(productCounts).reduce((a, b) => productCounts[a] > productCounts[b] ? a : b);
-
-            // Document Header
-            doc.setFontSize(22);
-            doc.text("Paper Vendo Machine", 14, 20);
+            // PDF Style
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(20);
+            doc.text("PAPER VENDO CLOUD SYSTEM", 105, 20, { align: 'center' });
             doc.setFontSize(14);
-            doc.text("Official Executive Summary Report", 14, 28);
+            doc.text("Executive Sales Summary", 105, 30, { align: 'center' });
             
-            doc.setFontSize(10);
-            doc.setTextColor(100);
-            doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 34);
-            doc.line(14, 38, 196, 38);
+            doc.setDrawColor(16, 185, 129);
+            doc.line(15, 35, 195, 35);
 
-            // Summary Highlights
-            doc.setFontSize(12);
-            doc.setTextColor(0);
-            doc.text("Business Highlights", 14, 48);
-            
             doc.setFontSize(11);
-            doc.setTextColor(50);
-            doc.text(`• Total Cash Revenue Collected: P${totalRevenue.toFixed(2)}`, 20, 56);
-            doc.text(`• Total Paper Sheets Dispensed: ${totalPapers} sheets`, 20, 64);
-            doc.text(`• Total Ballpens Dispensed: ${totalPens} pens`, 20, 72);
-            doc.text(`• Top Performing Product: ${bestSeller} (${productCounts[bestSeller]} dispensed)`, 20, 80);
+            doc.setFont("helvetica", "normal");
+            doc.text(`Report Generated: ${new Date().toLocaleString()}`, 15, 45);
+            doc.text(`Total Transactions: ${standardSalesData.length}`, 15, 52);
 
-            // Performance Analysis
-            doc.setFontSize(12);
-            doc.setTextColor(0);
-            doc.text("Product Demand Breakdown", 14, 95);
+            doc.setFont("helvetica", "bold");
+            doc.text("FINANCIAL HIGHLIGHTS:", 15, 65);
+            doc.setFont("helvetica", "normal");
+            doc.text(`- Total Gross Revenue: PHP ${totalRev.toFixed(2)}`, 20, 72);
+            doc.text(`- Total Items Dispensed: ${totalQty} units`, 20, 79);
+            doc.text(`- Best Selling Product: ${topItem}`, 20, 86);
 
-            let yPos = 103;
-            for (let item in productCounts) {
-                doc.setFontSize(10);
-                doc.setTextColor(60);
-                doc.text(`- ${item}: ${productCounts[item]} sold`, 20, yPos);
-                yPos += 7;
+            doc.setFont("helvetica", "bold");
+            doc.text("PRODUCT DISTRIBUTION:", 15, 100);
+            let y = 107;
+            for (let prod in productStats) {
+                doc.setFont("helvetica", "normal");
+                doc.text(`> ${prod}: ${productStats[prod]} units sold`, 20, y);
+                y += 7;
             }
 
-            doc.setFontSize(10);
-            doc.setTextColor(150);
-            doc.text("--- End of Report ---", 105, yPos + 15, null, null, "center");
-
-            doc.save(`Executive_Summary_${new Date().toISOString().split('T')[0]}.pdf`);
+            doc.save("Machine_Executive_Summary.pdf");
         }
 
         initAnalytics();
