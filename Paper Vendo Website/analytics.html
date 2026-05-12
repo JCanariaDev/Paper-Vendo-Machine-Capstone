@@ -209,7 +209,7 @@
         async function initAnalytics() {
             try {
                 // Fetch live data with joined settings
-                const sales = await supabaseRequest('sales_transactions', 'GET', null, '?select=*,paper_settings(brand_name),ballpen_settings(item_name)&order=transaction_date.desc');
+                const sales = await supabaseRequest('sales_transactions', 'GET', null, '?select=*,paper_settings(brand_name)&order=transaction_date.desc');
                 
                 if (sales && sales.length > 0 && !sales.error) {
                     standardSalesData = sales;

@@ -119,8 +119,8 @@
         }
 
         async function initDashboard() {
-            // 1. Fetch Sales Totals
-            const sales = await supabaseRequest('sales_transactions', 'GET', null, '?select=amount_paid,qty_dispensed,item_type');
+            // 1. Fetch Sales Totals (Including transaction_date for the Chart)
+            const sales = await supabaseRequest('sales_transactions', 'GET', null, '?select=amount_paid,qty_dispensed,item_type,transaction_date');
             let total = 0, papers = 0;
             sales.forEach(s => {
                 total += parseFloat(s.amount_paid);
