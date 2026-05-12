@@ -35,6 +35,3 @@ INSERT INTO sales_transactions (item_type, brand_id, paper_size, amount_paid, qt
 ('paper', 5, '1/4', 2.00, 4, NOW() - INTERVAL '2 hours'),
 ('paper', 2, 'crosswise', 1.00, 3, NOW() - INTERVAL '1 hour');
 
--- 2. Update the machine status to show it is online
-UPDATE machine_status SET status_value = 'Online', updated_at = NOW() WHERE status_key = 'is_running';
-UPDATE machine_status SET status_value = 'Excellent (-45 dBm)', updated_at = NOW() WHERE status_key = 'wifi_signal';
