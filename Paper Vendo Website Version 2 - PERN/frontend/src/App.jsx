@@ -2,6 +2,9 @@ import React, { useState, useEffect, createContext, useContext } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 
+// Configure Axios default base URL for production deployments
+axios.defaults.baseURL = import.meta.env.VITE_API_URL || '';
+
 // Import Pages
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
