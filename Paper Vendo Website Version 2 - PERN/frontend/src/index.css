@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  /* Dynamic Glassmorphic Card Styling - Dark Theme */
+  .glass-card-dark {
+    background: rgba(22, 31, 48, 0.7);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  /* Dynamic Glassmorphic Card Styling - Light Theme */
+  .glass-card-light {
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  /* Micro-animation transitions */
+  .transition-all-smooth {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Sleek modern inputs */
+  .form-input-dark {
+    background: #1F293D;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #FFFFFF;
+    transition: all 0.2s ease;
+  }
+
+  .form-input-dark:focus {
+    border-color: #0ea5e9;
+    box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.2);
+    outline: none;
+  }
+
+  .form-input-light {
+    background: #FFFFFF;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    color: #1e293b;
+    transition: all 0.2s ease;
+  }
+
+  .form-input-light:focus {
+    border-color: #0ea5e9;
+    box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.2);
+    outline: none;
+  }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(14, 165, 233, 0.3);
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(14, 165, 233, 0.6);
+}
