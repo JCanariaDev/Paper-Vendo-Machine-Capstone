@@ -169,6 +169,7 @@ export default function RealTimeStatus() {
           addLog('actuator', `Dispense complete. Change return: ₱${change.toFixed(2)}`);
           
           await updateStatusInDb({
+            coins_inserted: 0.00,
             credits_remaining: 0, // Dispensed all credits
             selected_type: 'None',
             selected_brand: 'None',
@@ -245,6 +246,7 @@ export default function RealTimeStatus() {
             addLog('actuator', `Dispense complete. Return Stepper to zero. Change return: ₱${change.toFixed(2)}`);
             
             await updateStatusInDb({
+              coins_inserted: 0.00,
               credits_remaining: 0,
               selected_type: 'None',
               selected_brand: 'None',
