@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Edit3, CheckCircle, AlertCircle, X, ChevronRight, CornerDownRight } from 'lucide-react';
+import { Edit3, CheckCircle, AlertCircle, X, ChevronRight, CornerDownRight, Search } from 'lucide-react';
 
 export default function Inventory() {
   const [paper, setPaper] = useState([]);
   const [pen, setPen] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+
   
   // Modal Editing States
   const [editingItem, setEditingItem] = useState(null); // 'paper' or 'pen'
@@ -77,18 +79,53 @@ export default function Inventory() {
     return Math.min(Math.round((curr / max) * 100), 100);
   };
 
+  const filteredPaper = paper.filter((item) => {
+    const query = searchQuery.toLowerCase();
+    return (
+      item.brand_name.toLowerCase().includes(query) ||
+      item.paper_size.toLowerCase().includes(query) ||
+      item.physical_status.toLowerCase().includes(query) ||
+      item.cost_per_unit.toString().includes(query) ||
+      item.sheets_per_unit.toString().includes(query)
+    );
+  });
+
+  const filteredPen = pen.filter((item) => {
+    const query = searchQuery.toLowerCase();
+    return (
+      item.item_name.toLowerCase().includes(query) ||
+      item.physical_status.toLowerCase().includes(query) ||
+      item.cost_per_unit.toString().includes(query)
+    );
+  });
+
   return (
     <div className="space-y-10 max-w-7xl mx-auto font-sans">
       
       {/* Top Header */}
-      <div>
-        <h1 className="font-display font-extrabold text-3xl md:text-4xl text-slate-800 dark:text-white leading-tight">
-          Inventory Control
-        </h1>
-        <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-          Adjust item settings, pricing, sheets allocation, and monitor stock volumes.
-        </p>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="font-display font-extrabold text-3xl md:text-4xl text-slate-800 dark:text-white leading-tight">
+            Inventory Control
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
+            Adjust item settings, pricing, sheets allocation, and monitor stock volumes.
+          </p>
+        </div>
+        <div className="relative max-w-md w-full md:w-80">
+          <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none text-slate-400">
+            <Search className="w-4 h-4 text-slate-400" />
+          </span>
+          <input
+            type="text"
+            placeholder="Search inventory..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full h-10 pl-10 pr-4 rounded-xl text-sm bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500 placeholder-slate-400 dark:placeholder-slate-500 shadow-sm transition-all focus:ring-2 focus:ring-primary-500/10"
+          />
+        </div>
       </div>
+
 
       {/* 1. PAPER INVENTORY COMPONENT */}
       <div className="p-6 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm">
@@ -110,54 +147,62 @@ export default function Inventory() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
-              {paper.map((item) => {
-                const stockPercent = getPercentage(item.current_stock, item.max_capacity);
-                return (
-                  <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
-                    <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
-                      <div>{item.brand_name}</div>
-                      <div className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
-                        <CornerDownRight className="w-3.5 h-3.5 shrink-0" /> Layout Size: {item.paper_size}
-                      </div>
-                    </td>
-                    <td className="py-4 px-4 text-center font-bold text-primary-500">{item.sheets_per_unit} sheets</td>
-                    <td className="py-4 px-4 text-center font-bold">₱{parseFloat(item.cost_per_unit).toFixed(2)}</td>
-                    <td className="py-4 px-4 min-w-[200px]">
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-white/10 overflow-hidden">
-                          <div 
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              stockPercent < 15 ? 'bg-amber-500' : 'bg-primary-500'
-                            }`}
-                            style={{ width: `${stockPercent}%` }}
-                          />
+              {filteredPaper.length > 0 ? (
+                filteredPaper.map((item) => {
+                  const stockPercent = getPercentage(item.current_stock, item.max_capacity);
+                  return (
+                    <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
+                      <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
+                        <div>{item.brand_name}</div>
+                        <div className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
+                          <CornerDownRight className="w-3.5 h-3.5 shrink-0" /> Layout Size: {item.paper_size}
                         </div>
-                        <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
-                          {item.current_stock}/{item.max_capacity}
+                      </td>
+                      <td className="py-4 px-4 text-center font-bold text-primary-500">{item.sheets_per_unit} sheets</td>
+                      <td className="py-4 px-4 text-center font-bold">₱{parseFloat(item.cost_per_unit).toFixed(2)}</td>
+                      <td className="py-4 px-4 min-w-[200px]">
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-white/10 overflow-hidden">
+                            <div 
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                stockPercent < 15 ? 'bg-amber-500' : 'bg-primary-500'
+                              }`}
+                              style={{ width: `${stockPercent}%` }}
+                            />
+                          </div>
+                          <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                            {item.current_stock}/{item.max_capacity}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 text-center">
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                          item.physical_status === 'Good' 
+                            ? 'bg-emerald-500/10 text-emerald-500' 
+                            : 'bg-red-500/10 text-red-500'
+                        }`}>
+                          {item.physical_status === 'Good' ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                          {item.physical_status}
                         </span>
-                      </div>
-                    </td>
-                    <td className="py-4 px-4 text-center">
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                        item.physical_status === 'Good' 
-                          ? 'bg-emerald-500/10 text-emerald-500' 
-                          : 'bg-red-500/10 text-red-500'
-                      }`}>
-                        {item.physical_status === 'Good' ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
-                        {item.physical_status}
-                      </span>
-                    </td>
-                    <td className="py-4 px-4 text-right">
-                      <button 
-                        onClick={() => openEditModal('paper', item)}
-                        className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-primary-500 dark:hover:text-primary-400 transition-colors"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+                      </td>
+                      <td className="py-4 px-4 text-right">
+                        <button 
+                          onClick={() => openEditModal('paper', item)}
+                          className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-primary-500 dark:hover:text-primary-400 transition-colors"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan="6" className="py-8 text-center text-slate-450 dark:text-slate-500 font-medium">
+                    No matching paper configuration found.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -182,50 +227,58 @@ export default function Inventory() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
-              {pen.map((item) => {
-                const stockPercent = getPercentage(item.current_stock, item.max_capacity);
-                return (
-                  <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
-                    <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
-                      {item.item_name}
-                    </td>
-                    <td className="py-4 px-4 text-center font-bold">₱{parseFloat(item.cost_per_unit).toFixed(2)}</td>
-                    <td className="py-4 px-4 min-w-[200px]">
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-white/10 overflow-hidden">
-                          <div 
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              stockPercent < 15 ? 'bg-amber-500' : 'bg-primary-500'
-                            }`}
-                            style={{ width: `${stockPercent}%` }}
-                          />
+              {filteredPen.length > 0 ? (
+                filteredPen.map((item) => {
+                  const stockPercent = getPercentage(item.current_stock, item.max_capacity);
+                  return (
+                    <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
+                      <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
+                        {item.item_name}
+                      </td>
+                      <td className="py-4 px-4 text-center font-bold">₱{parseFloat(item.cost_per_unit).toFixed(2)}</td>
+                      <td className="py-4 px-4 min-w-[200px]">
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-white/10 overflow-hidden">
+                            <div 
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                stockPercent < 15 ? 'bg-amber-500' : 'bg-primary-500'
+                              }`}
+                              style={{ width: `${stockPercent}%` }}
+                            />
+                          </div>
+                          <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                            {item.current_stock}/{item.max_capacity}
+                          </span>
                         </div>
-                        <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
-                          {item.current_stock}/{item.max_capacity}
+                      </td>
+                      <td className="py-4 px-4 text-center">
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                          item.physical_status === 'Good' 
+                            ? 'bg-emerald-500/10 text-emerald-500' 
+                            : 'bg-red-500/10 text-red-500'
+                        }`}>
+                          {item.physical_status === 'Good' ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                          {item.physical_status}
                         </span>
-                      </div>
-                    </td>
-                    <td className="py-4 px-4 text-center">
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                        item.physical_status === 'Good' 
-                          ? 'bg-emerald-500/10 text-emerald-500' 
-                          : 'bg-red-500/10 text-red-500'
-                      }`}>
-                        {item.physical_status === 'Good' ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
-                        {item.physical_status}
-                      </span>
-                    </td>
-                    <td className="py-4 px-4 text-right">
-                      <button 
-                        onClick={() => openEditModal('pen', item)}
-                        className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-primary-500 dark:hover:text-primary-400 transition-colors"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+                      </td>
+                      <td className="py-4 px-4 text-right">
+                        <button 
+                          onClick={() => openEditModal('pen', item)}
+                          className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-primary-500 dark:hover:text-primary-400 transition-colors"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan="5" className="py-8 text-center text-slate-450 dark:text-slate-500 font-medium">
+                    No matching ballpen configuration found.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

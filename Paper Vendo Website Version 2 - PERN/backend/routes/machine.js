@@ -22,6 +22,65 @@ export function createMachineRouter(supabase) {
     }
   });
 
+  // 1.1. GET REALTIME STATUS (LCD/OLED metrics)
+  router.get('/realtime', async (req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('realtime_status')
+        .select('*')
+        .eq('id', 1)
+        .single();
+
+      if (error) throw error;
+      return res.status(200).json(data);
+    } catch (err) {
+      console.error('Error fetching realtime status:', err);
+      return res.status(500).json({ message: 'Failed to retrieve realtime status.' });
+    }
+  });
+
+  // 1.2. UPDATE REALTIME STATUS (For simulation controller)
+  router.put('/realtime', async (req, res) => {
+    const { 
+      coins_inserted, 
+      credits_remaining, 
+      selected_type, 
+      selected_brand, 
+      selected_size, 
+      oled_display_text, 
+      scale_weight_grams, 
+      ir_sensor_blocked, 
+      stepper_position_steps, 
+      servo_angle_change 
+    } = req.body;
+
+    try {
+      const { data, error } = await supabase
+        .from('realtime_status')
+        .update({
+          coins_inserted: coins_inserted !== undefined ? parseFloat(coins_inserted) : undefined,
+          credits_remaining: credits_remaining !== undefined ? parseFloat(credits_remaining) : undefined,
+          selected_type,
+          selected_brand,
+          selected_size,
+          oled_display_text,
+          scale_weight_grams: scale_weight_grams !== undefined ? parseFloat(scale_weight_grams) : undefined,
+          ir_sensor_blocked: ir_sensor_blocked !== undefined ? ir_sensor_blocked : undefined,
+          stepper_position_steps: stepper_position_steps !== undefined ? parseInt(stepper_position_steps) : undefined,
+          servo_angle_change: servo_angle_change !== undefined ? parseInt(servo_angle_change) : undefined,
+          updated_at: new Date()
+        })
+        .eq('id', 1)
+        .select();
+
+      if (error) throw error;
+      return res.status(200).json({ message: 'Realtime status updated.', data: data[0] });
+    } catch (err) {
+      console.error('Error updating realtime status:', err);
+      return res.status(500).json({ message: 'Failed to update realtime status.' });
+    }
+  });
+
   // 2. GET INVENTORY SETTINGS (PAPER & BALLPENS)
   router.get('/inventory', async (req, res) => {
     try {
