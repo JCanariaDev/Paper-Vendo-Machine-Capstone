@@ -28,6 +28,11 @@ export default function RealTimeStatus() {
     updated_at: new Date().toISOString()
   });
 
+  // Keep a ref always pointing to latest status so setTimeout callbacks
+  // are never trapped reading a stale closure snapshot.
+  const statusRef = React.useRef(status);
+  useEffect(() => { statusRef.current = status; }, [status]);
+
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [logs, setLogs] = useState([
@@ -59,12 +64,14 @@ export default function RealTimeStatus() {
     return () => clearInterval(interval);
   }, []);
 
+  // FIX: Only send the fields that changed. Spreading stale `status` into
+  // every payload caused old coin/credit values to overwrite fresh DB writes
+  // when setTimeout callbacks fired after the state had already been updated.
   const updateStatusInDb = async (updatedFields) => {
     setUpdating(true);
     try {
-      const payload = { ...status, ...updatedFields };
-      const res = await axios.put('/api/machine/realtime', payload);
-      setStatus(res.data.data);
+      const res = await axios.put('/api/machine/realtime', updatedFields);
+      if (res.data.data) setStatus(res.data.data);
     } catch (err) {
       console.error('Failed to update status in database:', err);
       addLog('error', 'Cloud sync failed. Check connection.');
@@ -75,16 +82,17 @@ export default function RealTimeStatus() {
 
   // --- MOCK SIMULATOR ACTIONS ---
   
-  // 1. Insert Coin
+  // 1. Insert Coin — always read from ref so rapid clicks accumulate correctly
   const simulateInsertCoin = async (amount) => {
-    const newCoins = parseFloat(status.coins_inserted) + amount;
-    const newCredits = parseFloat(status.credits_remaining) + amount;
+    const latest = statusRef.current;
+    const newCoins = parseFloat(latest.coins_inserted) + amount;
+    const newCredits = parseFloat(latest.credits_remaining) + amount;
     
     addLog('sensor', `Coin slot pulse: +₱${amount}.00 coin accepted.`);
     
     let oledText = `CREDITS: ₱${newCredits.toFixed(2)}\nInsert Coin / A/B`;
-    if (status.selected_type !== 'None') {
-      oledText = `CREDITS: ₱${newCredits.toFixed(2)}\nSelected: ${status.selected_type.toUpperCase()}`;
+    if (latest.selected_type !== 'None') {
+      oledText = `CREDITS: ₱${newCredits.toFixed(2)}\nSelected: ${latest.selected_type.toUpperCase()}`;
     }
 
     await updateStatusInDb({
@@ -110,19 +118,23 @@ export default function RealTimeStatus() {
     });
   };
 
-  // 3. Keypad Requests
+  // 3. Keypad Requests — always read from statusRef to avoid stale closures
   const simulateKeypress = async (key) => {
     addLog('keypad', `Keypad Key pressed: [${key}]`);
 
+    // Read the LATEST status from the ref, not the stale closure
+    const latest = statusRef.current;
+
     // Verify credits
-    if (status.credits_remaining < 1.00) {
-      addLog('warning', `Request rejected: credits too low (₱${status.credits_remaining})`);
+    if (parseFloat(latest.credits_remaining) < 1.00) {
+      addLog('warning', `Request rejected: credits too low (₱${latest.credits_remaining})`);
       await updateStatusInDb({
         oled_display_text: 'ERR: LOW CREDIT\nInsert Coin first'
       });
       setTimeout(() => {
+        const snap = statusRef.current;
         updateStatusInDb({
-          oled_display_text: `CREDITS: ₱${status.credits_remaining.toFixed(2)}\nInsert Coin / Key`
+          oled_display_text: `CREDITS: ₱${parseFloat(snap.credits_remaining).toFixed(2)}\nInsert Coin / Key`
         });
       }, 2000);
       return;
@@ -143,6 +155,12 @@ export default function RealTimeStatus() {
       };
       
       const sizeSelected = paperSizeNames[key];
+      // Snapshot credits NOW before any async delays
+      const creditAtPress = parseFloat(latest.credits_remaining);
+      const weightAtPress = parseFloat(latest.scale_weight_grams);
+      const cost = key <= '4' ? 1.00 : 2.00;
+      const sheetsAlloc = 4;
+
       addLog('api', `Querying database for paper specs ID: ${key}`);
       
       await updateStatusInDb({
@@ -154,64 +172,54 @@ export default function RealTimeStatus() {
 
       // Simulate API verification
       setTimeout(async () => {
-        const cost = 1.00; // Default budget sheet cost
-        const sheetsAlloc = 4;
-        
         addLog('actuator', `DB validated. Dispensing ${sheetsAlloc} sheets of ${sizeSelected}`);
         await updateStatusInDb({
           oled_display_text: `Dispensing...\nQty: ${sheetsAlloc} sheets`,
-          scale_weight_grams: Math.max(status.scale_weight_grams - 8.5, 0) // reduce weight of paper stack
+          scale_weight_grams: Math.max(weightAtPress - 8.5, 0)
         });
 
         // Complete dispense
         setTimeout(async () => {
-          const change = status.credits_remaining - cost;
+          const change = creditAtPress - cost;
           addLog('actuator', `Dispense complete. Change return: ₱${change.toFixed(2)}`);
           
           await updateStatusInDb({
             coins_inserted: 0.00,
-            credits_remaining: 0, // Dispensed all credits
+            credits_remaining: 0.00,
             selected_type: 'None',
             selected_brand: 'None',
             selected_size: 'None',
-            servo_angle_change: change > 0 ? 90 : 0, // Activate change dispenser servo
+            servo_angle_change: change > 0 ? 90 : 0,
             oled_display_text: change > 0 ? `Returning change\n₱${change.toFixed(2)}` : 'Thank you!\nSmart Vendo V3'
           });
 
           // Reset change return servo
-          if (change > 0) {
-            setTimeout(() => {
-              updateStatusInDb({
-                servo_angle_change: 0,
-                oled_display_text: 'Smart Vendo V3\nInsert Coin'
-              });
-            }, 3000);
-          } else {
-            setTimeout(() => {
-              updateStatusInDb({
-                oled_display_text: 'Smart Vendo V3\nInsert Coin'
-              });
-            }, 3000);
-          }
+          setTimeout(() => {
+            updateStatusInDb({
+              servo_angle_change: 0,
+              oled_display_text: 'Smart Vendo V3\nInsert Coin'
+            });
+          }, 3000);
         }, 3000);
 
       }, 1500);
 
     } else if (key === 'A' || key === 'B') {
-      // Pen specs
+      // Pen specs — snapshot credits BEFORE any async delays
       const penName = key === 'A' ? 'Budget Ballpen' : 'Standard Ballpen';
       const cost = key === 'A' ? 5.00 : 10.00;
+      const creditAtPress = parseFloat(latest.credits_remaining);
 
       addLog('api', `Querying database for ballpen specs ID: ${key === 'A' ? 1 : 2}`);
 
-      if (status.credits_remaining < cost) {
+      if (creditAtPress < cost) {
         addLog('warning', `Insufficient credits: ${penName} requires ₱${cost.toFixed(2)}`);
         await updateStatusInDb({
-          oled_display_text: `ERR: NEED ₱${cost.toFixed(2)}\nCredits: ₱${status.credits_remaining.toFixed(2)}`
+          oled_display_text: `ERR: NEED ₱${cost.toFixed(2)}\nCredits: ₱${creditAtPress.toFixed(2)}`
         });
         setTimeout(() => {
           updateStatusInDb({
-            oled_display_text: `CREDITS: ₱${status.credits_remaining.toFixed(2)}\nInsert Coin / Key`
+            oled_display_text: `CREDITS: ₱${creditAtPress.toFixed(2)}\nInsert Coin / Key`
           });
         }, 2000);
         return;
@@ -242,12 +250,12 @@ export default function RealTimeStatus() {
 
           // Finish dispense, return change
           setTimeout(async () => {
-            const change = status.credits_remaining - cost;
+            const change = creditAtPress - cost;
             addLog('actuator', `Dispense complete. Return Stepper to zero. Change return: ₱${change.toFixed(2)}`);
             
             await updateStatusInDb({
               coins_inserted: 0.00,
-              credits_remaining: 0,
+              credits_remaining: 0.00,
               selected_type: 'None',
               selected_brand: 'None',
               selected_size: 'None',
@@ -257,20 +265,13 @@ export default function RealTimeStatus() {
               oled_display_text: change > 0 ? `Returning change\n₱${change.toFixed(2)}` : 'Thank you!\nSmart Vendo V3'
             });
 
-            if (change > 0) {
-              setTimeout(() => {
-                updateStatusInDb({
-                  servo_angle_change: 0,
-                  oled_display_text: 'Smart Vendo V3\nInsert Coin'
-                });
-              }, 3000);
-            } else {
-              setTimeout(() => {
-                updateStatusInDb({
-                  oled_display_text: 'Smart Vendo V3\nInsert Coin'
-                });
-              }, 3000);
-            }
+            // Reset change return servo after 3 seconds
+            setTimeout(() => {
+              updateStatusInDb({
+                servo_angle_change: 0,
+                oled_display_text: 'Smart Vendo V3\nInsert Coin'
+              });
+            }, 3000);
           }, 2000);
 
         }, 1500);
@@ -279,23 +280,23 @@ export default function RealTimeStatus() {
 
     } else if (key === '0') {
       // Coin Return
-      if (status.credits_remaining <= 0) {
+      const creditAtPress = parseFloat(latest.credits_remaining);
+      if (creditAtPress <= 0) {
         addLog('warning', 'Cancel request rejected: No credits to return.');
         return;
       }
       
-      const coinsToReturn = status.credits_remaining;
-      addLog('actuator', `Coin return request. Releasing ₱${coinsToReturn.toFixed(2)} via Servo.`);
+      addLog('actuator', `Coin return request. Releasing ₱${creditAtPress.toFixed(2)} via Servo.`);
       
       await updateStatusInDb({
-        oled_display_text: `Returning change\n₱${coinsToReturn.toFixed(2)}`,
+        oled_display_text: `Returning change\n₱${creditAtPress.toFixed(2)}`,
         servo_angle_change: 90
       });
 
       setTimeout(async () => {
         await updateStatusInDb({
-          coins_inserted: 0,
-          credits_remaining: 0,
+          coins_inserted: 0.00,
+          credits_remaining: 0.00,
           servo_angle_change: 0,
           oled_display_text: 'Smart Vendo V3\nInsert Coin'
         });
@@ -306,16 +307,18 @@ export default function RealTimeStatus() {
       // Stepper Nudge
       const dir = key === '*' ? 'FORWARD' : 'BACKWARD';
       const steps = key === '*' ? 20 : -20;
+      const currentSteps = parseInt(latest.stepper_position_steps) || 0;
+      const currentCredits = parseFloat(latest.credits_remaining);
       
       addLog('actuator', `Stepper manual nudge command: ${dir} (${steps} steps)`);
       await updateStatusInDb({
-        stepper_position_steps: status.stepper_position_steps + steps,
+        stepper_position_steps: currentSteps + steps,
         oled_display_text: `Stepper Nudge:\n${dir} (${steps} steps)`
       });
 
       setTimeout(() => {
         updateStatusInDb({
-          oled_display_text: `CREDITS: ₱${status.credits_remaining.toFixed(2)}\nInsert Coin / Key`
+          oled_display_text: `CREDITS: ₱${currentCredits.toFixed(2)}\nInsert Coin / Key`
         });
       }, 1500);
     }
