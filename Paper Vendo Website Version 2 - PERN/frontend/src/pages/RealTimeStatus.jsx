@@ -3,14 +3,10 @@ import axios from 'axios';
 import { 
   Tv, 
   Coins, 
-  Cpu, 
   RotateCcw, 
   Activity, 
   Radio, 
-  Info, 
-  AlertCircle,
-  HelpCircle,
-  Play
+  Info
 } from 'lucide-react';
 
 export default function RealTimeStatus() {
@@ -324,13 +320,6 @@ export default function RealTimeStatus() {
     }
   };
 
-  // Helper to simulate manual weight adjustments
-  const adjustLoadCell = async (direction) => {
-    let delta = direction === 'up' ? 25 : -25;
-    const newWeight = Math.max(parseFloat(status.scale_weight_grams) + delta, 0);
-    addLog('sensor', `HX711 Load Cell calibration weight adjusted to: ${newWeight}g`);
-    await updateStatusInDb({ scale_weight_grams: newWeight });
-  };
 
   if (loading) {
     return (
@@ -402,109 +391,6 @@ export default function RealTimeStatus() {
             </div>
           </div>
 
-          {/* SENSOR INDICATORS PANEL */}
-          <div className="p-6 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm">
-            <h3 className="font-display font-bold text-base text-slate-800 dark:text-white mb-6 flex items-center gap-2">
-              <Cpu className="w-5 h-5 text-primary-500" />
-              <span>Machine Sensor Diagnostics</span>
-            </h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              
-              {/* HX711 Weight Scale */}
-              <div className="p-4 rounded-xl border border-slate-100 dark:border-white/[0.03] bg-slate-50 dark:bg-white/[0.01]">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">HX711 Load Cell</span>
-                  <span className="text-xs font-semibold text-primary-500">Weight Stack</span>
-                </div>
-                <div className="text-2xl font-extrabold text-slate-800 dark:text-white font-display">
-                  {parseFloat(status.scale_weight_grams).toFixed(1)}g
-                </div>
-                <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
-                  Checks stack availability. Approx. ~110 sheets remaining.
-                </p>
-                
-                {/* Manual Calibration buttons in diagnostics */}
-                <div className="flex gap-2 mt-3 pt-3 border-t border-slate-200/50 dark:border-white/[0.02]">
-                  <button 
-                    onClick={() => adjustLoadCell('down')}
-                    className="flex-1 text-[10px] font-bold py-1 px-2 rounded-lg bg-slate-200/50 hover:bg-slate-200 dark:bg-white/[0.03] dark:hover:bg-white/[0.06] transition-colors"
-                  >
-                    -25g (Remove Paper)
-                  </button>
-                  <button 
-                    onClick={() => adjustLoadCell('up')}
-                    className="flex-1 text-[10px] font-bold py-1 px-2 rounded-lg bg-slate-200/50 hover:bg-slate-200 dark:bg-white/[0.03] dark:hover:bg-white/[0.06] transition-colors"
-                  >
-                    +25g (Refill Paper)
-                  </button>
-                </div>
-              </div>
-
-              {/* IR Drop Sensor */}
-              <div className="p-4 rounded-xl border border-slate-100 dark:border-white/[0.03] bg-slate-50 dark:bg-white/[0.01] flex flex-col justify-between">
-                <div>
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">IR Beam Sensor</span>
-                    <span className={`h-2 w-2 rounded-full ${status.ir_sensor_blocked ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></span>
-                  </div>
-                  <div className="flex items-center gap-2 text-2xl font-extrabold text-slate-800 dark:text-white font-display">
-                    <span className={status.ir_sensor_blocked ? 'text-amber-500' : 'text-emerald-500'}>
-                      {status.ir_sensor_blocked ? 'OBSTRUCTED' : 'CLEAR'}
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
-                    Detects falling ballpen dispenser drops to log checkout logs.
-                  </p>
-                </div>
-              </div>
-
-              {/* Stepper Motor */}
-              <div className="p-4 rounded-xl border border-slate-100 dark:border-white/[0.03] bg-slate-50 dark:bg-white/[0.01]">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Stepper Motor (Pen)</span>
-                  <span className="text-xs font-semibold text-primary-500">28BYJ-48 Stepper</span>
-                </div>
-                <div className="text-2xl font-extrabold text-slate-800 dark:text-white font-display">
-                  {status.stepper_position_steps} steps
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <div className="flex-1 h-1.5 rounded-full bg-slate-100 dark:bg-white/10 overflow-hidden">
-                    <div 
-                      className="h-full bg-primary-500 transition-all duration-300"
-                      style={{ width: `${Math.min(Math.abs(status.stepper_position_steps / 10.24), 100)}%` }}
-                    />
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-400">
-                    {Math.round(status.stepper_position_steps / 5.68)}°
-                  </span>
-                </div>
-              </div>
-
-              {/* Change Returning Servo */}
-              <div className="p-4 rounded-xl border border-slate-100 dark:border-white/[0.03] bg-slate-50 dark:bg-white/[0.01]">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Change Release Servo</span>
-                  <span className="text-xs font-semibold text-primary-500">SG90 Servo</span>
-                </div>
-                <div className="text-2xl font-extrabold text-slate-800 dark:text-white font-display">
-                  {status.servo_angle_change}°
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <div className="flex-1 h-1.5 rounded-full bg-slate-100 dark:bg-white/10 overflow-hidden">
-                    <div 
-                      className="h-full bg-emerald-500 transition-all duration-300"
-                      style={{ width: `${(status.servo_angle_change / 180) * 100}%` }}
-                    />
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-400">
-                    {status.servo_angle_change === 90 ? 'RELEASEING' : 'HOLDING'}
-                  </span>
-                </div>
-              </div>
-
-            </div>
-          </div>
 
         </div>
 
