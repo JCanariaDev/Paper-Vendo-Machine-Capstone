@@ -4,10 +4,8 @@ DROP FUNCTION IF EXISTS deduct_inventory_stock();
 DROP TABLE IF EXISTS sales_transactions;
 DROP TABLE IF EXISTS paper_settings;
 DROP TABLE IF EXISTS ballpen_settings;
-DROP TABLE IF EXISTS realtime_status;
 DROP TABLE IF EXISTS machine_status;
 DROP TABLE IF EXISTS admins;
-
 
 -- 1. Create Admins Table
 CREATE TABLE IF NOT EXISTS admins (
@@ -60,32 +58,11 @@ CREATE TABLE IF NOT EXISTS machine_status (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 5.1. Create Realtime Status Table (Single row representing the machine state)
-CREATE TABLE IF NOT EXISTS realtime_status (
-    id INTEGER PRIMARY KEY DEFAULT 1,
-    coins_inserted DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-    credits_remaining DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-    selected_type TEXT DEFAULT 'None', -- 'paper', 'pen', 'None'
-    selected_brand TEXT DEFAULT 'None',
-    selected_size TEXT DEFAULT 'None',
-    oled_display_text TEXT NOT NULL DEFAULT 'Smart Vendo V3\nInsert Coin',
-    scale_weight_grams DECIMAL(10,2) DEFAULT 0.00,
-    ir_sensor_blocked BOOLEAN DEFAULT FALSE,
-    stepper_position_steps INTEGER DEFAULT 0,
-    servo_angle_change INTEGER DEFAULT 0,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
 -- 6. Insert Original Paper Vendo Data (Legacy Sync)
 INSERT INTO admins (username, password, role) VALUES 
 ('admin', 'admin123', 'superadmin'),
 ('staff', 'staff123', 'staff')
 ON CONFLICT (username) DO NOTHING;
-
-INSERT INTO realtime_status (id, coins_inserted, credits_remaining, selected_type, selected_brand, selected_size, oled_display_text, scale_weight_grams, ir_sensor_blocked, stepper_position_steps, servo_angle_change) 
-VALUES (1, 0.00, 0.00, 'None', 'None', 'None', 'Smart Vendo V3\nInsert Coin', 0.00, FALSE, 0, 0)
-ON CONFLICT (id) DO NOTHING;
-
 
 INSERT INTO paper_settings (brand_name, paper_size, cost_per_unit, sheets_per_unit, current_stock, max_capacity) VALUES
 ('Budget Brand (White)', '1/4',       1.00, 4, 100, 500),
@@ -110,9 +87,7 @@ ON CONFLICT (status_key) DO NOTHING;
 -- ALTER PUBLICATION supabase_realtime ADD TABLE paper_settings;
 -- ALTER PUBLICATION supabase_realtime ADD TABLE ballpen_settings;
 -- ALTER PUBLICATION supabase_realtime ADD TABLE machine_status;
--- ALTER PUBLICATION supabase_realtime ADD TABLE realtime_status;
 -- ALTER PUBLICATION supabase_realtime ADD TABLE sales_transactions;
-
 
 -- 7. Triggers for Auto-Decrementing Stock
 -- Function to subtract stock automatically

@@ -8,8 +8,7 @@ import {
   LogOut, 
   Sun, 
   Moon, 
-  User,
-  Activity
+  User 
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -17,11 +16,9 @@ export default function Sidebar() {
 
   const navItems = [
     { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/status', label: 'Real Time Status', icon: Activity },
     { to: '/inventory', label: 'Inventory', icon: Boxes },
     { to: '/transactions', label: 'Sales History', icon: History },
   ];
-
 
   return (
     <aside className="fixed top-0 left-0 h-screen w-64 flex flex-col z-20 transition-all duration-300 bg-white border-r border-slate-200 dark:bg-[#0D1526] dark:border-white/[0.06]">

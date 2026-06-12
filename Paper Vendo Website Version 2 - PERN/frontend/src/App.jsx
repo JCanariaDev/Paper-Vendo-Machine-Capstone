@@ -10,7 +10,6 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Inventory from './pages/Inventory';
 import Transactions from './pages/Transactions';
-import RealTimeStatus from './pages/RealTimeStatus';
 
 // Import Sidebar Layout
 import Sidebar from './components/Sidebar';
@@ -126,14 +125,6 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Dashboard />
-              </ProtectedRoute>
-            } 
-          />
-          <Route 
-            path="/status" 
-            element={
-              <ProtectedRoute>
-                <RealTimeStatus />
               </ProtectedRoute>
             } 
           />
