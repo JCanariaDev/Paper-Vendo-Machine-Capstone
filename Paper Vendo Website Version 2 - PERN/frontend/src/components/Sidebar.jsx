@@ -8,10 +8,11 @@ import {
   LogOut, 
   Sun, 
   Moon, 
-  User 
+  User,
+  X
 } from 'lucide-react';
 
-export default function Sidebar() {
+export default function Sidebar({ isOpen, onClose }) {
   const { user, logout, theme, toggleTheme } = useAuth();
 
   const navItems = [
@@ -21,37 +22,60 @@ export default function Sidebar() {
   ];
 
   return (
-    <aside className="fixed top-0 left-0 h-screen w-64 flex flex-col z-20 transition-all duration-300 bg-white border-r border-slate-200 dark:bg-[#0D1526] dark:border-white/[0.06]">
-      {/* Brand Header */}
-      <div className="flex items-center gap-3 p-6 border-b border-slate-200 dark:border-white/[0.06]">
-        <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary-500 text-white font-display font-extrabold text-xl shadow-md shadow-primary-500/20">
-          V
-        </div>
-        <div>
-          <h1 className="font-display font-bold text-lg text-slate-800 dark:text-white leading-none">Paper Vendo</h1>
-          <span className="text-[11px] font-semibold tracking-wider text-primary-500 uppercase">Cloud Panel</span>
-        </div>
-      </div>
+    <>
+      {/* Backdrop overlay for mobile */}
+      {isOpen && (
+        <div
+          onClick={onClose}
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-30 md:hidden transition-all duration-300 animate-[fadeIn_0.2s_ease-out]"
+        />
+      )}
 
-      {/* Navigation Links */}
-      <nav className="flex-1 px-4 py-6 space-y-2">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) => `
-              flex items-center gap-3.5 px-4 py-3 rounded-xl font-medium text-sm transition-all duration-200
-              ${isActive 
-                ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/10' 
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/[0.03] hover:text-slate-800 dark:hover:text-white'
-              }
-            `}
+      <aside
+        className={`fixed top-0 left-0 h-screen w-64 flex flex-col z-40 transition-all duration-300 bg-white border-r border-slate-200 dark:bg-[#0D1526] dark:border-white/[0.06] md:translate-x-0 ${
+          isOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        {/* Brand Header */}
+        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-white/[0.06]">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary-500 text-white font-display font-extrabold text-xl shadow-md shadow-primary-500/20">
+              V
+            </div>
+            <div>
+              <h1 className="font-display font-bold text-lg text-slate-800 dark:text-white leading-none">Paper Vendo</h1>
+              <span className="text-[11px] font-semibold tracking-wider text-primary-500 uppercase">Cloud Panel</span>
+            </div>
+          </div>
+          {/* Close button on mobile */}
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white md:hidden"
           >
-            <item.icon className="w-5 h-5" />
-            <span>{item.label}</span>
-          </NavLink>
-        ))}
-      </nav>
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Navigation Links */}
+        <nav className="flex-1 px-4 py-6 space-y-2">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              onClick={onClose}
+              className={({ isActive }) => `
+                flex items-center gap-3.5 px-4 py-3 rounded-xl font-medium text-sm transition-all duration-200
+                ${isActive 
+                  ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/10' 
+                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/[0.03] hover:text-slate-800 dark:hover:text-white'
+                }
+              `}
+            >
+              <item.icon className="w-5 h-5" />
+              <span>{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
 
       {/* Footer Controls */}
       <div className="p-4 border-t border-slate-200 dark:border-white/[0.06] space-y-4">
@@ -88,5 +112,6 @@ export default function Sidebar() {
         </div>
       </div>
     </aside>
+  </>
   );
 }

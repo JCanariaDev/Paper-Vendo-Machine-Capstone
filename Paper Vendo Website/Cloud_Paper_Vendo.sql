@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS admins (
     id SERIAL PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL,
-    role TEXT DEFAULT 'staff',
+    role TEXT DEFAULT 'staff' CHECK (role IN ('superadmin', 'staff')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

@@ -73,6 +73,63 @@ export function createAuthRouter(supabase) {
     }
   });
 
+  // REGISTER ENDPOINT
+  router.post('/register', async (req, res) => {
+    const { username, password, role } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ message: 'Username and password are required.' });
+    }
+
+    // Role validation
+    const allowedRoles = ['superadmin', 'staff'];
+    const userRole = role || 'staff';
+    if (!allowedRoles.includes(userRole)) {
+      return res.status(400).json({ message: 'Invalid role. Must be either superadmin or staff.' });
+    }
+
+    try {
+      // Check if username already exists in Supabase
+      const { data: existingUser, error: checkError } = await supabase
+        .from('admins')
+        .select('username')
+        .eq('username', username);
+
+      if (checkError) {
+        throw checkError;
+      }
+
+      if (existingUser && existingUser.length > 0) {
+        return res.status(400).json({ message: 'Username is already taken.' });
+      }
+
+      // Hash password
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // Insert new user
+      const { data: newUser, error: insertError } = await supabase
+        .from('admins')
+        .insert([{ username, password: hashedPassword, role: userRole }])
+        .select('*');
+
+      if (insertError) {
+        throw insertError;
+      }
+
+      return res.status(201).json({
+        message: 'Account registered successfully.',
+        user: {
+          id: newUser[0].id,
+          username: newUser[0].username,
+          role: newUser[0].role
+        }
+      });
+    } catch (error) {
+      console.error('Registration Error:', error);
+      return res.status(500).json({ message: 'Failed to register account.' });
+    }
+  });
+
   // VERIFY CURRENT SESSION MIDDLEWARE / ROUTE
   router.get('/verify', (req, res) => {
     const authHeader = req.headers.authorization;
