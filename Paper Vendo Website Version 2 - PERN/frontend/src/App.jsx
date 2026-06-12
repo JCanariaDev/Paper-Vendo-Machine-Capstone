@@ -10,6 +10,8 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Inventory from './pages/Inventory';
 import Transactions from './pages/Transactions';
+import Analytics from './pages/Analytics';
+import Reports from './pages/Reports';
 
 // Import Sidebar Layout
 import Sidebar from './components/Sidebar';
@@ -128,6 +130,15 @@ export default function App() {
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   };
 
+  // Admin Router Wrapper (Superadmin only)
+  const AdminRoute = ({ children }) => {
+    const { user } = useAuth();
+    if (user && user.role !== 'superadmin') {
+      return <Navigate to="/dashboard" replace />;
+    }
+    return children;
+  };
+
   return (
     <AuthContext.Provider value={{ token, user, loading, login, logout, theme, toggleTheme }}>
       <Router>
@@ -160,6 +171,26 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Transactions />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/analytics" 
+            element={
+              <ProtectedRoute>
+                <AdminRoute>
+                  <Analytics />
+                </AdminRoute>
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/reports" 
+            element={
+              <ProtectedRoute>
+                <AdminRoute>
+                  <Reports />
+                </AdminRoute>
               </ProtectedRoute>
             } 
           />

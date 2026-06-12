@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 
 export function createMachineRouter(supabase) {
   const router = express.Router();
@@ -45,16 +45,29 @@ export function createMachineRouter(supabase) {
     }
   });
 
-  // 3. GET SALES TRANSACTIONS (WITH LIMIT)
+  // 3. GET SALES TRANSACTIONS (WITH FILTERS AND LIMIT)
   router.get('/transactions', async (req, res) => {
-    const limit = parseInt(req.query.limit) || 100;
+    const { limit, startDate, endDate, itemType } = req.query;
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('sales_transactions')
         .select('*')
-        .order('transaction_date', { ascending: false })
-        .limit(limit);
+        .order('transaction_date', { ascending: false });
 
+      if (startDate) {
+        query = query.gte('transaction_date', `${startDate}T00:00:00Z`);
+      }
+      if (endDate) {
+        query = query.lte('transaction_date', `${endDate}T23:59:59Z`);
+      }
+      if (itemType && itemType !== 'all') {
+        query = query.eq('item_type', itemType);
+      }
+      if (limit) {
+        query = query.limit(parseInt(limit));
+      }
+
+      const { data, error } = await query;
       if (error) throw error;
       return res.status(200).json(data);
     } catch (err) {
@@ -63,8 +76,8 @@ export function createMachineRouter(supabase) {
     }
   });
 
-  // 4. UPDATE PAPER SETTING
-  router.put('/paper/:id', async (req, res) => {
+  // 4. UPDATE PAPER SETTING (Superadmin Only)
+  router.put('/paper/:id', authorizeRoles('superadmin'), async (req, res) => {
     const { id } = req.params;
     const { brand_name, paper_size, cost_per_unit, sheets_per_unit, current_stock, max_capacity, physical_status } = req.body;
 
@@ -91,8 +104,8 @@ export function createMachineRouter(supabase) {
     }
   });
 
-  // 5. UPDATE BALLPEN SETTING
-  router.put('/pen/:id', async (req, res) => {
+  // 5. UPDATE BALLPEN SETTING (Superadmin Only)
+  router.put('/pen/:id', authorizeRoles('superadmin'), async (req, res) => {
     const { id } = req.params;
     const { item_name, cost_per_unit, current_stock, max_capacity, physical_status } = req.body;
 
@@ -139,17 +152,97 @@ export function createMachineRouter(supabase) {
       let paperRevenue = 0;
       let penRevenue = 0;
 
+      // Peak hour calculation helper
+      const hourlySales = Array.from({ length: 24 }, (_, i) => ({
+        hour: `${String(i).padStart(2, '0')}:00`,
+        transactions: 0,
+        revenue: 0
+      }));
+
+      // Day of week calculation helper
+      const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const dayOfWeekSales = daysOfWeek.map(day => ({ day, transactions: 0, revenue: 0 }));
+
+      // Product breakdown helper
+      const productBreakdown = [
+        { name: 'Paper (1/4 Size)', count: 0, revenue: 0 },
+        { name: 'Paper (Crosswise)', count: 0, revenue: 0 },
+        { name: 'Paper (Lengthwise)', count: 0, revenue: 0 },
+        { name: 'Paper (1 Whole)', count: 0, revenue: 0 },
+        { name: 'Ballpen', count: 0, revenue: 0 }
+      ];
+
       sales.forEach((s) => {
+        const rev = parseFloat(s.amount_paid);
         totalSales += s.qty_dispensed;
-        totalRevenue += parseFloat(s.amount_paid);
+        totalRevenue += rev;
+
+        // Peak hour aggregation
+        const tDate = new Date(s.transaction_date);
+        const hr = tDate.getHours();
+        hourlySales[hr].transactions += 1;
+        hourlySales[hr].revenue += rev;
+
+        // Day of week aggregation
+        const dayIdx = tDate.getDay();
+        dayOfWeekSales[dayIdx].transactions += 1;
+        dayOfWeekSales[dayIdx].revenue += rev;
+
         if (s.item_type === 'paper') {
           paperSalesCount += s.qty_dispensed;
-          paperRevenue += parseFloat(s.amount_paid);
+          paperRevenue += rev;
+
+          if (s.paper_size === '1/4') {
+            productBreakdown[0].count += s.qty_dispensed;
+            productBreakdown[0].revenue += rev;
+          } else if (s.paper_size === 'crosswise') {
+            productBreakdown[1].count += s.qty_dispensed;
+            productBreakdown[1].revenue += rev;
+          } else if (s.paper_size === 'lengthwise') {
+            productBreakdown[2].count += s.qty_dispensed;
+            productBreakdown[2].revenue += rev;
+          } else if (s.paper_size === '1_whole') {
+            productBreakdown[3].count += s.qty_dispensed;
+            productBreakdown[3].revenue += rev;
+          } else {
+            productBreakdown[0].count += s.qty_dispensed;
+            productBreakdown[0].revenue += rev;
+          }
         } else {
           penSalesCount += s.qty_dispensed;
-          penRevenue += parseFloat(s.amount_paid);
+          penRevenue += rev;
+          productBreakdown[4].count += s.qty_dispensed;
+          productBreakdown[4].revenue += rev;
         }
       });
+
+      // Find peak hour and peak day
+      let maxHourTx = -1;
+      let peakHourIdx = 12; // default
+      hourlySales.forEach((h, idx) => {
+        if (h.transactions > maxHourTx) {
+          maxHourTx = h.transactions;
+          peakHourIdx = idx;
+        }
+      });
+      const formatHour = (h) => {
+        const suffix = h >= 12 ? 'PM' : 'AM';
+        const formattedHour = h % 12 === 0 ? 12 : h % 12;
+        return `${formattedHour} ${suffix}`;
+      };
+      const peakHourStr = maxHourTx > 0 ? `${formatHour(peakHourIdx)} - ${formatHour((peakHourIdx + 1) % 24)}` : 'N/A';
+
+      let maxDayTx = -1;
+      let peakDayStr = 'N/A';
+      dayOfWeekSales.forEach((d) => {
+        if (d.transactions > maxDayTx) {
+          maxDayTx = d.transactions;
+          peakDayStr = d.day;
+        }
+      });
+      if (maxDayTx === 0) peakDayStr = 'N/A';
+
+      const avgTransactionValue = sales.length > 0 ? totalRevenue / sales.length : 0;
 
       // Calculate low stock items (threshold = 15 units)
       let lowStockCount = 0;
@@ -200,9 +293,15 @@ export function createMachineRouter(supabase) {
           paperRevenue,
           penRevenue,
           lowStockCount,
-          lowStockItems
+          lowStockItems,
+          peakHourStr,
+          peakDayStr,
+          avgTransactionValue
         },
-        chartData
+        chartData,
+        hourlySales,
+        dayOfWeekSales,
+        productBreakdown
       });
     } catch (err) {
       console.error('Analytics fetch error:', err);

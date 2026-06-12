@@ -5,6 +5,8 @@ import {
   LayoutDashboard, 
   Boxes, 
   History, 
+  TrendingUp,
+  FileSpreadsheet,
   LogOut, 
   Sun, 
   Moon, 
@@ -20,6 +22,13 @@ export default function Sidebar({ isOpen, onClose }) {
     { to: '/inventory', label: 'Inventory', icon: Boxes },
     { to: '/transactions', label: 'Sales History', icon: History },
   ];
+
+  if (user?.role === 'superadmin') {
+    navItems.push(
+      { to: '/analytics', label: 'Advance Analytics', icon: TrendingUp },
+      { to: '/reports', label: 'Reports', icon: FileSpreadsheet }
+    );
+  }
 
   return (
     <>

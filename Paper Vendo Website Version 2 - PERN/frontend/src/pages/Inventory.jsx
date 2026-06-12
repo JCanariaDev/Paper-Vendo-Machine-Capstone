@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Edit3, CheckCircle, AlertCircle, X, ChevronRight, CornerDownRight } from 'lucide-react';
+import { useAuth } from '../App';
+import { Search, Edit3, CheckCircle, AlertCircle, X, ChevronRight, CornerDownRight } from 'lucide-react';
 
 export default function Inventory() {
+  const { user } = useAuth();
   const [paper, setPaper] = useState([]);
   const [pen, setPen] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
   
   // Modal Editing States
   const [editingItem, setEditingItem] = useState(null); // 'paper' or 'pen'
@@ -77,17 +80,46 @@ export default function Inventory() {
     return Math.min(Math.round((curr / max) * 100), 100);
   };
 
+  const filteredPaper = paper.filter(item => 
+    item.brand_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    item.paper_size.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    item.physical_status.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredPen = pen.filter(item => 
+    item.item_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    item.physical_status.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
     <div className="space-y-10 max-w-7xl mx-auto font-sans">
       
       {/* Top Header */}
-      <div>
-        <h1 className="font-display font-extrabold text-3xl md:text-4xl text-slate-800 dark:text-white leading-tight">
-          Inventory Control
-        </h1>
-        <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-          Adjust item settings, pricing, sheets allocation, and monitor stock volumes.
-        </p>
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h1 className="font-display font-extrabold text-3xl md:text-4xl text-slate-800 dark:text-white leading-tight">
+            Inventory Control
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
+            {user?.role === 'staff' 
+              ? 'Monitor stock volumes, sheets allocation, and status.' 
+              : 'Adjust item settings, pricing, sheets allocation, and monitor stock volumes.'}
+          </p>
+        </div>
+        
+        {/* Search Bar */}
+        <div className="relative w-full md:w-80 shrink-0">
+          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500">
+            <Search className="w-4.5 h-4.5" />
+          </span>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search brand, size, status..."
+            className="w-full h-11 pl-10 pr-4 rounded-xl text-sm bg-white border border-slate-200 text-slate-800 placeholder-slate-400 dark:bg-[#161F30] dark:border-white/[0.08] dark:text-white dark:placeholder-slate-500 focus:border-primary-500 outline-none transition-colors shadow-sm"
+          />
+        </div>
       </div>
 
       {/* 1. PAPER INVENTORY COMPONENT */}
@@ -106,11 +138,11 @@ export default function Inventory() {
                 <th className="py-3 px-4 text-center">Cost/Unit</th>
                 <th className="py-3 px-4">Stock Levels</th>
                 <th className="py-3 px-4 text-center">Status</th>
-                <th className="py-3 px-4 text-right">Actions</th>
+                {user?.role !== 'staff' && <th className="py-3 px-4 text-right">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
-              {paper.map((item) => {
+              {filteredPaper.map((item) => {
                 const stockPercent = getPercentage(item.current_stock, item.max_capacity);
                 return (
                   <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
@@ -147,14 +179,16 @@ export default function Inventory() {
                         {item.physical_status}
                       </span>
                     </td>
-                    <td className="py-4 px-4 text-right">
-                      <button 
-                        onClick={() => openEditModal('paper', item)}
-                        className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-primary-500 dark:hover:text-primary-400 transition-colors"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                    </td>
+                    {user?.role !== 'staff' && (
+                      <td className="py-4 px-4 text-right">
+                        <button 
+                          onClick={() => openEditModal('paper', item)}
+                          className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-primary-500 dark:hover:text-primary-400 transition-colors"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -178,11 +212,11 @@ export default function Inventory() {
                 <th className="py-3 px-4 text-center">Cost/Unit</th>
                 <th className="py-3 px-4">Stock Levels</th>
                 <th className="py-3 px-4 text-center">Status</th>
-                <th className="py-3 px-4 text-right">Actions</th>
+                {user?.role !== 'staff' && <th className="py-3 px-4 text-right">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
-              {pen.map((item) => {
+              {filteredPen.map((item) => {
                 const stockPercent = getPercentage(item.current_stock, item.max_capacity);
                 return (
                   <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
@@ -215,14 +249,16 @@ export default function Inventory() {
                         {item.physical_status}
                       </span>
                     </td>
-                    <td className="py-4 px-4 text-right">
-                      <button 
-                        onClick={() => openEditModal('pen', item)}
-                        className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-primary-500 dark:hover:text-primary-400 transition-colors"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                    </td>
+                    {user?.role !== 'staff' && (
+                      <td className="py-4 px-4 text-right">
+                        <button 
+                          onClick={() => openEditModal('pen', item)}
+                          className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-primary-500 dark:hover:text-primary-400 transition-colors"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
