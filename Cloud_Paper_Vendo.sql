@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS ballpen_settings (
 CREATE TABLE IF NOT EXISTS sales_transactions (
     id SERIAL PRIMARY KEY,
     item_type TEXT NOT NULL, -- 'paper' or 'ballpen'
-    brand_id INTEGER REFERENCES paper_settings(id),
+    brand_id INTEGER,
     paper_size TEXT,
     amount_paid DECIMAL(10,2) NOT NULL,
     qty_dispensed INTEGER NOT NULL,

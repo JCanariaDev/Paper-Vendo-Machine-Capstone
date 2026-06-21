@@ -57,6 +57,17 @@ void loop() {
     updateMachineStatus();
     lastStatusUpdate = millis();
   }
+
+  // Non-blocking WiFi Reconnection Check (every 10 seconds)
+  static unsigned long lastWiFiCheck = 0;
+  if (millis() - lastWiFiCheck > 10000) {
+    lastWiFiCheck = millis();
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi connection lost. Reconnecting...");
+      WiFi.disconnect();
+      WiFi.begin(ssid, password);
+    }
+  }
 }
 
 void handleRequest(String msg) {
