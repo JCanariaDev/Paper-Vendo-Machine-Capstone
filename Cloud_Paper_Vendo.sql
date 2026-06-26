@@ -65,14 +65,14 @@ INSERT INTO admins (username, password, role) VALUES
 ON CONFLICT (username) DO NOTHING;
 
 INSERT INTO paper_settings (brand_name, paper_size, cost_per_unit, sheets_per_unit, current_stock, max_capacity) VALUES
-('Budget Brand (White)', '1/4',       1.00, 4, 100, 500),
-('Budget Brand (White)', 'crosswise', 1.00, 3, 100, 500),
-('Budget Brand (White)', 'lengthwise',1.00, 3, 100, 500),
-('Budget Brand (White)', '1_whole',   1.00, 2, 100, 500),
-('Standard Brand (Yellow)', '1/4',       2.00, 4, 100, 500),
-('Standard Brand (Yellow)', 'crosswise', 2.00, 3, 100, 500),
-('Standard Brand (Yellow)', 'lengthwise',2.00, 3, 100, 500),
-('Standard Brand (Yellow)', '1_whole',   2.00, 2, 100, 500);
+('Budget - 1/4',        '1/4',        1.00, 4, 100, 500),
+('Budget - Crosswise',  'crosswise',  1.00, 3, 100, 500),
+('Budget - Lengthwise', 'lengthwise', 1.00, 3, 100, 500),
+('Budget - 1 Whole',    '1_whole',    1.00, 2, 100, 500),
+('Standard - 1/4',        '1/4',        2.00, 4, 100, 500),
+('Standard - Crosswise',  'crosswise',  2.00, 3, 100, 500),
+('Standard - Lengthwise', 'lengthwise', 2.00, 3, 100, 500),
+('Standard - 1 Whole',    '1_whole',    2.00, 2, 100, 500);
 
 INSERT INTO ballpen_settings (item_name, cost_per_unit, current_stock, max_capacity) VALUES
 ('Budget Ballpen', 5.00, 50, 100),
@@ -113,3 +113,4 @@ CREATE TRIGGER trg_deduct_inventory
 AFTER INSERT ON sales_transactions
 FOR EACH ROW
 EXECUTE FUNCTION deduct_inventory_stock();
+

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../App';
-import { Search, Edit3, CheckCircle, AlertCircle, X, ChevronRight, CornerDownRight } from 'lucide-react';
+import { Search, Edit3, CheckCircle, AlertCircle, X, ChevronRight } from 'lucide-react';
 
 export default function Inventory() {
   const { user } = useAuth();
@@ -147,13 +147,10 @@ export default function Inventory() {
                 return (
                   <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
                     <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
-                      <div>{item.brand_name}</div>
-                      <div className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
-                        <CornerDownRight className="w-3.5 h-3.5 shrink-0" /> Layout Size: {item.paper_size}
-                      </div>
+                      {item.brand_name}
                     </td>
                     <td className="py-4 px-4 text-center font-bold text-primary-500">{item.sheets_per_unit} sheets</td>
-                    <td className="py-4 px-4 text-center font-bold">₱{parseFloat(item.cost_per_unit).toFixed(2)}</td>
+                    <td className="py-4 px-4 text-center font-bold">₱{parseInt(item.cost_per_unit)}</td>
                     <td className="py-4 px-4 min-w-[200px]">
                       <div className="flex items-center gap-3">
                         <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-white/10 overflow-hidden">
@@ -223,7 +220,7 @@ export default function Inventory() {
                     <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
                       {item.item_name}
                     </td>
-                    <td className="py-4 px-4 text-center font-bold">₱{parseFloat(item.cost_per_unit).toFixed(2)}</td>
+                    <td className="py-4 px-4 text-center font-bold">₱{parseInt(item.cost_per_unit)}</td>
                     <td className="py-4 px-4 min-w-[200px]">
                       <div className="flex items-center gap-3">
                         <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-white/10 overflow-hidden">
@@ -316,6 +313,9 @@ export default function Inventory() {
                       name="sheets_per_unit"
                       value={formData.sheets_per_unit || 0}
                       onChange={handleInputChange}
+                      min="1"
+                      max="500"
+                      step="1"
                       className="w-full h-11 px-3.5 rounded-xl text-sm bg-slate-50 border border-slate-200 dark:bg-slate-900 dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500"
                       required
                     />
@@ -337,10 +337,12 @@ export default function Inventory() {
               {/* Price, Stock, Capacity */}
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Price (₱)</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Price (₱) — whole number, 1–100</label>
                   <input
                     type="number"
-                    step="0.01"
+                    step="1"
+                    min="1"
+                    max="100"
                     name="cost_per_unit"
                     value={formData.cost_per_unit || 0}
                     onChange={handleInputChange}
@@ -355,6 +357,8 @@ export default function Inventory() {
                     name="current_stock"
                     value={formData.current_stock || 0}
                     onChange={handleInputChange}
+                    min="0"
+                    step="1"
                     className="w-full h-11 px-3.5 rounded-xl text-sm bg-slate-50 border border-slate-200 dark:bg-slate-900 dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500"
                     required
                   />
@@ -366,6 +370,8 @@ export default function Inventory() {
                     name="max_capacity"
                     value={formData.max_capacity || 0}
                     onChange={handleInputChange}
+                    min="1"
+                    step="1"
                     className="w-full h-11 px-3.5 rounded-xl text-sm bg-slate-50 border border-slate-200 dark:bg-slate-900 dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500"
                     required
                   />
