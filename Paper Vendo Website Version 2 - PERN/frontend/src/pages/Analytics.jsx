@@ -214,15 +214,18 @@ export default function Analytics() {
           {/* Custom Labels List */}
           <div className="mt-2 space-y-1.5 border-b border-slate-100 dark:border-white/[0.04] pb-4">
             {productBreakdown.map((item, idx) => {
-              const isPen = item.name === 'Ballpen';
+              const isPen = item.name.toLowerCase().includes('ballpen');
               const labelUnit = isPen ? (item.count === 1 ? 'piece' : 'pieces') : 'sheets';
+              const labelUnits = item.units === 1 ? 'unit' : 'units';
               return (
                 <div key={item.name} className="flex items-center justify-between text-xs font-semibold">
                   <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
                     <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
                     <span className="truncate max-w-[130px]">{item.name}</span>
                   </div>
-                  <span className="text-slate-800 dark:text-white font-bold">{item.count} {labelUnit} (₱{parseFloat(item.revenue).toFixed(2)})</span>
+                  <span className="text-slate-800 dark:text-white font-bold">
+                    {item.count} {labelUnit} ({item.units} {labelUnits}) — ₱{parseFloat(item.revenue).toFixed(2)}
+                  </span>
                 </div>
               );
             })}

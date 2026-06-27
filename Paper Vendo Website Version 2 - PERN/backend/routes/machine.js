@@ -140,9 +140,20 @@ export function createMachineRouter(supabase) {
 
       if (error) throw error;
 
-      // Get settings for inventory health check
-      const { data: paper } = await supabase.from('paper_settings').select('brand_name, paper_size, current_stock');
-      const { data: pen } = await supabase.from('ballpen_settings').select('item_name, current_stock');
+      // Get settings for inventory health check and dynamic unit calculation mapping
+      const { data: paper } = await supabase.from('paper_settings').select('id, brand_name, paper_size, current_stock, sheets_per_unit');
+      const { data: pen } = await supabase.from('ballpen_settings').select('id, item_name, current_stock');
+
+      // Create maps for name lookup and sheets count mapping
+      const paperMap = {};
+      paper?.forEach(p => {
+        paperMap[p.id] = { name: p.brand_name, sheets: p.sheets_per_unit };
+      });
+
+      const penMap = {};
+      pen?.forEach(p => {
+        penMap[p.id] = { name: p.item_name };
+      });
 
       // Calculate total earnings & counts
       let totalSales = 0;
@@ -163,13 +174,12 @@ export function createMachineRouter(supabase) {
       const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       const dayOfWeekSales = daysOfWeek.map(day => ({ day, transactions: 0, revenue: 0 }));
 
-      // Product breakdown helper
+      // Product breakdown helper (4 clean groups as requested)
       const productBreakdown = [
-        { name: 'Paper (1/4 Size)', count: 0, revenue: 0 },
-        { name: 'Paper (Crosswise)', count: 0, revenue: 0 },
-        { name: 'Paper (Lengthwise)', count: 0, revenue: 0 },
-        { name: 'Paper (1 Whole)', count: 0, revenue: 0 },
-        { name: 'Ballpen', count: 0, revenue: 0 }
+        { name: 'Budget Paper', count: 0, units: 0, revenue: 0 },
+        { name: 'Standard Paper', count: 0, units: 0, revenue: 0 },
+        { name: 'Budget Ballpen', count: 0, units: 0, revenue: 0 },
+        { name: 'Standard Ballpen', count: 0, units: 0, revenue: 0 }
       ];
 
       sales.forEach((s) => {
@@ -192,27 +202,27 @@ export function createMachineRouter(supabase) {
           paperSalesCount += s.qty_dispensed;
           paperRevenue += rev;
 
-          if (s.paper_size === '1/4') {
-            productBreakdown[0].count += s.qty_dispensed;
-            productBreakdown[0].revenue += rev;
-          } else if (s.paper_size === 'crosswise') {
-            productBreakdown[1].count += s.qty_dispensed;
-            productBreakdown[1].revenue += rev;
-          } else if (s.paper_size === 'lengthwise') {
-            productBreakdown[2].count += s.qty_dispensed;
-            productBreakdown[2].revenue += rev;
-          } else if (s.paper_size === '1_whole') {
-            productBreakdown[3].count += s.qty_dispensed;
-            productBreakdown[3].revenue += rev;
-          } else {
-            productBreakdown[0].count += s.qty_dispensed;
-            productBreakdown[0].revenue += rev;
-          }
+          const paperItem = paperMap[s.brand_id];
+          const sheetsPerUnit = paperItem ? paperItem.sheets : 4;
+          const units = Math.round(s.qty_dispensed / sheetsPerUnit);
+
+          const isBudget = paperItem ? paperItem.name.toLowerCase().includes('budget') : true;
+          const targetGroup = isBudget ? productBreakdown[0] : productBreakdown[1];
+          targetGroup.count += s.qty_dispensed;
+          targetGroup.units += units;
+          targetGroup.revenue += rev;
         } else {
           penSalesCount += s.qty_dispensed;
           penRevenue += rev;
-          productBreakdown[4].count += s.qty_dispensed;
-          productBreakdown[4].revenue += rev;
+
+          const penItem = penMap[s.brand_id];
+          const units = s.qty_dispensed; // 1 piece = 1 unit
+
+          const isBudget = penItem ? penItem.name.toLowerCase().includes('budget') : true;
+          const targetGroup = isBudget ? productBreakdown[2] : productBreakdown[3];
+          targetGroup.count += s.qty_dispensed;
+          targetGroup.units += units;
+          targetGroup.revenue += rev;
         }
       });
 
