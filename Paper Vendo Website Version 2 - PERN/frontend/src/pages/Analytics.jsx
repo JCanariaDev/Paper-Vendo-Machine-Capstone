@@ -22,7 +22,8 @@ import {
   DollarSign, 
   ShoppingBag, 
   Percent, 
-  AlertTriangle 
+  AlertTriangle,
+  Info
 } from 'lucide-react';
 
 export default function Analytics() {
