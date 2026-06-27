@@ -75,6 +75,32 @@ export default function Analytics() {
 
   const { kpis, hourlySales, dayOfWeekSales, productBreakdown } = data;
 
+  // Group the flat breakdown items into 4 main categories for the Donut Chart & List
+  const groups = [
+    { name: 'Budget Paper', count: 0, units: 0, revenue: 0, items: [] },
+    { name: 'Standard Paper', count: 0, units: 0, revenue: 0, items: [] },
+    { name: 'Budget Ballpen', count: 0, units: 0, revenue: 0, items: [] },
+    { name: 'Standard Ballpen', count: 0, units: 0, revenue: 0, items: [] }
+  ];
+
+  productBreakdown?.forEach(item => {
+    if (item.type === 'paper') {
+      const isBudget = item.brand_name.toLowerCase().includes('budget');
+      const g = isBudget ? groups[0] : groups[1];
+      g.items.push(item);
+      g.count += item.count;
+      g.units += item.units;
+      g.revenue += item.revenue;
+    } else {
+      const isBudget = item.item_name.toLowerCase().includes('budget');
+      const g = isBudget ? groups[2] : groups[3];
+      g.items.push(item);
+      g.count += item.count;
+      g.units += item.units;
+      g.revenue += item.revenue;
+    }
+  });
+
   // Custom tooltips and gradients styling
   const COLORS = ['#0EA5E9', '#10B981', '#F59E0B', '#6366F1', '#EC4899'];
 
@@ -186,7 +212,7 @@ export default function Analytics() {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={productBreakdown}
+                  data={groups}
                   cx="50%"
                   cy="50%"
                   innerRadius={60}
@@ -194,7 +220,7 @@ export default function Analytics() {
                   paddingAngle={5}
                   dataKey="count"
                 >
-                  {productBreakdown.map((entry, index) => (
+                  {groups.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
@@ -211,21 +237,45 @@ export default function Analytics() {
             </ResponsiveContainer>
           </div>
           
-          {/* Custom Labels List */}
-          <div className="mt-2 space-y-1.5 border-b border-slate-100 dark:border-white/[0.04] pb-4">
-            {productBreakdown.map((item, idx) => {
-              const isPen = item.name.toLowerCase().includes('ballpen');
-              const labelUnit = isPen ? (item.count === 1 ? 'piece' : 'pieces') : 'sheets';
-              const labelUnits = item.units === 1 ? 'unit' : 'units';
+          {/* Custom Labels List with Dynamic Size Breakdown */}
+          <div className="mt-2 space-y-3 border-b border-slate-100 dark:border-white/[0.04] pb-4 max-h-[300px] overflow-y-auto pr-1">
+            {groups.map((group, idx) => {
+              const isPen = group.name.toLowerCase().includes('ballpen');
+              const labelUnit = isPen ? (group.count === 1 ? 'piece' : 'pieces') : 'sheets';
+              const labelUnits = group.units === 1 ? 'unit' : 'units';
               return (
-                <div key={item.name} className="flex items-center justify-between text-xs font-semibold">
-                  <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
-                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
-                    <span className="truncate max-w-[130px]">{item.name}</span>
+                <div key={group.name} className="space-y-1.5 p-3 rounded-2xl bg-slate-50/50 dark:bg-slate-900/10 border border-slate-100 dark:border-white/[0.02] hover:border-slate-200 dark:hover:border-white/[0.06] transition-colors">
+                  {/* Category Header */}
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-white">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
+                      <span>{group.name}</span>
+                    </div>
+                    <span>{group.units} {labelUnits} (₱{parseFloat(group.revenue).toFixed(2)})</span>
                   </div>
-                  <span className="text-slate-800 dark:text-white font-bold">
-                    {item.count} {labelUnit} ({item.units} {labelUnits}) — ₱{parseFloat(item.revenue).toFixed(2)}
-                  </span>
+
+                  {/* Inner Sizes Breakdown */}
+                  <div className="pl-4.5 space-y-1">
+                    {group.items.map(item => {
+                      if (item.count === 0) return null;
+                      const itemSize = item.paper_size || 'Standard';
+                      const itemLabelUnit = isPen ? (item.count === 1 ? 'piece' : 'pieces') : 'sheets';
+                      const itemLabelUnits = item.units === 1 ? 'unit' : 'units';
+                      return (
+                        <div key={item.id || item.brand_name || item.item_name} className="flex justify-between text-[10px] text-slate-400 dark:text-slate-500 font-medium">
+                          <span>• {isPen ? item.item_name : `Size: ${itemSize}`}</span>
+                          <span>
+                            {item.count} {itemLabelUnit} ({item.units} {itemLabelUnits})
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {group.count === 0 && (
+                      <div className="text-[10px] text-slate-400 dark:text-slate-500 italic pl-2">
+                        No sales recorded yet
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}

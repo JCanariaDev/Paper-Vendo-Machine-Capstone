@@ -174,13 +174,30 @@ export function createMachineRouter(supabase) {
       const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       const dayOfWeekSales = daysOfWeek.map(day => ({ day, transactions: 0, revenue: 0 }));
 
-      // Product breakdown helper (4 clean groups as requested)
-      const productBreakdown = [
-        { name: 'Budget Paper', count: 0, units: 0, revenue: 0 },
-        { name: 'Standard Paper', count: 0, units: 0, revenue: 0 },
-        { name: 'Budget Ballpen', count: 0, units: 0, revenue: 0 },
-        { name: 'Standard Ballpen', count: 0, units: 0, revenue: 0 }
-      ];
+      // Product breakdown helper (populated dynamically from database settings)
+      const productBreakdown = [];
+      paper?.forEach(p => {
+        productBreakdown.push({
+          id: p.id,
+          type: 'paper',
+          brand_name: p.brand_name,
+          paper_size: p.paper_size,
+          sheets_per_unit: p.sheets_per_unit,
+          count: 0,
+          units: 0,
+          revenue: 0
+        });
+      });
+      pen?.forEach(p => {
+        productBreakdown.push({
+          id: p.id,
+          type: 'pen',
+          item_name: p.item_name,
+          count: 0,
+          units: 0,
+          revenue: 0
+        });
+      });
 
       sales.forEach((s) => {
         const rev = parseFloat(s.amount_paid);
@@ -202,27 +219,23 @@ export function createMachineRouter(supabase) {
           paperSalesCount += s.qty_dispensed;
           paperRevenue += rev;
 
-          const paperItem = paperMap[s.brand_id];
-          const sheetsPerUnit = paperItem ? paperItem.sheets : 4;
-          const units = Math.round(s.qty_dispensed / sheetsPerUnit);
-
-          const isBudget = paperItem ? paperItem.name.toLowerCase().includes('budget') : true;
-          const targetGroup = isBudget ? productBreakdown[0] : productBreakdown[1];
-          targetGroup.count += s.qty_dispensed;
-          targetGroup.units += units;
-          targetGroup.revenue += rev;
+          const item = productBreakdown.find(p => p.type === 'paper' && p.id === s.brand_id);
+          if (item) {
+            const units = Math.round(s.qty_dispensed / item.sheets_per_unit);
+            item.count += s.qty_dispensed;
+            item.units += units;
+            item.revenue += rev;
+          }
         } else {
           penSalesCount += s.qty_dispensed;
           penRevenue += rev;
 
-          const penItem = penMap[s.brand_id];
-          const units = s.qty_dispensed; // 1 piece = 1 unit
-
-          const isBudget = penItem ? penItem.name.toLowerCase().includes('budget') : true;
-          const targetGroup = isBudget ? productBreakdown[2] : productBreakdown[3];
-          targetGroup.count += s.qty_dispensed;
-          targetGroup.units += units;
-          targetGroup.revenue += rev;
+          const item = productBreakdown.find(p => p.type === 'pen' && p.id === s.brand_id);
+          if (item) {
+            item.count += s.qty_dispensed;
+            item.units += s.qty_dispensed;
+            item.revenue += rev;
+          }
         }
       });
 
