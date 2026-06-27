@@ -133,7 +133,7 @@ export default function Analytics() {
           </div>
           <div>
             <span className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total Sales count</span>
-            <span className="block text-lg font-extrabold text-slate-850 dark:text-white mt-0.5">{kpis.totalSales} units</span>
+            <span className="block text-lg font-extrabold text-slate-850 dark:text-white mt-0.5">{kpis.totalSales} items</span>
           </div>
         </div>
 
@@ -211,16 +211,29 @@ export default function Analytics() {
           </div>
           
           {/* Custom Labels List */}
-          <div className="mt-2 space-y-1.5">
-            {productBreakdown.map((item, idx) => (
-              <div key={item.name} className="flex items-center justify-between text-xs font-semibold">
-                <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
-                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
-                  <span className="truncate max-w-[130px]">{item.name}</span>
+          <div className="mt-2 space-y-1.5 border-b border-slate-100 dark:border-white/[0.04] pb-4">
+            {productBreakdown.map((item, idx) => {
+              const isPen = item.name === 'Ballpen';
+              const labelUnit = isPen ? (item.count === 1 ? 'piece' : 'pieces') : 'sheets';
+              return (
+                <div key={item.name} className="flex items-center justify-between text-xs font-semibold">
+                  <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
+                    <span className="truncate max-w-[130px]">{item.name}</span>
+                  </div>
+                  <span className="text-slate-800 dark:text-white font-bold">{item.count} {labelUnit} (₱{parseFloat(item.revenue).toFixed(2)})</span>
                 </div>
-                <span className="text-slate-800 dark:text-white font-bold">{item.count} units (₱{parseFloat(item.revenue).toFixed(2)})</span>
-              </div>
-            ))}
+              );
+            })}
+          </div>
+
+          {/* Explanation Alert box */}
+          <div className="mt-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-white/[0.03] flex gap-2 items-start text-[11px] text-slate-500 dark:text-slate-400 leading-normal">
+            <Info className="w-4 h-4 text-primary-500 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold text-slate-700 dark:text-slate-350 block mb-0.5">Units vs. Pieces/Sheets</span>
+              For Paper, <b>1 Unit</b> purchased (₱1) yields multiple physical <b>Sheets</b> (e.g. 2–4). For Pen, <b>1 Unit</b> = <b>1 Piece</b>. The count displays physical items dispensed.
+            </div>
           </div>
 
         </div>
