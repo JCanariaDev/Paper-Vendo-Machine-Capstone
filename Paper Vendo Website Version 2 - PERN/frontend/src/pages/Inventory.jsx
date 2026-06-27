@@ -134,7 +134,7 @@ export default function Inventory() {
             <thead>
               <tr className="border-b border-slate-100 dark:border-white/[0.04] text-slate-400 font-bold">
                 <th className="py-3 px-4">Brand / Specification</th>
-                <th className="py-3 px-4 text-center">Sheets/₱1</th>
+                <th className="py-3 px-4 text-center">Sheets/Unit</th>
                 <th className="py-3 px-4 text-center">Cost/Unit</th>
                 <th className="py-3 px-4">Stock Levels</th>
                 <th className="py-3 px-4 text-center">Status</th>
