@@ -8,23 +8,165 @@ import {
   CartesianGrid, 
   Tooltip, 
   ResponsiveContainer, 
-  PieChart, 
-  Pie, 
-  Cell, 
-  Legend, 
   AreaChart, 
   Area 
 } from 'recharts';
 import { 
   Clock, 
   Calendar, 
-  TrendingUp, 
   DollarSign, 
   ShoppingBag, 
-  Percent, 
-  AlertTriangle,
-  Info
+  AlertTriangle
 } from 'lucide-react';
+
+const PAPER_SIZES = [
+  { key: '1/4', label: '1/4', sheetsPerUnit: 4, aliases: ['1/4', 'quarter'] },
+  { key: 'crosswise', label: 'Crosswise', sheetsPerUnit: 3, aliases: ['crosswise'] },
+  { key: 'lengthwise', label: 'Lengthwise', sheetsPerUnit: 3, aliases: ['lengthwise'] },
+  { key: '1_whole', label: '1 Whole', sheetsPerUnit: 2, aliases: ['1_whole', '1 whole', 'whole'] },
+];
+
+const PAPER_GROUPS = [
+  {
+    key: 'budget',
+    title: 'Budget Paper',
+    brand: 'budget',
+    unitCost: 1,
+    dotClass: 'bg-primary-500',
+    iconClass: 'bg-primary-500/10 text-primary-500',
+  },
+  {
+    key: 'standard',
+    title: 'Standard Paper',
+    brand: 'standard',
+    unitCost: 2,
+    dotClass: 'bg-emerald-500',
+    iconClass: 'bg-emerald-500/10 text-emerald-500',
+  },
+];
+
+const PEN_GROUPS = [
+  {
+    key: 'budgetPen',
+    title: 'Budget Ballpen',
+    matcher: 'budget',
+    unitCost: 5,
+    dotClass: 'bg-amber-500',
+    iconClass: 'bg-amber-500/10 text-amber-500',
+  },
+  {
+    key: 'standardPen',
+    title: 'Standard Ballpen',
+    matcher: 'standard',
+    unitCost: 10,
+    dotClass: 'bg-indigo-500',
+    iconClass: 'bg-indigo-500/10 text-indigo-500',
+  },
+];
+
+const createMetrics = () => ({ count: 0, units: 0, revenue: 0 });
+
+const toNumber = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const formatCurrency = (value) => `₱${toNumber(value).toFixed(2)}`;
+
+const getItemName = (item) => (
+  item?.name ||
+  item?.product_name ||
+  item?.brand_name ||
+  item?.item_name ||
+  ''
+);
+
+const getItemType = (item) => String(item?.item_type || item?.type || '').toLowerCase();
+
+const resolvePaperSizeKey = (item) => {
+  const rawSize = String(item?.paper_size || item?.size || '').toLowerCase().replace(/-/g, ' ').trim();
+  const name = String(getItemName(item)).toLowerCase().replace(/-/g, ' ');
+  const source = `${rawSize} ${name}`;
+
+  return PAPER_SIZES.find((size) =>
+    size.aliases.some((alias) => source.includes(alias.toLowerCase().replace(/-/g, ' ')))
+  )?.key;
+};
+
+const inferUnits = (item, unitCost) => {
+  const units = toNumber(item?.units);
+  if (units > 0) return units;
+
+  const revenue = toNumber(item?.revenue ?? item?.amount_paid ?? item?.amount);
+  return unitCost > 0 ? revenue / unitCost : 0;
+};
+
+const buildProductBoxes = (productBreakdown = []) => {
+  const paperBuckets = PAPER_GROUPS.reduce((groups, group) => {
+    groups[group.key] = PAPER_SIZES.reduce((sizes, size) => {
+      sizes[size.key] = createMetrics();
+      return sizes;
+    }, {});
+    return groups;
+  }, {});
+
+  const penBuckets = PEN_GROUPS.reduce((groups, group) => {
+    groups[group.key] = createMetrics();
+    return groups;
+  }, {});
+
+  productBreakdown.forEach((item) => {
+    const name = String(getItemName(item)).toLowerCase();
+    const itemType = getItemType(item);
+    const revenue = toNumber(item?.revenue ?? item?.amount_paid ?? item?.amount);
+    const count = toNumber(item?.count ?? item?.qty_dispensed ?? item?.quantity);
+
+    if (itemType === 'paper' || (!name.includes('ballpen') && !name.includes('pen'))) {
+      const paperGroup = PAPER_GROUPS.find((group) => name.includes(group.brand));
+      const sizeKey = resolvePaperSizeKey(item);
+
+      if (!paperGroup || !sizeKey) return;
+
+      const bucket = paperBuckets[paperGroup.key][sizeKey];
+      bucket.count += count;
+      bucket.units += inferUnits(item, paperGroup.unitCost);
+      bucket.revenue += revenue;
+      return;
+    }
+
+    const penGroup = PEN_GROUPS.find((group) => name.includes(group.matcher));
+    if (!penGroup) return;
+
+    const bucket = penBuckets[penGroup.key];
+    bucket.count += count;
+    bucket.units += inferUnits(item, penGroup.unitCost);
+    bucket.revenue += revenue;
+  });
+
+  const paperBoxes = PAPER_GROUPS.map((group) => {
+    const rows = PAPER_SIZES.map((size) => ({
+      ...size,
+      ...paperBuckets[group.key][size.key],
+    }));
+
+    return {
+      ...group,
+      rows,
+      total: rows.reduce((total, row) => ({
+        count: total.count + row.count,
+        units: total.units + row.units,
+        revenue: total.revenue + row.revenue,
+      }), createMetrics()),
+    };
+  });
+
+  const penBoxes = PEN_GROUPS.map((group) => ({
+    ...group,
+    ...penBuckets[group.key],
+  }));
+
+  return { paperBoxes, penBoxes };
+};
 
 export default function Analytics() {
   const [data, setData] = useState(null);
@@ -74,9 +216,10 @@ export default function Analytics() {
   }
 
   const { kpis, hourlySales, dayOfWeekSales, productBreakdown } = data;
+  const { paperBoxes, penBoxes } = buildProductBoxes(productBreakdown);
 
-  // Custom tooltips and gradients styling
-  const COLORS = ['#0EA5E9', '#10B981', '#F59E0B', '#6366F1', '#EC4899'];
+  // Fixed product groups keep paper sizes separate instead of averaging mixed sizes.
+  const productBoxes = [...paperBoxes, ...penBoxes];
 
   return (
     <div className="space-y-10 max-w-7xl mx-auto font-sans">
@@ -176,69 +319,56 @@ export default function Analytics() {
           </div>
         </div>
 
-        {/* Product Breakdown Donut Chart */}
-        <div className="p-6 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm flex flex-col justify-between">
-          <div className="mb-4">
-            <h3 className="font-display font-bold text-lg text-slate-800 dark:text-white">Product Item Distribution</h3>
-            <p className="text-xs text-slate-400 mt-0.5">Sales breakdown by layout specifications and brand items.</p>
-          </div>
-          <div className="h-60 w-full relative flex items-center justify-center">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={productBreakdown}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="count"
-                >
-                  {productBreakdown.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{ 
-                    backgroundColor: 'rgba(30, 41, 59, 0.95)', 
-                    borderColor: 'rgba(255,255,255,0.06)', 
-                    color: '#fff', 
-                    borderRadius: '12px',
-                    fontSize: '12px'
-                  }} 
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          
-          {/* Custom Labels List */}
-          <div className="mt-2 space-y-1.5 border-b border-slate-100 dark:border-white/[0.04] pb-4">
-            {productBreakdown.map((item, idx) => {
-              const isPen = item.name.toLowerCase().includes('ballpen');
-              const labelUnit = isPen ? (item.count === 1 ? 'piece' : 'pieces') : 'sheets';
-              const labelUnits = item.units === 1 ? 'unit' : 'units';
-              return (
-                <div key={item.name} className="flex items-center justify-between text-xs font-semibold">
-                  <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
-                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
-                    <span className="truncate max-w-[130px]">{item.name}</span>
-                  </div>
-                  <span className="text-slate-800 dark:text-white font-bold">
-                    {item.count} {labelUnit} ({item.units} {labelUnits}) — ₱{parseFloat(item.revenue).toFixed(2)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+        {/* Product Sales Boxes */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
+          {productBoxes.map((box) => {
+            const isPaperBox = Boolean(box.rows);
+            const total = isPaperBox ? box.total : box;
+            const physicalLabel = isPaperBox ? 'sheets' : (total.count === 1 ? 'piece' : 'pieces');
+            const unitLabel = total.units === 1 ? 'unit' : 'units';
 
-          {/* Explanation Alert box */}
-          <div className="mt-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-white/[0.03] flex gap-2 items-start text-[11px] text-slate-500 dark:text-slate-400 leading-normal">
-            <Info className="w-4 h-4 text-primary-500 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-bold text-slate-700 dark:text-slate-350 block mb-0.5">Units vs. Pieces/Sheets</span>
-              For Paper, <b>1 Unit</b> purchased (₱1) yields multiple physical <b>Sheets</b> (e.g. 2–4). For Pen, <b>1 Unit</b> = <b>1 Piece</b>. The count displays physical items dispensed.
-            </div>
-          </div>
+            return (
+              <div key={box.key} className="p-5 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${box.dotClass}`} />
+                      <h3 className="font-display font-bold text-base text-slate-800 dark:text-white truncate">{box.title}</h3>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {total.count} {physicalLabel} ({total.units} {unitLabel}) - {formatCurrency(total.revenue)}
+                    </p>
+                  </div>
+                  <div className={`p-2.5 rounded-xl shrink-0 ${box.iconClass}`}>
+                    <ShoppingBag className="w-5 h-5" />
+                  </div>
+                </div>
+
+                {isPaperBox ? (
+                  <div className="mt-4 space-y-2">
+                    {box.rows.map((row) => {
+                      const rowUnitLabel = row.units === 1 ? 'unit' : 'units';
+                      return (
+                        <div key={row.key} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 px-3 py-2 text-xs">
+                          <div className="min-w-0">
+                            <span className="block font-bold text-slate-700 dark:text-slate-200 truncate">{row.label}</span>
+                            <span className="block text-[10px] text-slate-400">{row.sheetsPerUnit} sheets per unit</span>
+                          </div>
+                          <span className="shrink-0 text-right font-bold text-slate-800 dark:text-white">
+                            {row.count} sheets ({row.units} {rowUnitLabel}) - {formatCurrency(row.revenue)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-xl bg-slate-50 dark:bg-slate-900/40 px-3 py-2 text-xs font-bold text-slate-800 dark:text-white">
+                    {box.count} {physicalLabel} ({box.units} {unitLabel}) - {formatCurrency(box.revenue)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
         </div>
 
