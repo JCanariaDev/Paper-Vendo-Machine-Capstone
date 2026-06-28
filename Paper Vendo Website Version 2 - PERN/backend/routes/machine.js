@@ -141,18 +141,28 @@ export function createMachineRouter(supabase) {
       if (error) throw error;
 
       // Get settings for inventory health check and dynamic unit calculation mapping
-      const { data: paper } = await supabase.from('paper_settings').select('id, brand_name, paper_size, current_stock, sheets_per_unit');
-      const { data: pen } = await supabase.from('ballpen_settings').select('id, item_name, current_stock');
+      const { data: paper } = await supabase.from('paper_settings').select('id, brand_name, paper_size, current_stock, sheets_per_unit, cost_per_unit');
+      const { data: pen } = await supabase.from('ballpen_settings').select('id, item_name, current_stock, cost_per_unit');
 
       // Create maps for name lookup and sheets count mapping
       const paperMap = {};
       paper?.forEach(p => {
-        paperMap[p.id] = { name: p.brand_name, sheets: p.sheets_per_unit };
+        paperMap[p.id] = {
+          name: p.brand_name,
+          paperSize: p.paper_size,
+          sheets: parseInt(p.sheets_per_unit) || 1,
+          cost: parseFloat(p.cost_per_unit) || 0,
+          breakdownKey: `paper-${p.id}`
+        };
       });
 
       const penMap = {};
       pen?.forEach(p => {
-        penMap[p.id] = { name: p.item_name };
+        penMap[p.id] = {
+          name: p.item_name,
+          cost: parseFloat(p.cost_per_unit) || 0,
+          breakdownKey: `pen-${p.id}`
+        };
       });
 
       // Calculate total earnings & counts
@@ -174,17 +184,41 @@ export function createMachineRouter(supabase) {
       const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       const dayOfWeekSales = daysOfWeek.map(day => ({ day, transactions: 0, revenue: 0 }));
 
-      // Product breakdown helper (4 clean groups as requested)
+      // Product breakdown helper. Paper stays split by exact size so the frontend
+      // never averages mixed sheet-per-unit values together.
       const productBreakdown = [
-        { name: 'Budget Paper', count: 0, units: 0, revenue: 0 },
-        { name: 'Standard Paper', count: 0, units: 0, revenue: 0 },
-        { name: 'Budget Ballpen', count: 0, units: 0, revenue: 0 },
-        { name: 'Standard Ballpen', count: 0, units: 0, revenue: 0 }
+        ...(paper || []).map(item => ({
+          id: item.id,
+          brand_id: item.id,
+          name: item.brand_name,
+          item_type: 'paper',
+          paper_size: item.paper_size,
+          sheets_per_unit: parseInt(item.sheets_per_unit) || 1,
+          cost_per_unit: parseFloat(item.cost_per_unit) || 0,
+          count: 0,
+          units: 0,
+          revenue: 0
+        })),
+        ...(pen || []).map(item => ({
+          id: item.id,
+          brand_id: item.id,
+          name: item.item_name,
+          item_type: 'pen',
+          cost_per_unit: parseFloat(item.cost_per_unit) || 0,
+          count: 0,
+          units: 0,
+          revenue: 0
+        }))
       ];
+      const productBreakdownMap = {};
+      productBreakdown.forEach(item => {
+        productBreakdownMap[`${item.item_type}-${item.id}`] = item;
+      });
 
       sales.forEach((s) => {
-        const rev = parseFloat(s.amount_paid);
-        totalSales += s.qty_dispensed;
+        const rev = parseFloat(s.amount_paid) || 0;
+        const qty = parseInt(s.qty_dispensed) || 0;
+        totalSales += qty;
         totalRevenue += rev;
 
         // Peak hour aggregation
@@ -199,28 +233,58 @@ export function createMachineRouter(supabase) {
         dayOfWeekSales[dayIdx].revenue += rev;
 
         if (s.item_type === 'paper') {
-          paperSalesCount += s.qty_dispensed;
+          paperSalesCount += qty;
           paperRevenue += rev;
 
           const paperItem = paperMap[s.brand_id];
-          const sheetsPerUnit = paperItem ? paperItem.sheets : 4;
-          const units = Math.round(s.qty_dispensed / sheetsPerUnit);
+          const sheetsPerUnit = paperItem ? paperItem.sheets : 1;
+          const units = paperItem?.cost > 0 ? rev / paperItem.cost : Math.round(qty / sheetsPerUnit);
+          let targetGroup = paperItem ? productBreakdownMap[paperItem.breakdownKey] : null;
 
-          const isBudget = paperItem ? paperItem.name.toLowerCase().includes('budget') : true;
-          const targetGroup = isBudget ? productBreakdown[0] : productBreakdown[1];
-          targetGroup.count += s.qty_dispensed;
+          if (!targetGroup) {
+            targetGroup = {
+              id: s.brand_id,
+              brand_id: s.brand_id,
+              name: `Paper (${s.paper_size || 'Unknown Size'})`,
+              item_type: 'paper',
+              paper_size: s.paper_size,
+              sheets_per_unit: sheetsPerUnit,
+              cost_per_unit: paperItem?.cost || 0,
+              count: 0,
+              units: 0,
+              revenue: 0
+            };
+            productBreakdown.push(targetGroup);
+            productBreakdownMap[`paper-${s.brand_id || s.paper_size || productBreakdown.length}`] = targetGroup;
+          }
+
+          targetGroup.count += qty;
           targetGroup.units += units;
           targetGroup.revenue += rev;
         } else {
-          penSalesCount += s.qty_dispensed;
+          penSalesCount += qty;
           penRevenue += rev;
 
           const penItem = penMap[s.brand_id];
-          const units = s.qty_dispensed; // 1 piece = 1 unit
+          const units = penItem?.cost > 0 ? rev / penItem.cost : qty;
+          let targetGroup = penItem ? productBreakdownMap[penItem.breakdownKey] : null;
 
-          const isBudget = penItem ? penItem.name.toLowerCase().includes('budget') : true;
-          const targetGroup = isBudget ? productBreakdown[2] : productBreakdown[3];
-          targetGroup.count += s.qty_dispensed;
+          if (!targetGroup) {
+            targetGroup = {
+              id: s.brand_id,
+              brand_id: s.brand_id,
+              name: 'Unknown Ballpen',
+              item_type: 'pen',
+              cost_per_unit: penItem?.cost || 0,
+              count: 0,
+              units: 0,
+              revenue: 0
+            };
+            productBreakdown.push(targetGroup);
+            productBreakdownMap[`pen-${s.brand_id || productBreakdown.length}`] = targetGroup;
+          }
+
+          targetGroup.count += qty;
           targetGroup.units += units;
           targetGroup.revenue += rev;
         }
