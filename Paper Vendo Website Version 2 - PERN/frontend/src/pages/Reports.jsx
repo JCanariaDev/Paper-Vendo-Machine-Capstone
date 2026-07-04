@@ -30,9 +30,24 @@ export default function Reports() {
   const [endDate, setEndDate] = useState(getTodayStr());
   const [itemType, setItemType] = useState('all');
   const [transactions, setTransactions] = useState([]);
+  const [paperSettings, setPaperSettings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(null); // 'pdf' or 'csv'
   const [error, setError] = useState('');
+
+  const paperSheetsMap = {};
+  paperSettings.forEach(p => {
+    paperSheetsMap[p.id] = p.sheets_per_unit;
+  });
+
+  const fetchInventorySettings = async () => {
+    try {
+      const res = await axios.get('/api/machine/inventory');
+      setPaperSettings(res.data.paper);
+    } catch (err) {
+      console.error('Error fetching inventory config:', err);
+    }
+  };
 
   const generateReport = async () => {
     setLoading(true);
@@ -57,6 +72,7 @@ export default function Reports() {
 
   // Run automatically on mount to show default data
   useEffect(() => {
+    fetchInventorySettings();
     generateReport();
   }, []);
 
@@ -64,15 +80,21 @@ export default function Reports() {
     if (transactions.length === 0) return;
     setExporting('csv');
     try {
-      const headers = ['Transaction ID', 'Timestamp', 'Item Category', 'Item Specification', 'Quantity Dispensed', 'Amount Paid (PHP)'];
-      const rows = transactions.map(t => [
-        t.id,
-        new Date(t.transaction_date).toLocaleString(),
-        t.item_type.toUpperCase(),
-        t.item_type === 'paper' ? `Paper (${t.paper_size})` : 'Ballpen',
-        t.qty_dispensed,
-        parseFloat(t.amount_paid).toFixed(2)
-      ]);
+      const headers = ['Transaction ID', 'Timestamp', 'Item Category', 'Item Specification', 'Purchased Units', 'Dispensed Qty', 'Amount Paid (PHP)'];
+      const rows = transactions.map(t => {
+        const sheetsPerUnit = t.item_type === 'paper' ? (paperSheetsMap[t.brand_id] || 4) : 1;
+        const units = t.item_type === 'paper' ? Math.round(t.qty_dispensed / sheetsPerUnit) : t.qty_dispensed;
+        const labelUnit = t.item_type === 'paper' ? 'sheets' : 'pcs';
+        return [
+          t.id,
+          new Date(t.transaction_date).toLocaleString(),
+          t.item_type.toUpperCase(),
+          t.item_type === 'paper' ? `Paper (${t.paper_size})` : 'Ballpen',
+          `${units} ${units === 1 ? 'unit' : 'units'}`,
+          `${t.qty_dispensed} ${labelUnit}`,
+          parseFloat(t.amount_paid).toFixed(2)
+        ];
+      });
       
       const csvContent = "\uFEFF" // UTF-8 BOM for Excel support
         + [headers.join(','), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))].join('\n');
@@ -112,29 +134,46 @@ export default function Reports() {
       
       // Calculate Summary Stats
       const totalAmount = transactions.reduce((sum, t) => sum + parseFloat(t.amount_paid), 0);
-      const totalQty = transactions.reduce((sum, t) => sum + t.qty_dispensed, 0);
+      const totalUnits = transactions.reduce((sum, t) => {
+        const sheetsPerUnit = t.item_type === 'paper' ? (paperSheetsMap[t.brand_id] || 4) : 1;
+        const units = t.item_type === 'paper' ? Math.round(t.qty_dispensed / sheetsPerUnit) : t.qty_dispensed;
+        return sum + units;
+      }, 0);
+      const totalSheetsDispensed = transactions.filter(t => t.item_type === 'paper').reduce((sum, t) => sum + t.qty_dispensed, 0);
+      const totalPensDispensed = transactions.filter(t => t.item_type === 'pen').reduce((sum, t) => sum + t.qty_dispensed, 0);
       
-      doc.text(`Total Sales Amount: PHP ${totalAmount.toFixed(2)}`, 130, 25);
-      doc.text(`Total Units Sold: ${totalQty} units`, 130, 30);
-      doc.text(`Total Records: ${transactions.length} sales`, 130, 35);
+      doc.text(`Total Sales Amount: PHP ${totalAmount.toFixed(2)}`, 125, 22);
+      doc.text(`Total Units Sold: ${totalUnits} units`, 125, 27);
+      doc.text(`Total Physical Dispensed:`, 125, 32);
+      doc.setFont("Helvetica", "oblique");
+      doc.text(`- ${totalSheetsDispensed} sheets of paper`, 130, 36);
+      doc.text(`- ${totalPensDispensed} pieces of pens`, 130, 40);
+      doc.setFont("Helvetica", "normal");
+      doc.text(`Total Records: ${transactions.length} sales`, 14, 42);
 
       // Separator line
       doc.setDrawColor(220, 220, 220);
-      doc.line(14, 40, 196, 40);
+      doc.line(14, 45, 196, 45);
 
       // Generate Table
-      const columns = ['ID', 'Date & Time', 'Category', 'Details', 'Qty', 'Paid (PHP)'];
-      const body = transactions.map(t => [
-        t.id,
-        new Date(t.transaction_date).toLocaleString(),
-        t.item_type.toUpperCase(),
-        t.item_type === 'paper' ? `Paper (${t.paper_size})` : 'Ballpen',
-        t.qty_dispensed,
-        `PHP ${parseFloat(t.amount_paid).toFixed(2)}`
-      ]);
+      const columns = ['ID', 'Date & Time', 'Category', 'Details', 'Units', 'Dispensed Qty', 'Paid (PHP)'];
+      const body = transactions.map(t => {
+        const sheetsPerUnit = t.item_type === 'paper' ? (paperSheetsMap[t.brand_id] || 4) : 1;
+        const units = t.item_type === 'paper' ? Math.round(t.qty_dispensed / sheetsPerUnit) : t.qty_dispensed;
+        const labelUnit = t.item_type === 'paper' ? 'sheets' : 'pcs';
+        return [
+          t.id,
+          new Date(t.transaction_date).toLocaleString(),
+          t.item_type.toUpperCase(),
+          t.item_type === 'paper' ? `Paper (${t.paper_size})` : 'Ballpen',
+          `${units} ${units === 1 ? 'unit' : 'units'}`,
+          `${t.qty_dispensed} ${labelUnit}`,
+          `PHP ${parseFloat(t.amount_paid).toFixed(2)}`
+        ];
+      });
 
       autoTable(doc, {
-        startY: 45,
+        startY: 50,
         head: [columns],
         body: body,
         theme: 'striped',
@@ -142,11 +181,12 @@ export default function Reports() {
         styles: { fontSize: 8 },
         columnStyles: {
           0: { cellWidth: 15 },
-          1: { cellWidth: 50 },
-          2: { cellWidth: 30 },
-          3: { cellWidth: 40 },
-          4: { cellWidth: 15 },
-          5: { cellWidth: 30 }
+          1: { cellWidth: 45 },
+          2: { cellWidth: 25 },
+          3: { cellWidth: 35 },
+          4: { cellWidth: 20 },
+          5: { cellWidth: 25 },
+          6: { cellWidth: 25 }
         }
       });
 
@@ -294,50 +334,57 @@ export default function Reports() {
                 <th className="py-3 px-4">Dispensed Date</th>
                 <th className="py-3 px-4">Item Type</th>
                 <th className="py-3 px-4">Specs Description</th>
-                <th className="py-3 px-4 text-center">Qty</th>
+                <th className="py-3 px-4 text-center">Purchased Units</th>
+                <th className="py-3 px-4 text-center">Dispensed Qty</th>
                 <th className="py-3 px-4 text-right">Amount Paid</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03] text-slate-700 dark:text-slate-350">
               {transactions.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="py-10 text-center font-semibold text-slate-400">
+                  <td colSpan="7" className="py-10 text-center font-semibold text-slate-400">
                     No transactions found for the selected filter range.
                   </td>
                 </tr>
               ) : (
-                transactions.map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
-                    <td className="py-3.5 px-4 font-mono font-bold text-slate-500">#{t.id}</td>
-                    <td className="py-3.5 px-4 text-xs">
-                      {new Date(t.transaction_date).toLocaleString('en-US', {
-                        month: 'short',
-                        day: 'numeric',
-                        year: 'numeric',
-                        hour: 'numeric',
-                        minute: '2-digit',
-                        second: '2-digit',
-                        hour12: true
-                      })}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span className={`inline-block text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full ${
-                        t.item_type === 'paper' 
-                          ? 'bg-primary-500/10 text-primary-500' 
-                          : 'bg-emerald-500/10 text-emerald-500'
-                      }`}>
-                        {t.item_type}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 font-semibold text-slate-800 dark:text-white">
-                      {t.item_type === 'paper' ? `Paper Specs (${t.paper_size})` : 'Ballpen Item'}
-                    </td>
-                    <td className="py-3.5 px-4 text-center font-bold">{t.qty_dispensed}</td>
-                    <td className="py-3.5 px-4 text-right font-extrabold text-primary-500">
-                      ₱{parseFloat(t.amount_paid).toFixed(2)}
-                    </td>
-                  </tr>
-                ))
+                transactions.map((t) => {
+                  const sheetsPerUnit = t.item_type === 'paper' ? (paperSheetsMap[t.brand_id] || 4) : 1;
+                  const units = t.item_type === 'paper' ? Math.round(t.qty_dispensed / sheetsPerUnit) : t.qty_dispensed;
+                  const labelUnit = t.item_type === 'paper' ? 'sheets' : 'pcs';
+                  return (
+                    <tr key={t.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
+                      <td className="py-3.5 px-4 font-mono font-bold text-slate-500">#{t.id}</td>
+                      <td className="py-3.5 px-4 text-xs">
+                        {new Date(t.transaction_date).toLocaleString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                          second: '2-digit',
+                          hour12: true
+                        })}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <span className={`inline-block text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full ${
+                          t.item_type === 'paper' 
+                            ? 'bg-primary-500/10 text-primary-500' 
+                            : 'bg-emerald-500/10 text-emerald-500'
+                        }`}>
+                          {t.item_type}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 font-semibold text-slate-800 dark:text-white">
+                        {t.item_type === 'paper' ? `Paper Specs (${t.paper_size})` : 'Ballpen Item'}
+                      </td>
+                      <td className="py-3.5 px-4 text-center font-bold">{units} {units === 1 ? 'unit' : 'units'}</td>
+                      <td className="py-3.5 px-4 text-center font-semibold text-slate-500">{t.qty_dispensed} {labelUnit}</td>
+                      <td className="py-3.5 px-4 text-right font-extrabold text-primary-500">
+                        ₱{parseFloat(t.amount_paid).toFixed(2)}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
