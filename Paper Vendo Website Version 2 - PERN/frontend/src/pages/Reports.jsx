@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { 
   FileText, 
   Download, 
@@ -133,7 +133,7 @@ export default function Reports() {
         `PHP ${parseFloat(t.amount_paid).toFixed(2)}`
       ]);
 
-      doc.autoTable({
+      autoTable(doc, {
         startY: 45,
         head: [columns],
         body: body,
