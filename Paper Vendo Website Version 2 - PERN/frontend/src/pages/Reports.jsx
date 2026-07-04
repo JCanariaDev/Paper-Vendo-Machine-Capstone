@@ -31,19 +31,26 @@ export default function Reports() {
   const [itemType, setItemType] = useState('all');
   const [transactions, setTransactions] = useState([]);
   const [paperSettings, setPaperSettings] = useState([]);
+  const [penSettings, setPenSettings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(null); // 'pdf' or 'csv'
   const [error, setError] = useState('');
 
-  const paperSheetsMap = {};
+  const paperMap = {};
   paperSettings.forEach(p => {
-    paperSheetsMap[p.id] = p.sheets_per_unit;
+    paperMap[p.id] = { name: p.brand_name, sheets: p.sheets_per_unit };
+  });
+
+  const penMap = {};
+  penSettings.forEach(p => {
+    penMap[p.id] = { name: p.item_name };
   });
 
   const fetchInventorySettings = async () => {
     try {
       const res = await axios.get('/api/machine/inventory');
       setPaperSettings(res.data.paper);
+      setPenSettings(res.data.pen);
     } catch (err) {
       console.error('Error fetching inventory config:', err);
     }
@@ -82,14 +89,16 @@ export default function Reports() {
     try {
       const headers = ['Transaction ID', 'Timestamp', 'Item Category', 'Item Specification', 'Purchased Units', 'Dispensed Qty', 'Amount Paid (PHP)'];
       const rows = transactions.map(t => {
-        const sheetsPerUnit = t.item_type === 'paper' ? (paperSheetsMap[t.brand_id] || 4) : 1;
+        const sheetsPerUnit = t.item_type === 'paper' ? (paperMap[t.brand_id]?.sheets || 4) : 1;
         const units = t.item_type === 'paper' ? Math.round(t.qty_dispensed / sheetsPerUnit) : t.qty_dispensed;
         const labelUnit = t.item_type === 'paper' ? 'sheets' : 'pcs';
         return [
           t.id,
           new Date(t.transaction_date).toLocaleString(),
           t.item_type.toUpperCase(),
-          t.item_type === 'paper' ? `Paper (${t.paper_size})` : 'Ballpen',
+          t.item_type === 'paper' 
+            ? (paperMap[t.brand_id]?.name || `Paper (${t.paper_size})`) 
+            : (penMap[t.brand_id]?.name || 'Ballpen'),
           `${units} ${units === 1 ? 'unit' : 'units'}`,
           `${t.qty_dispensed} ${labelUnit}`,
           parseFloat(t.amount_paid).toFixed(2)
@@ -135,7 +144,7 @@ export default function Reports() {
       // Calculate Summary Stats
       const totalAmount = transactions.reduce((sum, t) => sum + parseFloat(t.amount_paid), 0);
       const totalUnits = transactions.reduce((sum, t) => {
-        const sheetsPerUnit = t.item_type === 'paper' ? (paperSheetsMap[t.brand_id] || 4) : 1;
+        const sheetsPerUnit = t.item_type === 'paper' ? (paperMap[t.brand_id]?.sheets || 4) : 1;
         const units = t.item_type === 'paper' ? Math.round(t.qty_dispensed / sheetsPerUnit) : t.qty_dispensed;
         return sum + units;
       }, 0);
@@ -158,14 +167,16 @@ export default function Reports() {
       // Generate Table
       const columns = ['ID', 'Date & Time', 'Category', 'Details', 'Units', 'Dispensed Qty', 'Paid (PHP)'];
       const body = transactions.map(t => {
-        const sheetsPerUnit = t.item_type === 'paper' ? (paperSheetsMap[t.brand_id] || 4) : 1;
+        const sheetsPerUnit = t.item_type === 'paper' ? (paperMap[t.brand_id]?.sheets || 4) : 1;
         const units = t.item_type === 'paper' ? Math.round(t.qty_dispensed / sheetsPerUnit) : t.qty_dispensed;
         const labelUnit = t.item_type === 'paper' ? 'sheets' : 'pcs';
         return [
           t.id,
           new Date(t.transaction_date).toLocaleString(),
           t.item_type.toUpperCase(),
-          t.item_type === 'paper' ? `Paper (${t.paper_size})` : 'Ballpen',
+          t.item_type === 'paper' 
+            ? (paperMap[t.brand_id]?.name || `Paper (${t.paper_size})`) 
+            : (penMap[t.brand_id]?.name || 'Ballpen'),
           `${units} ${units === 1 ? 'unit' : 'units'}`,
           `${t.qty_dispensed} ${labelUnit}`,
           `PHP ${parseFloat(t.amount_paid).toFixed(2)}`
@@ -348,7 +359,7 @@ export default function Reports() {
                 </tr>
               ) : (
                 transactions.map((t) => {
-                  const sheetsPerUnit = t.item_type === 'paper' ? (paperSheetsMap[t.brand_id] || 4) : 1;
+                  const sheetsPerUnit = t.item_type === 'paper' ? (paperMap[t.brand_id]?.sheets || 4) : 1;
                   const units = t.item_type === 'paper' ? Math.round(t.qty_dispensed / sheetsPerUnit) : t.qty_dispensed;
                   const labelUnit = t.item_type === 'paper' ? 'sheets' : 'pcs';
                   return (
@@ -375,7 +386,9 @@ export default function Reports() {
                         </span>
                       </td>
                       <td className="py-3.5 px-4 font-semibold text-slate-800 dark:text-white">
-                        {t.item_type === 'paper' ? `Paper Specs (${t.paper_size})` : 'Ballpen Item'}
+                        {t.item_type === 'paper' 
+                          ? (paperMap[t.brand_id]?.name || `Paper Specs (${t.paper_size})`) 
+                          : (penMap[t.brand_id]?.name || 'Ballpen Item')}
                       </td>
                       <td className="py-3.5 px-4 text-center font-bold">{units} {units === 1 ? 'unit' : 'units'}</td>
                       <td className="py-3.5 px-4 text-center font-semibold text-slate-500">{t.qty_dispensed} {labelUnit}</td>
