@@ -9,16 +9,16 @@ export default {
     extend: {
       colors: {
         primary: {
-          50: '#f0f9ff',
-          100: '#e0f2fe',
-          200: '#bae6fd',
-          300: '#7dd3fc',
-          400: '#38bdf8',
-          500: '#0ea5e9', // Sky blue primary
-          600: '#0284c7',
-          700: '#0369a1',
-          800: '#075985',
-          900: '#0c4a6e',
+          50: '#f3faf7',
+          100: '#e2f4ed',
+          200: '#c1e7db',
+          300: '#96d4c1',
+          400: '#62baa0',
+          500: '#3d997a', // Matcha / Teal primary
+          600: '#2e7b61',
+          700: '#266350',
+          800: '#205041',
+          900: '#1b4337',
         },
         darkBg: {
           base: '#0B0F19', // Deep dark slate background
