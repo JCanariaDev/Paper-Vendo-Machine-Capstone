@@ -1,25 +1,42 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Search, Info, Calendar, Download } from 'lucide-react';
+import { Search, Info, Calendar } from 'lucide-react';
 
 export default function Transactions() {
   const [sales, setSales] = useState([]);
+  const [paperSettings, setPaperSettings] = useState([]);
+  const [penSettings, setPenSettings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const fetchTransactions = async () => {
+  const paperMap = {};
+  paperSettings.forEach(p => {
+    paperMap[p.id] = { name: p.brand_name, sheets: p.sheets_per_unit };
+  });
+
+  const penMap = {};
+  penSettings.forEach(p => {
+    penMap[p.id] = { name: p.item_name };
+  });
+
+  const fetchData = async () => {
     try {
-      const res = await axios.get('/api/machine/transactions');
-      setSales(res.data);
+      const [txRes, invRes] = await Promise.all([
+        axios.get('/api/machine/transactions'),
+        axios.get('/api/machine/inventory')
+      ]);
+      setSales(txRes.data);
+      setPaperSettings(invRes.data.paper || []);
+      setPenSettings(invRes.data.pen || []);
     } catch (err) {
-      console.error('Error fetching transactions:', err);
+      console.error('Error fetching transactions or inventory:', err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchTransactions();
+    fetchData();
   }, []);
 
   if (loading) {
@@ -32,7 +49,10 @@ export default function Transactions() {
 
   // Filter logic based on type or specifications
   const filteredSales = sales.filter(item => {
-    const searchString = `${item.item_type} ${item.paper_size || ''} ${item.amount_paid}`.toLowerCase();
+    const brandName = item.item_type === 'paper' 
+      ? (paperMap[item.brand_id]?.name || '')
+      : (penMap[item.brand_id]?.name || '');
+    const searchString = `${item.item_type} ${item.paper_size || ''} ${brandName} ${item.amount_paid}`.toLowerCase();
     return searchString.includes(searchQuery.toLowerCase());
   });
 
@@ -60,7 +80,7 @@ export default function Transactions() {
           </span>
           <input
             type="text"
-            placeholder="Search by category, layout size, or price..."
+            placeholder="Search by category, layout size, brand, or price..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full h-11 pl-11 pr-4 rounded-xl text-sm bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500 transition-all"
@@ -83,7 +103,8 @@ export default function Transactions() {
                 <tr className="border-b border-slate-100 dark:border-white/[0.04] text-slate-400 font-bold">
                   <th className="py-3 px-4">Transaction ID</th>
                   <th className="py-3 px-4">Dispense Category</th>
-                  <th className="py-3 px-4">Layout Specification</th>
+                  <th className="py-3 px-4">Specs Description</th>
+                  <th className="py-3 px-4 text-center">Purchased Units</th>
                   <th className="py-3 px-4 text-center">Dispensed Qty</th>
                   <th className="py-3 px-4 text-center">Amount Received</th>
                   <th className="py-3 px-4 text-right">Transaction Date</th>
@@ -92,7 +113,15 @@ export default function Transactions() {
               <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
                 {filteredSales.map((log) => {
                   const isPaper = log.item_type === 'paper';
+                  const sheetsPerUnit = isPaper ? (paperMap[log.brand_id]?.sheets || 4) : 1;
+                  const units = isPaper ? Math.round(log.qty_dispensed / sheetsPerUnit) : log.qty_dispensed;
+                  const specName = isPaper
+                    ? (paperMap[log.brand_id]?.name || `Paper (${log.paper_size})`)
+                    : (penMap[log.brand_id]?.name || `Ballpen Item #${log.brand_id}`);
+                  const qtyLabel = isPaper ? 'sheets' : (log.qty_dispensed === 1 ? 'piece' : 'pieces');
+                  const unitLabel = units === 1 ? 'unit' : 'units';
                   const dateObj = new Date(log.transaction_date);
+
                   return (
                     <tr key={log.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
                       <td className="py-4 px-4 font-semibold text-slate-400 text-xs">
@@ -107,17 +136,16 @@ export default function Transactions() {
                           {isPaper ? 'Paper Dispatch' : 'Pen Dispatch'}
                         </span>
                       </td>
-                      <td className="py-4 px-4 font-semibold">
-                        {isPaper ? (
-                          <span>Size: {log.paper_size || 'Unknown Size'}</span>
-                        ) : (
-                          <span>Ballpen Item #{log.brand_id}</span>
-                        )}
+                      <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
+                        {specName}
                       </td>
-                      <td className="py-4 px-4 text-center font-bold">
-                        {log.qty_dispensed} {log.qty_dispensed > 1 ? 'pcs' : 'pc'}
+                      <td className="py-4 px-4 text-center font-bold text-slate-800 dark:text-white">
+                        {units} {unitLabel}
                       </td>
-                      <td className="py-4 px-4 text-center font-extrabold text-slate-800 dark:text-white">
+                      <td className="py-4 px-4 text-center font-semibold text-slate-500">
+                        {log.qty_dispensed} {qtyLabel}
+                      </td>
+                      <td className="py-4 px-4 text-center font-extrabold text-primary-500">
                         ₱{parseFloat(log.amount_paid).toFixed(2)}
                       </td>
                       <td className="py-4 px-4 text-right text-xs text-slate-500 font-semibold">
