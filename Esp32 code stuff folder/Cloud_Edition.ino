@@ -9,13 +9,13 @@
 */
 
 // --- WIFI CONFIG ---
-const char* ssid = "realme C3";
+//const char* ssid = "realme C3";
 //const char* ssid = "Converge_X76J";
-const char* password = "lancelot";
+//const char* password = "lancelot";
 //const char* password = "Patokjeep02";
 
-//const char* ssid = "ashid";
-//const char* password = "paltankolang";
+const char* ssid = "ashid";
+const char* password = "paltankolang";
 
 // --- SUPABASE CONFIG ---
 const String supabase_url = "https://jowpzdynbdeznuvohrpx.supabase.co";
