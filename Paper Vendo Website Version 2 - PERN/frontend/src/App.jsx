@@ -72,7 +72,8 @@ export default function App() {
   const [token, setToken] = useState(localStorage.getItem('vendo_token'));
   const [user, setUser] = useState(JSON.parse(localStorage.getItem('vendo_user')));
   const [loading, setLoading] = useState(true);
-  const [theme, setTheme] = useState(loca```lStorage.getItem('vendo_theme') || 'dark');
+  const [theme, setTheme] = useState(localStorage.getItem('vendo_theme') || 'dark');
+    
 
   // Sync state and Axios authorization headers
   useEffect(() => {
