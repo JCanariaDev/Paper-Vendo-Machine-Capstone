@@ -9,7 +9,7 @@
 #include <XPT2046_Touchscreen.h>
 
 /*
-  renew7.ino - Master Controller for Paper & Pen Vendo
+  renew12.ino - Master Controller for Paper & Pen Vendo
   REVISION 2: Full touchscreen UI flow (idle -> main menu -> catalog
   selection with checkboxes/qty steppers -> cart -> order summary ->
   dispense change), replacing the old 3-button ITEM1/ITEM2/CONFIRM demo.
@@ -30,6 +30,54 @@
   after boot - which looked like "TFT frozen on idle screen, never
   updates after a coin insert" even though credits/OLED/touch all kept
   working fine. Diagnostics now just prompts a visual check instead.
+
+  REVISION 8 - 31/07/2026: Idle/main screens now show "Connect to WiFi
+  first" when the ESP32 hasn't reported a connection yet, and catalog
+  access is blocked with the same message until it does. Also added a
+  Serial debug print whenever a "WIFI:" status message actually arrives
+  from the ESP32 over CLOUD_SERIAL - if you never see that line print,
+  the Mega isn't receiving anything from the ESP32 at all, which points
+  to the physical wiring between the Mega's Serial1 pins (18 TX1 / 19
+  RX1) and the ESP32's Serial2 pins (17 TX2 / 16 RX2) rather than a code
+  issue - double check those are connected and crossed correctly
+  (Mega TX1 -> ESP32 RX2, Mega RX1 <- ESP32 TX2).
+
+  REVISION 9 - 31/07/2026: Catalog screen's +/- buttons and checkboxes
+  are small (30x40 / 24x24px) next to the main screen's huge buttons
+  (200x55px) - the same touch imprecision that never mattered on the big
+  buttons was likely causing frequent misses on the small ones. Widened
+  the tappable hit zones around each +/-/checkbox with a forgiveness
+  margin (visual size unchanged). Also added a raw touch coordinate
+  debug print - if buttons still misbehave, check those printed
+  coordinates against the button boundaries in drawCatalogScreen() to
+  see whether it's still a calibration issue (TS_MINX/MAXX/MINY/MAXY)
+  rather than a hit-zone one. Also added a "VIEW CART" button on the
+  main screen (works even without WiFi, since it's just showing what's
+  already added) and a new cart screen listing items/quantities/prices.
+
+  REVISION 10 - 31/07/2026: Widening the hit zones in rev 9 wasn't
+  enough - reported symptom was that tapping the checkbox kicked back to
+  the main screen entirely, meaning taps were landing on the ADD/CANCEL
+  buttons below it (a bigger calibration mismatch than a small margin
+  fixes). Removed the checkbox entirely - an item now counts as
+  selected simply by having qty > 0, shown via a green row border
+  instead of a separate checkbox tap. +/- buttons are now much larger
+  (full row height instead of 40px), removing a whole class of small,
+  easy-to-miss targets rather than just padding around them.
+
+  REVISION 11 - 31/07/2026: The Serial touch-coordinate debug print from
+  rev 9 isn't practical to read while physically testing the touchscreen
+  on the machine itself (can't watch a tethered laptop and tap the
+  screen at the same time). Added the same coordinates directly onto
+  the TFT's own bottom strip after every touch instead - no laptop
+  needed to read it. Remove this once touch is confirmed reliable, since
+  it's a temporary diagnostic aid, not part of the normal UI.
+
+  REVISION 12 - 31/07/2026: On-screen touch readout confirmed a real
+  X-axis mirror - tapping the "+" button (right side of screen,
+  x172-236) was reporting x=25-63 (the "-" button's zone, left side).
+  Y-axis was landing close to the correct row each time, so only X
+  needed correcting. Flipped TOUCH_INVERT_X from 0 to 1.
 
   Install via Library Manager if missing:
     - Adafruit ILI9341
@@ -110,7 +158,7 @@ XPT2046_Touchscreen ts(TOUCH_CS);
 // TOUCH_INVERT_Y first (most common fix for this symptom); if it's still
 // wrong, try TOUCH_SWAP_XY or TOUCH_INVERT_X instead.
 #define TOUCH_SWAP_XY   0
-#define TOUCH_INVERT_X  0
+#define TOUCH_INVERT_X  1
 #define TOUCH_INVERT_Y  1
 
 // Simple RGB565 color constants
@@ -166,7 +214,6 @@ CatalogItem ballpenCatalog[BALLPEN_COUNT] = {
 
 const int MAX_CATALOG_ROWS = 3; // must be >= max(PAPER_COUNT, BALLPEN_COUNT)
 int pendingQty[MAX_CATALOG_ROWS];
-bool pendingChecked[MAX_CATALOG_ROWS];
 String activeCatalogType = "paper";
 
 // ================= CART =================
@@ -182,7 +229,7 @@ CartItem cart[MAX_CART_ITEMS];
 int cartCount = 0;
 
 // ================= UI STATE =================
-enum UiScreen { SCREEN_IDLE, SCREEN_MAIN, SCREEN_CATALOG, SCREEN_SUMMARY };
+enum UiScreen { SCREEN_IDLE, SCREEN_MAIN, SCREEN_CATALOG, SCREEN_CART, SCREEN_SUMMARY };
 UiScreen currentScreen = SCREEN_IDLE;
 
 bool uiWifiConnected = false;
@@ -230,7 +277,6 @@ void drawTftStatusBar() {
 void resetPendingSelections() {
   for (int i = 0; i < MAX_CATALOG_ROWS; i++) {
     pendingQty[i] = 0;
-    pendingChecked[i] = false;
   }
 }
 
@@ -239,8 +285,13 @@ void drawIdleScreen() {
   drawTftStatusBar();
   tft.setTextColor(COL_WHITE);
   tft.setTextSize(2);
-  printCentered("Insert Coins", tft.width() / 2, 140);
-  printCentered("to use.", tft.width() / 2, 165);
+  if (!uiWifiConnected) {
+    printCentered("Connect to WiFi", tft.width() / 2, 140);
+    printCentered("first.", tft.width() / 2, 165);
+  } else {
+    printCentered("Insert Coins", tft.width() / 2, 140);
+    printCentered("to use.", tft.width() / 2, 165);
+  }
 }
 
 void drawMainScreen() {
@@ -252,8 +303,16 @@ void drawMainScreen() {
   printCentered("Paper and Ballpen", tft.width() / 2, 45);
   printCentered("Vending Machine", tft.width() / 2, 65);
 
+  if (!uiWifiConnected) {
+    tft.fillRect(0, 72, tft.width(), 18, COL_RED);
+    tft.setTextColor(COL_WHITE);
+    tft.setTextSize(1);
+    printCentered("Connect to WiFi first", tft.width() / 2, 72 + 9);
+  }
+
   tft.fillRoundRect(20, 95, 200, 55, 8, COL_BLUE);
   tft.setTextColor(COL_WHITE);
+  tft.setTextSize(2);
   printCentered("PAPER", tft.width() / 2, 95 + 27);
 
   tft.fillRoundRect(20, 160, 200, 55, 8, COL_GREEN);
@@ -267,6 +326,14 @@ void drawMainScreen() {
   } else {
     printCentered("COMPLETE TRANSACTION", tft.width() / 2, 225 + 27);
   }
+
+  // VIEW CART - deliberately available even without WiFi, since it only
+  // shows what's already in the cart locally, no server/order action.
+  tft.fillRoundRect(20, 285, 200, 30, 8, COL_GREY);
+  tft.setTextColor(COL_WHITE);
+  tft.setTextSize(1);
+  String cartLabel = cartCount > 0 ? ("VIEW CART (" + String(cartCount) + ")") : "VIEW CART (empty)";
+  printCentered(cartLabel.c_str(), tft.width() / 2, 285 + 15);
 }
 
 void drawCatalogScreen() {
@@ -278,34 +345,45 @@ void drawCatalogScreen() {
 
   tft.setTextColor(COL_WHITE);
   tft.setTextSize(2);
-  printCentered((activeCatalogType == "paper") ? "Paper Options" : "Ballpen Options", tft.width() / 2, 40);
+  printCentered((activeCatalogType == "paper") ? "Paper Options" : "Ballpen Options", tft.width() / 2, 38);
 
+  // Rows are much taller than before (70px, buttons filling 60 of that)
+  // so the +/- targets are large and forgiving, instead of the old
+  // 30x40 buttons + a separate 24x24 checkbox that were easy to miss.
+  // Selection is now just "qty > 0" - shown as a green row border -
+  // there's no separate checkbox tap to land wrong anymore.
   for (int i = 0; i < count; i++) {
-    int rowY = 65 + i * 55;
+    int rowY = 58 + i * 70;
+    bool selected = pendingQty[i] > 0;
 
-    tft.fillRoundRect(8, rowY, 30, 40, 6, COL_RED);
+    if (selected) {
+      tft.drawRoundRect(4, rowY, 232, 64, 8, COL_GREEN);
+      tft.drawRoundRect(5, rowY + 1, 230, 62, 8, COL_GREEN);
+    }
+
+    // "-" button - large, spans most of the row height
+    tft.fillRoundRect(8, rowY + 4, 56, 56, 8, COL_RED);
     tft.setTextColor(COL_WHITE);
-    tft.setTextSize(2);
-    printCentered("-", 23, rowY + 20);
+    tft.setTextSize(3);
+    printCentered("-", 8 + 28, rowY + 4 + 28);
 
-    char qtyBuf[4];
-    sprintf(qtyBuf, "%d", pendingQty[i]);
-    printCentered(qtyBuf, 56, rowY + 20);
+    // "+" button - same size, right side
+    tft.fillRoundRect(176, rowY + 4, 56, 56, 8, COL_GREEN);
+    printCentered("+", 176 + 28, rowY + 4 + 28);
 
-    tft.fillRoundRect(74, rowY, 30, 40, 6, COL_GREEN);
-    printCentered("+", 89, rowY + 20);
-
+    // Middle info column: name, price, and current qty
     tft.setTextColor(COL_WHITE);
     tft.setTextSize(1);
-    tft.setCursor(112, rowY + 4);
+    tft.setCursor(72, rowY + 8);
     tft.print(catalog[i].name);
-    tft.setCursor(112, rowY + 22);
+    tft.setCursor(72, rowY + 24);
     tft.print("P" + String(catalog[i].price, 2));
 
-    tft.drawRect(200, rowY + 8, 24, 24, COL_WHITE);
-    if (pendingChecked[i]) {
-      tft.fillRect(204, rowY + 12, 16, 16, COL_GREEN);
-    }
+    char qtyBuf[16];
+    sprintf(qtyBuf, "Qty: %d", pendingQty[i]);
+    tft.setTextSize(2);
+    tft.setCursor(72, rowY + 38);
+    tft.print(qtyBuf);
   }
 
   tft.fillRoundRect(15, 275, 95, 35, 8, COL_GREEN);
@@ -357,11 +435,45 @@ void drawSummaryScreen() {
   }
 }
 
+void drawCartScreen() {
+  tft.fillScreen(COL_BLACK);
+  drawTftStatusBar();
+
+  tft.setTextColor(COL_WHITE);
+  tft.setTextSize(2);
+  printCentered("Your Cart", tft.width() / 2, 45);
+
+  tft.setTextSize(1);
+  if (cartCount == 0) {
+    printCentered("Cart is empty.", tft.width() / 2, 150);
+  } else {
+    int y = 75;
+    for (int i = 0; i < cartCount; i++) {
+      String line = String(cart[i].qty) + "x " + cart[i].name;
+      tft.setCursor(15, y);
+      tft.print(line);
+      String priceLine = "P" + String(cart[i].price, 2) + " each - P" + String(cart[i].price * cart[i].qty, 2);
+      tft.setCursor(15, y + 14);
+      tft.print(priceLine);
+      y += 34;
+    }
+    tft.setCursor(15, y + 6);
+    tft.setTextSize(2);
+    tft.print("Total: P" + String(cartTotal(), 2));
+  }
+
+  tft.fillRoundRect(20, 275, 200, 35, 8, COL_BLUE);
+  tft.setTextColor(COL_WHITE);
+  tft.setTextSize(2);
+  printCentered("BACK", tft.width() / 2, 275 + 17);
+}
+
 void redrawCurrentScreen() {
   switch (currentScreen) {
     case SCREEN_IDLE:    drawIdleScreen();    break;
     case SCREEN_MAIN:    drawMainScreen();    break;
     case SCREEN_CATALOG: drawCatalogScreen(); break;
+    case SCREEN_CART:    drawCartScreen();    break;
     case SCREEN_SUMMARY: drawSummaryScreen(); break;
   }
 }
@@ -403,6 +515,20 @@ void startOrder() {
 // ================= TOUCH HANDLERS =================
 
 void handleMainTouch(int x, int y) {
+  // VIEW CART is deliberately checked before the WiFi gate below - it's
+  // just showing what's already in the cart locally, no order/network
+  // action, so it should work even while offline.
+  if (x >= 20 && x <= 220 && y >= 285 && y <= 315) {
+    currentScreen = SCREEN_CART;
+    drawCartScreen();
+    return;
+  }
+
+  if (!uiWifiConnected) {
+    tftUiShowError("Connect to WiFi first");
+    return;
+  }
+
   if (x >= 20 && x <= 220 && y >= 95 && y <= 150) {
     activeCatalogType = "paper";
     resetPendingSelections();
@@ -426,23 +552,17 @@ void handleCatalogTouch(int x, int y) {
   CatalogItem* catalog = (activeCatalogType == "paper") ? paperCatalog : ballpenCatalog;
   int count = (activeCatalogType == "paper") ? PAPER_COUNT : BALLPEN_COUNT;
 
+  // Big buttons now (56x56, filling most of a 70px-tall row) - selection
+  // is just qty > 0, so there's no separate checkbox hit zone anymore.
   for (int i = 0; i < count; i++) {
-    int rowY = 65 + i * 55;
-    if (x >= 8 && x <= 38 && y >= rowY && y <= rowY + 40) {
+    int rowY = 58 + i * 70;
+    if (x >= 4 && x <= 68 && y >= rowY && y <= rowY + 64) {
       pendingQty[i] = max(0, pendingQty[i] - 1);
-      if (pendingQty[i] == 0) pendingChecked[i] = false;
       drawCatalogScreen();
       return;
     }
-    if (x >= 74 && x <= 104 && y >= rowY && y <= rowY + 40) {
+    if (x >= 172 && x <= 236 && y >= rowY && y <= rowY + 64) {
       pendingQty[i] = min(20, pendingQty[i] + 1);
-      pendingChecked[i] = true;
-      drawCatalogScreen();
-      return;
-    }
-    if (x >= 200 && x <= 224 && y >= rowY + 8 && y <= rowY + 32) {
-      pendingChecked[i] = !pendingChecked[i];
-      pendingQty[i] = pendingChecked[i] ? max(1, pendingQty[i]) : 0;
       drawCatalogScreen();
       return;
     }
@@ -450,7 +570,7 @@ void handleCatalogTouch(int x, int y) {
 
   if (x >= 15 && x <= 110 && y >= 275 && y <= 310) { // ADD
     for (int i = 0; i < count; i++) {
-      if (pendingChecked[i] && pendingQty[i] > 0) {
+      if (pendingQty[i] > 0) {
         addToCart(activeCatalogType, catalog[i].id, catalog[i].name, catalog[i].price, pendingQty[i]);
       }
     }
@@ -470,6 +590,13 @@ void handleSummaryTouch(int x, int y) {
   if (orderInProgress) return;
   if (x >= 20 && x <= 220 && y >= 275 && y <= 315) {
     returnChange(); // sets credits to 0, which auto-switches back to idle
+  }
+}
+
+void handleCartTouch(int x, int y) {
+  if (x >= 20 && x <= 220 && y >= 275 && y <= 310) { // BACK
+    currentScreen = SCREEN_MAIN;
+    drawMainScreen();
   }
 }
 
@@ -501,7 +628,15 @@ void tftUiSetCredits() {
 
 void tftUiSetWifiConnected(bool connected) {
   uiWifiConnected = connected;
-  drawTftStatusBar();
+  // Idle and main screens both carry WiFi-dependent messaging, so give
+  // those a full redraw when the status flips - not just the status bar -
+  // so "Connect to WiFi first" appears/disappears immediately rather than
+  // only updating on the next unrelated screen change.
+  if (currentScreen == SCREEN_IDLE || currentScreen == SCREEN_MAIN) {
+    redrawCurrentScreen();
+  } else {
+    drawTftStatusBar();
+  }
 }
 
 void tftUiShowError(String message) {
@@ -541,12 +676,25 @@ void tftUiLoop() {
   y = tft.height() - y;
 #endif
 
+  Serial.print("Touch at x="); Serial.print(x); Serial.print(" y="); Serial.println(y);
+
   switch (currentScreen) {
     case SCREEN_MAIN:    handleMainTouch(x, y);    break;
     case SCREEN_CATALOG: handleCatalogTouch(x, y); break;
+    case SCREEN_CART:    handleCartTouch(x, y);    break;
     case SCREEN_SUMMARY: handleSummaryTouch(x, y); break;
     default: break; // SCREEN_IDLE has nothing to tap
   }
+
+  // On-screen touch debug readout - drawn AFTER the handler above, so it
+  // survives any full-screen redraw the tap just triggered and stays
+  // visible until the next touch. Lets you read exact tap coordinates
+  // directly off the machine, no laptop/Serial Monitor needed.
+  tft.fillRect(0, tft.height() - 12, tft.width(), 12, COL_BLACK);
+  tft.setTextColor(COL_WHITE);
+  tft.setTextSize(1);
+  tft.setCursor(2, tft.height() - 10);
+  tft.print("Touch: x=" + String(x) + " y=" + String(y));
 }
 
 // ================= DIAGNOSTICS =================
@@ -582,6 +730,9 @@ void runDiagnostics() {
   Serial.println("configured (INPUT_PULLUP + interrupt) - insert a coin to confirm live");
 
   Serial.println("Servos (D9 change / D10 pen) - attached, no electrical feedback available");
+
+  Serial.print("WiFi (from ESP32 via CLOUD_SERIAL)... ");
+  Serial.println(uiWifiConnected ? "OK - last reported CONNECTED" : "Not connected yet - waiting for a WIFI: message from the ESP32");
 
   Serial.println("--- Pen IR sensors (active LOW = beam broken) ---");
   for (int i = 0; i < 3; i++) {
@@ -723,7 +874,14 @@ void loop() {
 void handleCloudCommand(String msg) {
   if (msg.startsWith("DISPENSE:")) performDispense(msg);
   else if (msg.startsWith("ERR:")) showError(msg.substring(4));
-  else if (msg.startsWith("WIFI:")) tftUiSetWifiConnected(msg.substring(5) == "1");
+  else if (msg.startsWith("WIFI:")) {
+    bool connected = msg.substring(5) == "1";
+    // Debug visibility: if this line never prints, the Mega isn't
+    // receiving anything from the ESP32 at all - check the physical
+    // Serial1<->Serial2 wiring before assuming it's a code issue.
+    Serial.println("Received WIFI status from ESP32: " + String(connected ? "CONNECTED" : "DISCONNECTED"));
+    tftUiSetWifiConnected(connected);
+  }
   else if (msg == "RETURN_CHANGE") returnChange();
   else if (msg == "TEST_STEPPER_FWD") {
     penSteppers[0]->step(20);
