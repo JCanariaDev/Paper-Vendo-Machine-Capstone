@@ -9,7 +9,7 @@
 #include <XPT2046_Touchscreen.h>
 
 /*
-  renew5.ino - Master Controller for Paper & Pen Vendo
+  renew7.ino - Master Controller for Paper & Pen Vendo
   REVISION 2: Full touchscreen UI flow (idle -> main menu -> catalog
   selection with checkboxes/qty steppers -> cart -> order summary ->
   dispense change), replacing the old 3-button ITEM1/ITEM2/CONFIRM demo.
@@ -23,6 +23,13 @@
   Serial Monitor (USB serial, separate from the CLOUD_SERIAL line to the
   ESP32). Type DIAG:MOVE1 / DIAG:MOVE2 / DIAG:MOVE3 to jog a specific pen
   stepper a small amount as a physical sanity check.
+
+  REVISION 7 - 30/07/2026: Removed the TFT.readcommand8() SPI readback
+  from diagnostics. On this clone ILI9341 board, sending that read
+  command was leaving the display unable to receive further draw calls
+  after boot - which looked like "TFT frozen on idle screen, never
+  updates after a coin insert" even though credits/OLED/touch all kept
+  working fine. Diagnostics now just prompts a visual check instead.
 
   Install via Library Manager if missing:
     - Adafruit ILI9341
@@ -557,12 +564,7 @@ void runDiagnostics() {
   Serial.println(diagOledOk ? "OK" : "FAIL - not detected at startup");
 
   Serial.print("TFT (ILI9341)............ ");
-  uint8_t tftId = tft.readcommand8(0x04, 1); // RDDID, 2nd param byte
-  diagTftOk = (tftId != 0x00 && tftId != 0xFF);
-  Serial.print(diagTftOk ? "OK" : "FAIL - no response");
-  Serial.print(" (ID byte: 0x");
-  Serial.print(tftId, HEX);
-  Serial.println(")");
+  Serial.println("SKIPPED - readback command isn't safe on this clone board (can break future draws). Check visually: does the screen show your UI correctly?");
 
   Serial.print("Touchscreen (XPT2046)..... ");
   Serial.println(diagTouchOk ? "OK" : "FAIL - ts.begin() returned false");
