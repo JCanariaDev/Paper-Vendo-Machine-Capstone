@@ -3,29 +3,13 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 
-/*
-  Production ESP32 gateway
-  Serial protocol with Mega:
-    RESERVE:<creditCents>:paper,productId,units;pen,productId,units
-    CHANGE_OK:<transactionId>:<changeCents>
-    CHANGE_FAIL:<transactionId>:<reason>
-    FINISH:<transactionId>:paper,productId,qty;pen,productId,qty
-    STATUS?
+// --- WIFI CONFIG ---
+const char* WIFI_SSID = "ashid";
+const char* WIFI_PASSWORD = "paltankolang";
 
-  Responses:
-    RESERVED:<transactionId>:<subtotalCents>:<changeCents>
-    PLAN:<transactionId>:paper,productId,channel,qty;pen,productId,channel,qty
-    WIFI:0|1
-    ERR:<safe message>
-
-  Configure the Wi-Fi and Supabase values before upload. Keep the current
-  Cloud_Edition sketch unchanged until this production flow is hardware-tested.
-*/
-
-const char* WIFI_SSID = "REPLACE_WITH_WIFI_SSID";
-const char* WIFI_PASSWORD = "REPLACE_WITH_WIFI_PASSWORD";
-const char* SUPABASE_URL = "https://REPLACE_WITH_PROJECT.supabase.co";
-const char* SUPABASE_ANON_KEY = "REPLACE_WITH_ANON_KEY";
+// --- SUPABASE CONFIG ---
+const char* SUPABASE_URL = "https://jowpzdynbdeznuvohrpx.supabase.co";
+const char* SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impvd3B6ZHluYmRlem51dm9ocnB4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxMTExNDYsImV4cCI6MjA5MTY4NzE0Nn0.plD8ehYQsBgzfXrXBHJpqHanQF5GPKYlM53I1t3wfO0";
 
 HardwareSerial &MEGA_SERIAL = Serial2;
 const int MEGA_RX_PIN = 16;
@@ -33,7 +17,22 @@ const int MEGA_TX_PIN = 17;
 
 bool wifiConnected = false;
 unsigned long lastHeartbeatAt = 0;
-const unsigned long HEARTBEAT_INTERVAL_MS = 5000;
+const unsigned long HEARTBEAT_INTERVAL_MS = 5000; // WIFI: status ping to the Mega
+
+// --- PORTED FROM Cloud_remake5: Supabase health heartbeat ---
+unsigned long lastStatusUpdate = 0;
+const unsigned long statusInterval = 60000; // machine_status table update
+
+// --- PORTED FROM Cloud_remake5: non-blocking reconnect watchdog ---
+unsigned long lastWiFiCheck = 0;
+unsigned long disconnectedSince = 0;
+const unsigned long WIFI_CHECK_INTERVAL = 5000;
+const unsigned long WIFI_STUCK_THRESHOLD = 20000;
+
+bool connectToWifi(unsigned long timeoutMs);
+bool printNearbyWifiNetworks();
+void updateMachineStatus();
+void updateStatusKey(const String &key, const String &value);
 
 void sendError(const String &message) {
   MEGA_SERIAL.println("ERR:" + message);
@@ -44,13 +43,141 @@ void sendWifiStatus() {
 }
 
 bool ensureWifi() {
+  wifiConnected = (WiFi.status() == WL_CONNECTED);
+  return wifiConnected;
+}
+
+// ================= PORTED FROM Cloud_remake5 =================
+// The full connect sequence, including the WIFI_OFF->STA fix, verbose
+// debug output, and the WIFISTATE: messages the Mega's spinner/"can't
+// be detected" UI depends on.
+
+bool connectToWifi(unsigned long timeoutMs) {
+  static bool wifiEverStarted = false;
+  Serial.println("Initializing WiFi...");
+
+  if (wifiEverStarted) {
+    // Only tear the driver down if it was actually running before -
+    // calling this on a never-initialized driver is what originally
+    // triggered the xEventGroupSetBits assert on first boot.
+    WiFi.disconnect(true, false);
+    delay(300);
+  }
+  wifiEverStarted = true;
+
+  WiFi.mode(WIFI_OFF);
+  delay(100);
+
+  WiFi.mode(WIFI_STA);
+  Serial.println("  [ok] WiFi.mode(WIFI_STA)");
+  WiFi.setSleep(false);
+  Serial.println("  [ok] WiFi.setSleep(false)");
+  WiFi.setAutoReconnect(true);
+  Serial.println("  [ok] WiFi.setAutoReconnect(true)");
+  WiFi.persistent(false);
+  Serial.println("  [ok] WiFi.persistent(false)");
+  delay(250);
+
+  Serial.print("ESP32 MAC: ");
+  Serial.println(WiFi.macAddress());
+  bool targetFound = printNearbyWifiNetworks();
+
+  // Tells the Mega which phase we're in, so it can show a spinner vs.
+  // "WiFi can't be detected" instead of one generic "not connected".
+  MEGA_SERIAL.println(targetFound ? "WIFISTATE:CONNECTING" : "WIFISTATE:NOTFOUND");
+
+  Serial.println("Starting WiFi connection...");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to WiFi");
+  unsigned long wifiStart = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < timeoutMs) {
+    delay(500);
+    Serial.print(".");
+  }
+
   if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi Connected! Machine Online.");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
     wifiConnected = true;
     return true;
+  } else {
+    Serial.println("\nWiFi connection timed out. Continuing offline.");
+    Serial.print("WiFi status code: ");
+    Serial.println((int)WiFi.status());
+    Serial.println("Mega serial communication remains available.");
+    wifiConnected = false;
+    return false;
   }
-  wifiConnected = false;
-  return false;
 }
+
+bool printNearbyWifiNetworks() {
+  Serial.println("Scanning WiFi networks...");
+  int networkCount = WiFi.scanNetworks();
+
+  if (networkCount <= 0) {
+    Serial.println("No WiFi networks found.");
+    return false;
+  }
+
+  bool targetFound = false;
+  Serial.print("Networks found: ");
+  Serial.println(networkCount);
+
+  for (int i = 0; i < networkCount; i++) {
+    String foundSsid = WiFi.SSID(i);
+    if (foundSsid == WIFI_SSID) {
+      targetFound = true;
+    }
+    Serial.print(i + 1);
+    Serial.print(": ");
+    Serial.print(foundSsid);
+    Serial.print(" | RSSI ");
+    Serial.print(WiFi.RSSI(i));
+    Serial.print(" | Encryption ");
+    Serial.println((int)WiFi.encryptionType(i));
+  }
+
+  Serial.print("Target SSID visible: ");
+  Serial.println(targetFound ? "YES" : "NO");
+  WiFi.scanDelete();
+  return targetFound;
+}
+
+// Posts machine health to Supabase every 60s - dropped entirely in the
+// newer file; restored so any webapp/admin dashboard reading the
+// machine_status table doesn't go dark.
+void updateMachineStatus() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  long rssi = WiFi.RSSI();
+  String strength;
+  if (rssi >= -50) strength = "Excellent";
+  else if (rssi >= -60) strength = "Good";
+  else if (rssi >= -70) strength = "Fair";
+  else strength = "Poor";
+
+  updateStatusKey("is_running", "Online");
+  updateStatusKey("wifi_signal", strength + " (" + String(rssi) + " dBm)");
+}
+
+void updateStatusKey(const String &key, const String &value) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/machine_status?status_key=eq." + key;
+
+  http.begin(client, url);
+  http.addHeader("apikey", SUPABASE_ANON_KEY);
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+  http.addHeader("Content-Type", "application/json");
+
+  String body = "{\"status_value\":\"" + value + "\", \"updated_at\":\"now()\"}";
+  http.PATCH(body);
+  http.end();
+}
+
+// ================= KEPT FROM production_esp32 (unchanged logic) =================
 
 bool callRpc(const char* functionName, JsonDocument &request, DynamicJsonDocument &response) {
   if (!ensureWifi()) {
@@ -212,18 +339,67 @@ void handleMegaMessage(String message) {
   else if (message == "STATUS?") sendWifiStatus();
 }
 
+// ================= SETUP / LOOP =================
+
 void setup() {
   Serial.begin(115200);
+  delay(500);
+  Serial.println();
+  Serial.print("Reset reason: "); // PORTED FROM Cloud_remake5 - useful to
+  Serial.println((int)esp_reset_reason()); // tell a crash-reboot apart from a clean power-on
+  Serial.println("--- ESP32 CLOUD STARTING ---");
+
   MEGA_SERIAL.begin(9600, SERIAL_8N1, MEGA_RX_PIN, MEGA_TX_PIN);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  wifiConnected = connectToWifi(15000);
+  sendWifiStatus();
+  if (wifiConnected) {
+    updateMachineStatus();
+  }
 }
 
 void loop() {
   if (MEGA_SERIAL.available()) handleMegaMessage(MEGA_SERIAL.readStringUntil('\n'));
+
   ensureWifi();
+
+  // WIFI: status ping to the Mega (unchanged from production_esp32)
   if (millis() - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatAt = millis();
     sendWifiStatus();
+  }
+
+  // PORTED FROM Cloud_remake5: periodic Supabase health heartbeat
+  if (wifiConnected && millis() - lastStatusUpdate > statusInterval) {
+    updateMachineStatus();
+    lastStatusUpdate = millis();
+  }
+
+  // PORTED FROM Cloud_remake5: non-blocking reconnect watchdog.
+  // setAutoReconnect(true) handles routine drops on its own; this only
+  // steps in with a full radio reset if the link has been down for a
+  // sustained stretch.
+  if (millis() - lastWiFiCheck > WIFI_CHECK_INTERVAL) {
+    lastWiFiCheck = millis();
+    bool nowConnected = WiFi.status() == WL_CONNECTED;
+
+    if (nowConnected != wifiConnected) {
+      wifiConnected = nowConnected;
+      sendWifiStatus();
+    }
+
+    if (!nowConnected) {
+      if (disconnectedSince == 0) {
+        disconnectedSince = millis();
+        Serial.println("WiFi disconnected. Waiting to see if auto-reconnect recovers it...");
+      } else if (millis() - disconnectedSince > WIFI_STUCK_THRESHOLD) {
+        Serial.println("WiFi still down after 20s - forcing full reconnect.");
+        wifiConnected = connectToWifi(10000);
+        sendWifiStatus();
+        disconnectedSince = 0;
+      }
+    } else {
+      disconnectedSince = 0;
+    }
   }
 }
