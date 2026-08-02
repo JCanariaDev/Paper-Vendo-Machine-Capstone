@@ -4,18 +4,15 @@
 #include <ArduinoJson.h>
 
 /*
-  Cloud_remake4.ino - Gateway for Paper Vendo Machine
-  REVISION 3: Touchscreen moved to the Mega (see mega_1.ino). This sketch
-  is now a pure network gateway - TFT_UI.ino is no longer needed and
-  should be removed from this sketch folder.
-
-  REVISION 4 - 30/07/2026: connectToWifi() was crashing on the very
-  first boot with "assert failed: xEventGroupSetBits" the instant
-  WiFi.mode(WIFI_STA) ran - a known ESP32 Arduino-core issue where the
-  WiFi driver's internal event group isn't cleanly settled before the
-  very first mode change. Added an explicit WiFi.mode(WIFI_OFF) + short
-  delay before that first WIFI_STA call to give the driver a clean,
-  deliberate first transition instead of jumping straight to WIFI_STA.
+  Cloud_remake5.ino - Gateway for Paper Vendo Machine
+  Revision history has moved to README.md - see that file for the full
+  changelog. This header just tracks the current version:
+  Revision 5 - 31/07/2026: connectToWifi() now reports its phase to the
+  Mega over CLOUD_SERIAL - WIFISTATE:CONNECTING when the target SSID was
+  seen in the scan and a connection attempt is starting, or
+  WIFISTATE:NOTFOUND when it wasn't seen at all - so the Mega can show a
+  spinner vs. a "WiFi can't be detected" message instead of one generic
+  "not connected" state.
 */
 
 // --- WIFI CONFIG ---
@@ -32,7 +29,7 @@ int currentCredits = 0;
 bool currentWifiConnected = false;
 
 bool connectToWifi(unsigned long timeoutMs);
-void printNearbyWifiNetworks();
+bool printNearbyWifiNetworks();
 void submitTftOrder(String type, int id, int qty);
 
 void setup() {
@@ -60,11 +57,20 @@ bool connectToWifi(unsigned long timeoutMs) {
   Serial.println("Initializing WiFi...");
 
   if (wifiEverStarted) {
+    // Only tear the driver down if it was actually running before.
+    // Calling WiFi.mode(WIFI_OFF) + disconnect(true, true) [eraseAP=true]
+    // against a driver that has never been initialized (i.e. on the very
+    // first boot) hits an invalid internal FreeRTOS event-group state and
+    // panics with "assert failed: xEventGroupSetBits". Skipping this on
+    // first boot avoids that; it still runs on genuine reconnects.
     WiFi.disconnect(true, false);
     delay(300);
   }
   wifiEverStarted = true;
 
+  // Give the WiFi driver a clean, deliberate first transition instead of
+  // jumping straight to WIFI_STA - this avoids a first-boot assert
+  // ("xEventGroupSetBits") seen on some ESP32 Arduino-core versions.
   WiFi.mode(WIFI_OFF);
   delay(100);
 
@@ -80,7 +86,12 @@ bool connectToWifi(unsigned long timeoutMs) {
 
   Serial.print("ESP32 MAC: ");
   Serial.println(WiFi.macAddress());
-  printNearbyWifiNetworks();
+  bool targetFound = printNearbyWifiNetworks();
+
+  // Tell the Mega which phase we're in, so it can show a spinner
+  // ("attempting to connect") vs. "WiFi can't be detected" instead of
+  // one generic "not connected" state.
+  Serial2.println(targetFound ? "WIFISTATE:CONNECTING" : "WIFISTATE:NOTFOUND");
 
   Serial.println("Starting WiFi connection...");
   WiFi.begin(ssid, password);
@@ -105,13 +116,13 @@ bool connectToWifi(unsigned long timeoutMs) {
   }
 }
 
-void printNearbyWifiNetworks() {
+bool printNearbyWifiNetworks() {
   Serial.println("Scanning WiFi networks...");
   int networkCount = WiFi.scanNetworks();
 
   if (networkCount <= 0) {
     Serial.println("No WiFi networks found.");
-    return;
+    return false;
   }
 
   bool targetFound = false;
@@ -136,6 +147,7 @@ void printNearbyWifiNetworks() {
   Serial.print("Target SSID visible: ");
   Serial.println(targetFound ? "YES" : "NO");
   WiFi.scanDelete();
+  return targetFound;
 }
 
 void loop() {
@@ -155,17 +167,24 @@ void loop() {
     else if (incoming.startsWith("DONE:")) {
       handleLog(incoming);
     }
+    // Note: "ERR:" is something *this* sketch sends TO the Mega now,
+    // not something it receives - no handler needed for it here.
   }
 
+  // Periodic Status Update
   if (millis() - lastStatusUpdate > statusInterval) {
     updateMachineStatus();
     lastStatusUpdate = millis();
   }
 
+  // --- Non-blocking WiFi Reconnection Check ---
+  // WiFi.setAutoReconnect(true) already handles routine reconnects on its
+  // own. We only step in with a full radio reset (connectToWifi) if the
+  // link has been down for a sustained stretch.
   static unsigned long lastWiFiCheck = 0;
   static unsigned long disconnectedSince = 0;
-  const unsigned long WIFI_CHECK_INTERVAL = 5000;
-  const unsigned long WIFI_STUCK_THRESHOLD = 20000;
+  const unsigned long WIFI_CHECK_INTERVAL = 5000;   // poll status every 5s
+  const unsigned long WIFI_STUCK_THRESHOLD = 20000; // only hard-reset after 20s down
 
   if (millis() - lastWiFiCheck > WIFI_CHECK_INTERVAL) {
     lastWiFiCheck = millis();
@@ -230,6 +249,7 @@ void fetchAndValidate(String type, String id, float coins) {
 
       if (coins >= cost) {
         if (type == "paper") {
+          // --- BULK PAPER LOGIC ---
           int units = (int)(coins / cost);
           int sheetsPerUnit = doc[0]["sheets_per_unit"];
           int totalSheets = units * sheetsPerUnit;
@@ -240,6 +260,7 @@ void fetchAndValidate(String type, String id, float coins) {
           Serial2.print(totalCost); Serial2.print(":");
           Serial2.println(name);
         } else {
+          // --- PEN LOGIC (1 unit + Change) ---
           Serial2.print("DISPENSE:1:");
           Serial2.print(cost); Serial2.print(":");
           Serial2.println(name);
@@ -257,6 +278,7 @@ void fetchAndValidate(String type, String id, float coins) {
 }
 
 void handleTftOrder(String msg) {
+  // Format: TFTORDER:TYPE:ID:QTY  (sent by the Mega's touchscreen UI)
   int f1 = msg.indexOf(':');
   int f2 = msg.indexOf(':', f1 + 1);
   int f3 = msg.indexOf(':', f2 + 1);
@@ -329,6 +351,7 @@ void fetchAndValidateTftOrder(String type, String id, int qty, float coins) {
 }
 
 void handleLog(String msg) {
+  // Format: DONE:TYPE:ID:NAME:PRICE:QTY
   int t1 = msg.indexOf(':') + 1;
   int t2 = msg.indexOf(':', t1);
   int t3 = msg.indexOf(':', t2 + 1);
