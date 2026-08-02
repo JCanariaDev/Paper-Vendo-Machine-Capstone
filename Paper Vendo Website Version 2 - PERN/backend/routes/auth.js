@@ -30,21 +30,9 @@ export function createAuthRouter(supabase) {
 
       const user = admins[0];
 
-      // Password Verification
-      let isMatch = false;
-      
-      // Try to compare as bcrypt hashed password first
-      try {
-        isMatch = await bcrypt.compare(password, user.password);
-      } catch (err) {
-        // Not a hashed password or error in hashing
-        isMatch = false;
-      }
-
-      // Fallback: check plain text password for legacy seeds (e.g. admin123, staff123)
-      if (!isMatch && password === user.password) {
-        isMatch = true;
-      }
+      // Every password, including the seed accounts in Cloud_Paper_Vendo.sql,
+      // is bcrypt-hashed.  Do not retain a plaintext fallback.
+      const isMatch = await bcrypt.compare(password, user.password);
 
       if (!isMatch) {
         return res.status(401).json({ message: 'Incorrect password.' });

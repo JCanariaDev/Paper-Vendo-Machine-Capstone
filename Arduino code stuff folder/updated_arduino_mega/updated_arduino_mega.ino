@@ -17,6 +17,8 @@
 
 // --- PINS (existing) ---
 const int COIN_PIN = 2;
+const int COIN_INHIBIT_PIN = 16; // added: coin acceptor inhibit input, active HIGH by default
+const bool COIN_INHIBIT_ACTIVE_HIGH = true;
 const int LOADCELL_DOUT = 5;
 const int LOADCELL_SCK = 6;
 const int PEN_IR_PIN = 7;   // pen slot 1 IR sensor
@@ -27,6 +29,18 @@ const int SERVO_PEN_PIN = 10;
 // Stepper Pins: 3, 4, 11, 12 (pen slot 1)
 //               22, 23, 24, 25 (pen slot 2) - NEW
 //               26, 27, 28, 29 (pen slot 3) - NEW
+
+// --- ADDED: four physical paper channels and verified change hopper ---
+// These pins do not replace any existing pen, TFT, coin, or Mega<->ESP wiring.
+// Each paper channel needs a STEP/DIR driver and a normally-HIGH exit sensor.
+const int PAPER_STEP_PINS[4] = { 32, 34, 36, 38 };
+const int PAPER_DIR_PINS[4] = { 33, 35, 37, 39 };
+const int PAPER_EXIT_PINS[4] = { 41, 42, 43, 44 };
+const int PAPER_ENABLE_PIN = 40; // common ENABLE on the four stepper drivers (active LOW)
+const int CHANGE_HOPPER_MOTOR_PIN = 14;
+const int CHANGE_HOPPER_SENSOR_PIN = 15; // active LOW when a coin passes
+const unsigned long PAPER_SHEET_TIMEOUT_MS = 12000;
+const unsigned long CHANGE_COIN_TIMEOUT_MS = 5000;
 
 // --- PINS (touchscreen) ---
 // SPI bus (52/51/50) is fixed hardware SPI on the Mega - not redefinable.
@@ -105,8 +119,9 @@ XPT2046_Touchscreen ts(TOUCH_CS);
 volatile uint16_t credits = 0;
 volatile bool coinPulseReceived = false;
 bool isProcessing = false;
-String currentRequestId = ""; // Track the selected item's ID for transaction logging
-String currentRequestType = "";
+String activeTransactionId = "";
+int activeChangeCents = 0;
+String selectedPaperBrand = "Budget";
 
 // --- DIAGNOSTICS STATE ---
 bool diagOledOk = false;
@@ -130,10 +145,10 @@ struct CatalogItem {
 
 const int PAPER_COUNT = 4;
 CatalogItem paperCatalog[PAPER_COUNT] = {
-  {1, "Short (Letter)", 1.00},
-  {2, "Long (Legal)",   1.50},
-  {3, "A4",             1.25},
-  {4, "EDIT ME",        1.00}  // TODO: replace name/price with your 4th paper option
+  {1, "1/4",       1.00},
+  {2, "Crosswise", 1.00},
+  {3, "Lengthwise",1.00},
+  {4, "Whole",     1.00}
 };
 
 const int BALLPEN_COUNT = 3;
@@ -145,7 +160,7 @@ CatalogItem ballpenCatalog[BALLPEN_COUNT] = {
 
 const int MAX_CATALOG_ROWS = 4; // must be >= max(PAPER_COUNT, BALLPEN_COUNT)
 int pendingQty[MAX_CATALOG_ROWS];
-String activeCatalogType = "paper";
+String activeCatalogType = "paper"; // protocol values are "paper" and "pen"
 
 // ================= CART =================
 struct CartItem {
@@ -160,7 +175,7 @@ CartItem cart[MAX_CART_ITEMS];
 int cartCount = 0;
 
 // ================= UI STATE =================
-enum UiScreen { SCREEN_IDLE, SCREEN_MAIN, SCREEN_CATALOG, SCREEN_CART, SCREEN_SUMMARY };
+enum UiScreen { SCREEN_IDLE, SCREEN_MAIN, SCREEN_PAPER_BRAND, SCREEN_CATALOG, SCREEN_CART, SCREEN_SUMMARY };
 UiScreen currentScreen = SCREEN_IDLE;
 
 bool uiWifiConnected = false;
@@ -173,7 +188,7 @@ unsigned long uiErrorUntil = 0;
 unsigned long uiSuccessUntil = 0;
 unsigned long touchDebounceUntil = 0;
 
-bool orderInProgress = false;
+volatile bool orderInProgress = false;
 int cartDispenseIndex = 0;
 String orderSummaryText = "";
 float orderTotalCost = 0;
@@ -192,6 +207,23 @@ float cartTotal() {
   float sum = 0;
   for (int i = 0; i < cartCount; i++) sum += cart[i].price * cart[i].qty;
   return sum;
+}
+
+// Keep this display estimate aligned with the default SQL seed.  The server
+// still validates the real price at reservation time, so an administrator's
+// later database price change cannot undercharge a transaction.
+float catalogDisplayPrice(int index) {
+  if (activeCatalogType == "paper") {
+    return selectedPaperBrand == "Standard" ? 2.00 : 1.00;
+  }
+  return ballpenCatalog[index].price;
+}
+
+void setCoinAcceptance(bool allowed) {
+  int level = allowed
+    ? (COIN_INHIBIT_ACTIVE_HIGH ? LOW : HIGH)
+    : (COIN_INHIBIT_ACTIVE_HIGH ? HIGH : LOW);
+  digitalWrite(COIN_INHIBIT_PIN, level);
 }
 
 // ================= CATALOG LAYOUT =================
@@ -311,6 +343,26 @@ void drawMainScreen() {
   printCentered(cartLabel.c_str(), tft.width() / 2, 285 + 15);
 }
 
+// A brand is a logical product choice.  The selected brand/size is mapped by
+// product id to one of the four physical paper feeders in the database; the
+// database is the source of truth for that mapping and stock reservation.
+void drawPaperBrandScreen() {
+  tft.fillScreen(COL_BLACK);
+  drawTftStatusBar();
+  tft.setTextColor(COL_WHITE);
+  tft.setTextSize(2);
+  printCentered("Choose Paper Brand", tft.width() / 2, 55);
+
+  tft.fillRoundRect(20, 95, 200, 55, 8, COL_BLUE);
+  tft.setTextColor(COL_WHITE);
+  printCentered("BUDGET", tft.width() / 2, 122);
+  tft.fillRoundRect(20, 165, 200, 55, 8, COL_GREEN);
+  printCentered("STANDARD", tft.width() / 2, 192);
+  tft.fillRoundRect(20, 275, 200, 35, 8, COL_GREY);
+  tft.setTextSize(1);
+  printCentered("BACK", tft.width() / 2, 292);
+}
+
 void drawCatalogScreen() {
   tft.fillScreen(COL_BLACK);
   drawTftStatusBar();
@@ -320,7 +372,8 @@ void drawCatalogScreen() {
 
   tft.setTextColor(COL_WHITE);
   tft.setTextSize(2);
-  printCentered((activeCatalogType == "paper") ? "Paper Options" : "Ballpen Options", tft.width() / 2, 38);
+  String title = activeCatalogType == "paper" ? selectedPaperBrand + " Paper" : "Ballpen Options";
+  printCentered(title.c_str(), tft.width() / 2, 38);
 
   // Rows are much taller than before (70px, buttons filling 60 of that)
   // so the +/- targets are large and forgiving, instead of the old
@@ -354,7 +407,7 @@ void drawCatalogScreen() {
     tft.setCursor(72, rowY + 6);
     tft.print(catalog[i].name);
     tft.setCursor(72, rowY + 20);
-    tft.print("P" + String(catalog[i].price, 2));
+    tft.print("P" + String(catalogDisplayPrice(i), 2));
 
     char qtyBuf[16];
     sprintf(qtyBuf, "Qty: %d", pendingQty[i]);
@@ -406,9 +459,9 @@ void drawSummaryScreen() {
     tft.setTextColor(COL_WHITE);
     printCentered("PLEASE WAIT", tft.width() / 2, 275 + 20);
   } else {
-    tft.fillRoundRect(20, 275, 200, 40, 8, COL_ORANGE);
+    tft.fillRoundRect(20, 275, 200, 40, 8, COL_GREY);
     tft.setTextColor(COL_WHITE);
-    printCentered("DISPENSE CHANGE", tft.width() / 2, 275 + 20);
+    printCentered("ORDER CLOSED", tft.width() / 2, 275 + 20);
   }
 }
 
@@ -489,6 +542,7 @@ void redrawCurrentScreen() {
   switch (currentScreen) {
     case SCREEN_IDLE:    drawIdleScreen();    break;
     case SCREEN_MAIN:    drawMainScreen();    break;
+    case SCREEN_PAPER_BRAND: drawPaperBrandScreen(); break;
     case SCREEN_CATALOG: drawCatalogScreen(); break;
     case SCREEN_CART:    drawCartScreen();    break;
     case SCREEN_SUMMARY: drawSummaryScreen(); break;
@@ -514,19 +568,24 @@ void addToCart(String type, int id, const char* name, float price, int qty) {
   }
 }
 
-void sendNextCartItem() {
-  CartItem &item = cart[cartDispenseIndex];
-  CLOUD_SERIAL.println("TFTORDER:" + item.type + ":" + String(item.id) + ":" + String(item.qty));
-}
-
 void startOrder() {
   orderInProgress = true;
-  cartDispenseIndex = 0;
+  setCoinAcceptance(false); // freeze the credit snapshot during reservation/change/dispense
   orderSummaryText = "";
   orderTotalCost = 0;
+  activeTransactionId = "";
+  activeChangeCents = 0;
   currentScreen = SCREEN_SUMMARY;
   drawSummaryScreen();
-  sendNextCartItem();
+
+  // Reserve the complete cart before any physical action.  The ESP32 turns
+  // this compact message into JSON for the atomic Supabase RPC.
+  String encodedLines = "";
+  for (int i = 0; i < cartCount; i++) {
+    if (encodedLines.length()) encodedLines += ';';
+    encodedLines += cart[i].type + "," + String(cart[i].id) + "," + String(cart[i].qty);
+  }
+  CLOUD_SERIAL.println("RESERVE:" + String((unsigned long)credits * 100UL) + ":" + encodedLines);
 }
 
 // ================= TOUCH HANDLERS =================
@@ -549,10 +608,10 @@ void handleMainTouch(int x, int y) {
   if (x >= 20 && x <= 220 && y >= 95 && y <= 150) {
     activeCatalogType = "paper";
     resetPendingSelections();
-    currentScreen = SCREEN_CATALOG;
-    drawCatalogScreen();
+    currentScreen = SCREEN_PAPER_BRAND;
+    drawPaperBrandScreen();
   } else if (x >= 20 && x <= 220 && y >= 160 && y <= 215) {
-    activeCatalogType = "ballpen";
+    activeCatalogType = "pen";
     resetPendingSelections();
     currentScreen = SCREEN_CATALOG;
     drawCatalogScreen();
@@ -563,6 +622,23 @@ void handleMainTouch(int x, int y) {
       tftUiShowError("Cart is empty");
     }
   }
+}
+
+void handlePaperBrandTouch(int x, int y) {
+  if (x >= 20 && x <= 220 && y >= 95 && y <= 150) {
+    selectedPaperBrand = "Budget";
+  } else if (x >= 20 && x <= 220 && y >= 165 && y <= 220) {
+    selectedPaperBrand = "Standard";
+  } else if (x >= 20 && x <= 220 && y >= 275 && y <= 315) {
+    currentScreen = SCREEN_MAIN;
+    drawMainScreen();
+    return;
+  } else {
+    return;
+  }
+  resetPendingSelections();
+  currentScreen = SCREEN_CATALOG;
+  drawCatalogScreen();
 }
 
 void handleCatalogTouch(int x, int y) {
@@ -588,8 +664,8 @@ void handleCatalogTouch(int x, int y) {
       // Blocks the + button once that would exceed inserted credits,
       // instead of letting it silently rack up more than was paid.
       float pendingCost = 0;
-      for (int j = 0; j < count; j++) pendingCost += pendingQty[j] * catalog[j].price;
-      float wouldBeCost = cartTotal() + pendingCost + catalog[i].price;
+      for (int j = 0; j < count; j++) pendingCost += pendingQty[j] * catalogDisplayPrice(j);
+      float wouldBeCost = cartTotal() + pendingCost + catalogDisplayPrice(i);
 
       if (wouldBeCost > credits) {
         tftUiShowError("Insufficient credits");
@@ -605,7 +681,16 @@ void handleCatalogTouch(int x, int y) {
   if (x >= 15 && x <= 110 && y >= 275 && y <= 310) { // ADD
     for (int i = 0; i < count; i++) {
       if (pendingQty[i] > 0) {
-        addToCart(activeCatalogType, catalog[i].id, catalog[i].name, catalog[i].price, pendingQty[i]);
+        int productId = catalog[i].id;
+        String productName = catalog[i].name;
+        if (activeCatalogType == "paper") {
+          // Seeded ids 1..4 are Budget and 5..8 are Standard.  This is only
+          // a stable UI lookup; price and sheets-per-unit are revalidated by
+          // machine_reserve_transaction before any change or dispensing.
+          if (selectedPaperBrand == "Standard") productId += 4;
+          productName = selectedPaperBrand + " " + productName;
+        }
+        addToCart(activeCatalogType, productId, productName.c_str(), catalogDisplayPrice(i), pendingQty[i]);
       }
     }
     currentScreen = SCREEN_MAIN;
@@ -621,10 +706,9 @@ void handleCatalogTouch(int x, int y) {
 }
 
 void handleSummaryTouch(int x, int y) {
-  if (orderInProgress) return;
-  if (x >= 20 && x <= 220 && y >= 275 && y <= 315) {
-    returnChange(); // sets credits to 0, which auto-switches back to idle
-  }
+  // Change is released automatically, and only before PLAN is received.
+  // There is intentionally no manual "D"/touch release action in production.
+  (void)x; (void)y;
 }
 
 void handleCartTouch(int x, int y) {
@@ -746,6 +830,7 @@ void tftUiLoop() {
 
   switch (currentScreen) {
     case SCREEN_MAIN:    handleMainTouch(x, y);    break;
+    case SCREEN_PAPER_BRAND: handlePaperBrandTouch(x, y); break;
     case SCREEN_CATALOG: handleCatalogTouch(x, y); break;
     case SCREEN_CART:    handleCartTouch(x, y);    break;
     case SCREEN_SUMMARY: handleSummaryTouch(x, y); break;
@@ -861,10 +946,23 @@ void setup() {
   Serial.println("Touchscreen UI initialized.");
 
   pinMode(COIN_PIN, INPUT_PULLUP);
+  pinMode(COIN_INHIBIT_PIN, OUTPUT);
+  setCoinAcceptance(true);
   attachInterrupt(digitalPinToInterrupt(COIN_PIN), coinInterrupt, FALLING);
   pinMode(PEN_IR_PIN, INPUT);
   pinMode(PEN_IR_PIN2, INPUT);
   pinMode(PEN_IR_PIN3, INPUT);
+  for (int i = 0; i < 4; i++) {
+    pinMode(PAPER_STEP_PINS[i], OUTPUT);
+    pinMode(PAPER_DIR_PINS[i], OUTPUT);
+    pinMode(PAPER_EXIT_PINS[i], INPUT_PULLUP);
+    digitalWrite(PAPER_STEP_PINS[i], LOW);
+  }
+  pinMode(PAPER_ENABLE_PIN, OUTPUT);
+  digitalWrite(PAPER_ENABLE_PIN, HIGH); // drivers disabled until a paper plan arrives
+  pinMode(CHANGE_HOPPER_MOTOR_PIN, OUTPUT);
+  digitalWrite(CHANGE_HOPPER_MOTOR_PIN, LOW);
+  pinMode(CHANGE_HOPPER_SENSOR_PIN, INPUT_PULLUP);
 
   servoChange.attach(SERVO_CHANGE_PIN);
   servoPen.attach(SERVO_PEN_PIN);
@@ -879,11 +977,13 @@ void setup() {
   Serial.println("Machine Ready!");
   updateLCD();
   CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)credits));
+  CLOUD_SERIAL.println("STATUS?");
 
   runDiagnostics(); // auto-run once at boot; type DIAG later to re-run
 }
 
 void coinInterrupt() {
+  if (orderInProgress) return; // guard against a pulse already in flight when inhibit is asserted
   static unsigned long lastPulse = 0;
   unsigned long now = millis();
   if (now - lastPulse > 50) {
@@ -951,8 +1051,155 @@ void loop() {
   }
 }
 
+bool dispenseOnePen(int channel) {
+  int penIndex = channel - 1;
+  if (penIndex < 0 || penIndex > 2) return false;
+  Stepper* pen = penSteppers[penIndex];
+  int irPin = penIrPins[penIndex];
+  pen->step(1024);
+  unsigned long startedAt = millis();
+  bool detected = false;
+  while (millis() - startedAt < 5000) {
+    if (digitalRead(irPin) == LOW) { detected = true; break; }
+  }
+  delay(300);
+  pen->step(-1024);
+  stopStepper(penIndex);
+  return detected;
+}
+
+bool dispenseOnePaper(int channel) {
+  int index = channel - 1;
+  if (index < 0 || index > 3) return false;
+  const int sensor = PAPER_EXIT_PINS[index];
+  const int stepPin = PAPER_STEP_PINS[index];
+  digitalWrite(PAPER_DIR_PINS[index], HIGH); // reverse only if the installed feeder runs backwards
+  digitalWrite(PAPER_ENABLE_PIN, LOW);
+
+  // A blocked sensor at the start normally means a sheet was left in the
+  // chute.  Do not count it as a newly dispensed sheet.
+  unsigned long clearStartedAt = millis();
+  while (digitalRead(sensor) == LOW && millis() - clearStartedAt < 1000) { }
+  if (digitalRead(sensor) == LOW) {
+    digitalWrite(PAPER_ENABLE_PIN, HIGH);
+    return false;
+  }
+
+  bool seenSheet = false;
+  unsigned long startedAt = millis();
+  while (millis() - startedAt < PAPER_SHEET_TIMEOUT_MS) {
+    digitalWrite(stepPin, HIGH); delayMicroseconds(700);
+    digitalWrite(stepPin, LOW);  delayMicroseconds(700);
+    if (digitalRead(sensor) == LOW) seenSheet = true;
+    // Count only a complete clear -> blocked -> clear sensor cycle.
+    if (seenSheet && digitalRead(sensor) == HIGH) {
+      digitalWrite(PAPER_ENABLE_PIN, HIGH);
+      return true;
+    }
+  }
+  digitalWrite(PAPER_ENABLE_PIN, HIGH);
+  return false;
+}
+
+int releaseVerifiedChange(int changeCents) {
+  if (changeCents == 0) return 0;
+  // Initial release uses one physical P1 hopper.  The server reserves the
+  // same denomination, so this routine must prove every requested coin via
+  // the hopper's exit sensor before the machine is allowed to dispense goods.
+  if (changeCents % 100 != 0) return -1;
+  const int expectedCoins = changeCents / 100;
+  int countedCoins = 0;
+  bool previousBlocked = digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW;
+  digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HIGH);
+  unsigned long lastCoinAt = millis();
+  while (countedCoins < expectedCoins && millis() - lastCoinAt < CHANGE_COIN_TIMEOUT_MS) {
+    bool blocked = digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW;
+    if (blocked && !previousBlocked) {
+      countedCoins++;
+      lastCoinAt = millis();
+    }
+    previousBlocked = blocked;
+  }
+  digitalWrite(CHANGE_HOPPER_MOTOR_PIN, LOW);
+  return countedCoins == expectedCoins ? countedCoins * 100 : -1;
+}
+
+void executeDispensePlan(String message) {
+  int first = message.indexOf(':');
+  int second = message.indexOf(':', first + 1);
+  if (first < 0 || second < 0) { showError("Bad dispense plan"); return; }
+  const String transactionId = message.substring(first + 1, second);
+  const String encodedPlan = message.substring(second + 1);
+  if (transactionId != activeTransactionId) { showError("Wrong transaction"); return; }
+
+  String results = "";
+  int start = 0;
+  while (start < encodedPlan.length()) {
+    int end = encodedPlan.indexOf(';', start);
+    String line = end < 0 ? encodedPlan.substring(start) : encodedPlan.substring(start, end);
+    int p1 = line.indexOf(',');
+    int p2 = line.indexOf(',', p1 + 1);
+    int p3 = line.indexOf(',', p2 + 1);
+    if (p1 <= 0 || p2 <= p1 || p3 <= p2) { showError("Bad plan line"); return; }
+    String type = line.substring(0, p1);
+    int productId = line.substring(p1 + 1, p2).toInt();
+    int channel = line.substring(p2 + 1, p3).toInt();
+    int expectedOutput = line.substring(p3 + 1).toInt();
+    int actualOutput = 0;
+    for (int item = 0; item < expectedOutput; item++) {
+      bool released = type == "paper" ? dispenseOnePaper(channel) : dispenseOnePen(channel);
+      if (!released) break;
+      actualOutput++;
+    }
+    if (results.length()) results += ';';
+    results += type + "," + String(productId) + "," + String(actualOutput);
+    if (end < 0) break;
+    start = end + 1;
+  }
+  CLOUD_SERIAL.println("FINISH:" + activeTransactionId + ":" + results);
+}
+
+void beginReservedTransaction(String message) {
+  int first = message.indexOf(':');
+  int second = message.indexOf(':', first + 1);
+  int third = message.indexOf(':', second + 1);
+  if (first < 0 || second < 0 || third < 0) { showError("Bad reservation"); return; }
+  activeTransactionId = message.substring(first + 1, second);
+  orderTotalCost = message.substring(second + 1, third).toInt() / 100.0;
+  activeChangeCents = message.substring(third + 1).toInt();
+  orderSummaryText = "Reserved\nChange: P" + String(activeChangeCents / 100.0, 2);
+  drawSummaryScreen();
+
+  int verifiedChange = releaseVerifiedChange(activeChangeCents);
+  if (verifiedChange < 0) {
+    CLOUD_SERIAL.println("CHANGE_FAIL:" + activeTransactionId + ":HOPPER_SENSOR_TIMEOUT");
+    showError("Change not released");
+    return;
+  }
+  CLOUD_SERIAL.println("CHANGE_OK:" + activeTransactionId + ":" + String(verifiedChange));
+}
+
+void finishUiAfterTransaction(String message) {
+  bool completed = message.endsWith(":COMPLETED");
+  credits = 0; // change was confirmed before the ESP sent PLAN.
+  orderInProgress = false;
+  setCoinAcceptance(true);
+  cartCount = 0;
+  activeTransactionId = "";
+  updateLCD();
+  if (completed) {
+    tftUiShowSuccess("Take items");
+    currentScreen = SCREEN_IDLE;
+  } else {
+    showError("Partial dispense");
+  }
+  redrawCurrentScreen();
+}
+
 void handleCloudCommand(String msg) {
-  if (msg.startsWith("DISPENSE:")) performDispense(msg);
+  if (msg.startsWith("RESERVED:")) beginReservedTransaction(msg);
+  else if (msg.startsWith("PLAN:")) executeDispensePlan(msg);
+  else if (msg.startsWith("FINISHED:")) finishUiAfterTransaction(msg);
   else if (msg.startsWith("ERR:")) showError(msg.substring(4));
   else if (msg.startsWith("WIFI:")) {
     bool connected = msg.substring(5) == "1";
@@ -970,7 +1217,6 @@ void handleCloudCommand(String msg) {
     Serial.println("ESP32 did not see the target WiFi network in its scan.");
     tftUiSetWifiStatus(WIFI_STATUS_NOT_FOUND);
   }
-  else if (msg == "RETURN_CHANGE") returnChange();
   else if (msg == "TEST_STEPPER_FWD") {
     penSteppers[0]->step(20);
     stopStepper(0);
@@ -981,132 +1227,8 @@ void handleCloudCommand(String msg) {
   }
 }
 
-void performDispense(String msg) {
-  int f1 = msg.indexOf(':');
-  int f2 = msg.indexOf(':', f1 + 1);
-  int f3 = msg.indexOf(':', f2 + 1);
-
-  String firstValue = msg.substring(f1 + 1, f2);
-  int totalSheets = 0;
-  float cost = 0;
-  String name = "";
-  String type = "";
-  String id = "";
-
-  // New ESP32 UI format: DISPENSE:TYPE:ID:QTY_OR_SHEETS:COST:NAME
-  if (firstValue == "paper" || firstValue == "pen") {
-    int f4 = msg.indexOf(':', f3 + 1);
-    int f5 = msg.indexOf(':', f4 + 1);
-    type = firstValue;
-    id = msg.substring(f2 + 1, f3);
-    totalSheets = msg.substring(f3 + 1, f4).toInt();
-    cost = msg.substring(f4 + 1, f5).toFloat();
-    name = msg.substring(f5 + 1);
-  }
-  // Legacy format: DISPENSE:SHEETS:COST:NAME
-  else {
-    type = "";
-    id = currentRequestId;
-    totalSheets = firstValue.toInt();
-    cost = msg.substring(f2 + 1, f3).toFloat();
-    name = msg.substring(f3 + 1);
-  }
-
-  currentRequestType = type;
-  currentRequestId = id;
-
-  drawStatusScreen("Dispensing", "Please wait");
-  Serial.println("Received from Cloud: DISPENSE " + String(totalSheets) + " of " + name);
-
-  bool isPaper = (type == "paper") || (type == "" && totalSheets > 1);
-  int actualQty = totalSheets;
-
-  if (isPaper) {
-    // Paper logic is paused since Stepper is now used for the Pen Dispenser -
-    // this logs the transaction but does not physically dispense yet.
-    Serial.println("Paper requested, logging DONE to cloud...");
-    CLOUD_SERIAL.println("DONE:paper:" + currentRequestId + ":" + name + ":" + String(cost) + ":" + String(totalSheets));
-  } else {
-    // Stepper Motor Pen Dispenser (Oscillating / Return Mechanism)
-    // 1024 steps = 180 degree turn (Top to Bottom)
-    // Each ballpen catalog id (1/2/3) has its own physical stepper + IR
-    // sensor, so pick the matching one based on the id that was ordered.
-    int penIndex = constrain(id.toInt() - 1, 0, 2);
-    Stepper* pen = penSteppers[penIndex];
-    int irPin = penIrPins[penIndex];
-
-    int penQty = max(1, totalSheets);
-    actualQty = penQty;
-    for (int item = 1; item <= penQty; item++) {
-      Serial.println("Pen requested. Moving to DROP position (180 deg)...");
-      pen->step(1024);
-
-      // --- WAIT FOR IR SENSOR DETECTION ---
-      Serial.println("Waiting for pen drop detection...");
-      unsigned long startTime = millis();
-      bool detected = false;
-
-      // Wait up to 5 seconds for the IR sensor (active LOW)
-      while (millis() - startTime < 5000) {
-        if (digitalRead(irPin) == LOW) { // IR beam broken
-          detected = true;
-          Serial.println(">>> PEN DROP DETECTED! <<<");
-          break;
-        }
-      }
-
-      delay(500); // Small pause for physical stability
-
-      Serial.println("Returning to CATCH position at Top...");
-      pen->step(-1024);
-      stopStepper(penIndex);
-
-      if (!detected) {
-        Serial.println("ERROR: No pen detected by IR sensor!");
-        CLOUD_SERIAL.println("ERR:Dispense Failed");
-        showError("Dispense Failed");
-        return; // Stop here, don't deduct credits
-      }
-    }
-
-    Serial.println("Dispense Successful! Logging to cloud...");
-    CLOUD_SERIAL.println("DONE:pen:" + currentRequestId + ":" + name + ":" + String(cost) + ":" + String(penQty));
-  }
-
-  credits -= cost;
-  drawStatusScreen("Success", "Take it");
-  tftUiShowSuccess("Take it");
-
-  if (orderInProgress) {
-    orderSummaryText += String(actualQty) + "x " + name + " - P" + String(cost, 2) + "\n";
-    orderTotalCost += cost;
-    cartDispenseIndex++;
-    if (cartDispenseIndex < cartCount) {
-      sendNextCartItem();
-    } else {
-      orderInProgress = false;
-      cartCount = 0;
-    }
-    if (currentScreen == SCREEN_SUMMARY) drawSummaryScreen();
-  }
-
-  delay(3000);
-  isProcessing = false;
-  updateLCD();
-  tftUiSetCredits();
-}
-
 void stopStepper(int penIndex) {
   for (int p = 0; p < 4; p++) digitalWrite(penStopPins[penIndex][p], LOW);
-}
-
-void returnChange() {
-  if (credits <= 0) return;
-  drawStatusScreen("Return", "P" + String((int)credits));
-  servoChange.write(90); delay(2000); servoChange.write(0);
-  credits = 0;
-  updateLCD();
-  tftUiSetCredits();
 }
 
 void updateLCD() {
@@ -1133,6 +1255,7 @@ void showError(String m) {
   tftUiShowError(m);
   if (orderInProgress) {
     orderInProgress = false;
+    setCoinAcceptance(true);
     cartCount = 0;
     currentScreen = SCREEN_MAIN;
   }
