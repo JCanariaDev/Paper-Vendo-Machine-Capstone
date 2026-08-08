@@ -19,16 +19,20 @@
 const int COIN_PIN = 2;
 const int COIN_INHIBIT_PIN = 16; // added: coin acceptor inhibit input, active HIGH by default
 const bool COIN_INHIBIT_ACTIVE_HIGH = true;
+// Three machine-state LEDs and one two-wire passive buzzer.
+const int LED_GREEN_PIN = 8;
+const int LED_BLUE_PIN = 13;
+const int LED_RED_PIN = 45;
+const int BUZZER_PIN = 46;
 const int LOADCELL_DOUT = 5;
 const int LOADCELL_SCK = 6;
 const int PEN_IR_PIN = 7;   // pen slot 1 IR sensor
-const int PEN_IR_PIN2 = 30; // pen slot 2 IR sensor - NEW
-const int PEN_IR_PIN3 = 31; // pen slot 3 IR sensor - NEW
+const int PEN_IR_PIN2 = 30; // pen slot 2 IR sensor
+const int PEN_IR_PIN3 = 31; // pen slot 3 IR sensor
 const int SERVO_CHANGE_PIN = 9;
 const int SERVO_PEN_PIN = 10;
-// Stepper Pins: 3, 4, 11, 12 (pen slot 1)
-//               22, 23, 24, 25 (pen slot 2) - NEW
-//               26, 27, 28, 29 (pen slot 3) - NEW
+// Pen stepper pins: slot 1 = 3,4,11,12; slot 2 = 22,23,24,25;
+// slot 3 = 26,27,28,29.
 
 // --- ADDED: four physical paper channels and verified change hopper ---
 // These pins do not replace any existing pen, TFT, coin, or Mega<->ESP wiring.
@@ -41,6 +45,14 @@ const int CHANGE_HOPPER_MOTOR_PIN = 14;
 const int CHANGE_HOPPER_SENSOR_PIN = 15; // active LOW when a coin passes
 const unsigned long PAPER_SHEET_TIMEOUT_MS = 12000;
 const unsigned long CHANGE_COIN_TIMEOUT_MS = 5000;
+const unsigned long PEN_SENSOR_TIMEOUT_MS = 5000;
+const unsigned long HOPPER_MANUAL_MAX_MS = 10000;
+
+// The tested SRD-05V relay module turns the hopper on when its IN terminal
+// receives HIGH.  Change only this constant to LOW if your physical relay
+// proves to be active-low (for example, it runs while the Mega is booting).
+const int HOPPER_RELAY_ON = HIGH;
+const int HOPPER_RELAY_OFF = (HOPPER_RELAY_ON == HIGH) ? LOW : HIGH;
 
 // --- PINS (touchscreen) ---
 // SPI bus (52/51/50) is fixed hardware SPI on the Mega - not redefinable.
@@ -49,21 +61,15 @@ const unsigned long CHANGE_COIN_TIMEOUT_MS = 5000;
 #define TFT_RST  49
 #define TOUCH_CS 47
 
-// --- STEPPER CONFIG ---
-// 3 independent pen dispensers - one stepper motor + one IR sensor per
-// ballpen catalog slot. Wiring order per Stepper object is
-// (steps, pin1, pin3, pin2, pin4) - kept the same pattern for the two
-// new motors to match how the original one is wired.
+// --- PEN STEPPER CONFIG ---
 const int stepsPerRevolution = 2048;
-
-Stepper penStepper1(stepsPerRevolution, 3, 11, 4, 12);   // existing motor - unchanged
-Stepper penStepper2(stepsPerRevolution, 22, 24, 23, 25); // NEW - ballpen slot 2
-Stepper penStepper3(stepsPerRevolution, 26, 28, 27, 29); // NEW - ballpen slot 3
-
-// Index 0/1/2 = ballpen catalog id 1/2/3
+// Keep this pin order matched to the ULN2003 wiring.
+Stepper penStepper1(stepsPerRevolution, 3, 11, 4, 12);
+Stepper penStepper2(stepsPerRevolution, 22, 24, 23, 25);
+Stepper penStepper3(stepsPerRevolution, 26, 28, 27, 29);
 Stepper* penSteppers[3] = { &penStepper1, &penStepper2, &penStepper3 };
 const int penStopPins[3][4] = {
-  { 3,  4,  11, 12 },
+  { 3, 4, 11, 12 },
   { 22, 23, 24, 25 },
   { 26, 27, 28, 29 }
 };
@@ -102,8 +108,10 @@ XPT2046_Touchscreen ts(TOUCH_CS);
 // TOUCH_INVERT_Y first (most common fix for this symptom); if it's still
 // wrong, try TOUCH_SWAP_XY or TOUCH_INVERT_X instead.
 #define TOUCH_SWAP_XY   0
-#define TOUCH_INVERT_X  1
-#define TOUCH_INVERT_Y  1
+// The TFT is rotated 180 degrees below. Reverse both calibrated touch axes
+// so a physical tap still activates the item visibly under the finger.
+#define TOUCH_INVERT_X  0
+#define TOUCH_INVERT_Y  0
 
 // Simple RGB565 color constants
 #define COL_BLACK     0x0000
@@ -128,6 +136,24 @@ bool diagOledOk = false;
 bool diagTftOk = false;
 bool diagTouchOk = false;
 bool diagScaleOk = false;
+bool hopperManualRunning = false;
+unsigned long hopperManualStartedAt = 0;
+
+enum IndicatorState { INDICATOR_READY, INDICATOR_ACTIVE, INDICATOR_ERROR };
+IndicatorState indicatorState = INDICATOR_READY;
+
+void setMachineIndicator(IndicatorState state, bool sound = false) {
+  indicatorState = state;
+  digitalWrite(LED_GREEN_PIN, state == INDICATOR_READY ? HIGH : LOW);
+  digitalWrite(LED_BLUE_PIN,  state == INDICATOR_ACTIVE ? HIGH : LOW);
+  digitalWrite(LED_RED_PIN,   state == INDICATOR_ERROR ? HIGH : LOW);
+
+  if (!sound) return;
+  if (state == INDICATOR_READY) tone(BUZZER_PIN, 1800, 90);
+  else if (state == INDICATOR_ACTIVE) tone(BUZZER_PIN, 1200, 110);
+  else tone(BUZZER_PIN, 350, 450);
+}
+
 
 // ================= CATALOG =================
 // EDIT these to exactly match your Supabase paper_settings / ballpen_settings
@@ -192,6 +218,20 @@ volatile bool orderInProgress = false;
 int cartDispenseIndex = 0;
 String orderSummaryText = "";
 float orderTotalCost = 0;
+
+// Green means a customer can safely start a transaction. Blue is used while
+// booting/connecting or dispensing; red means Wi-Fi is unavailable or an
+// operation has failed. Keep this decision in one place so an error does not
+// incorrectly return to green while the ESP32 is still disconnected.
+void refreshMachineAvailability(bool sound = false) {
+  if (orderInProgress || wifiStatus == WIFI_STATUS_CONNECTING || wifiStatus == WIFI_STATUS_IDLE) {
+    setMachineIndicator(INDICATOR_ACTIVE, sound);
+  } else if (wifiStatus == WIFI_STATUS_CONNECTED) {
+    setMachineIndicator(INDICATOR_READY, sound);
+  } else {
+    setMachineIndicator(INDICATOR_ERROR, sound);
+  }
+}
 
 // ================= DRAWING HELPERS =================
 
@@ -569,7 +609,11 @@ void addToCart(String type, int id, const char* name, float price, int qty) {
 }
 
 void startOrder() {
+  // A customer transaction must never inherit a manual hopper test state.
+  digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
+  hopperManualRunning = false;
   orderInProgress = true;
+  setMachineIndicator(INDICATOR_ACTIVE, true);
   setCoinAcceptance(false); // freeze the credit snapshot during reservation/change/dispense
   orderSummaryText = "";
   orderTotalCost = 0;
@@ -594,7 +638,8 @@ void handleMainTouch(int x, int y) {
   // VIEW CART is deliberately checked before the WiFi gate below - it's
   // just showing what's already in the cart locally, no order/network
   // action, so it should work even while offline.
-  if (x >= 20 && x <= 220 && y >= 285 && y <= 315) {
+  // Measured after the 180-degree display/touch rotation.
+  if (x >= 20 && x <= 230 && y >= 320 && y <= 340) {
     currentScreen = SCREEN_CART;
     drawCartScreen();
     return;
@@ -678,7 +723,8 @@ void handleCatalogTouch(int x, int y) {
     }
   }
 
-  if (x >= 15 && x <= 110 && y >= 275 && y <= 310) { // ADD
+  // Measured after the 180-degree display/touch rotation.
+  if (x >= 20 && x <= 120 && y >= 270 && y <= 350) { // ADD
     for (int i = 0; i < count; i++) {
       if (pendingQty[i] > 0) {
         int productId = catalog[i].id;
@@ -698,7 +744,7 @@ void handleCatalogTouch(int x, int y) {
     return;
   }
 
-  if (x >= 130 && x <= 225 && y >= 275 && y <= 310) { // CANCEL
+  if (x >= 140 && x <= 240 && y >= 270 && y <= 350) { // CANCEL
     currentScreen = SCREEN_MAIN;
     drawMainScreen();
     return;
@@ -727,7 +773,8 @@ void handleCartTouch(int x, int y) {
     }
   }
 
-  if (x >= 20 && x <= 220 && y >= 275 && y <= 310) { // BACK
+  // Measured after the 180-degree display/touch rotation.
+  if (x >= 20 && x <= 230 && y >= 320 && y <= 340) { // BACK
     currentScreen = SCREEN_MAIN;
     drawMainScreen();
   }
@@ -737,8 +784,10 @@ void handleCartTouch(int x, int y) {
 
 void tftUiBegin() {
   tft.begin();
-  tft.setRotation(0);
+  tft.setRotation(2); // 180-degree TFT rotation; keeps the 240x320 layout
   diagTouchOk = ts.begin();
+  // Raw touch coordinates are calibrated and inverted manually in tftUiLoop().
+  // Keep this at 0 to avoid applying a second rotation in the library.
   ts.setRotation(0);
   resetPendingSelections();
   currentScreen = (credits > 0) ? SCREEN_MAIN : SCREEN_IDLE;
@@ -759,9 +808,13 @@ void tftUiSetCredits() {
   }
 }
 
-void tftUiSetWifiStatus(WifiStatus status) {
-  wifiStatus = status;
+// Use int here because the Arduino IDE's auto-prototype generator places
+// function prototypes before enum declarations in some builds.
+void tftUiSetWifiStatus(int status) {
+  bool changed = wifiStatus != status;
+  wifiStatus = (WifiStatus)status;
   uiWifiConnected = (status == WIFI_STATUS_CONNECTED);
+  if (!orderInProgress) refreshMachineAvailability(changed);
   // Idle and main screens both carry WiFi-dependent messaging, so give
   // those a full redraw when the status flips - not just the status bar -
   // so the spinner/"can't be detected" message appears/disappears
@@ -837,15 +890,8 @@ void tftUiLoop() {
     default: break; // SCREEN_IDLE has nothing to tap
   }
 
-  // On-screen touch debug readout - drawn AFTER the handler above, so it
-  // survives any full-screen redraw the tap just triggered and stays
-  // visible until the next touch. Lets you read exact tap coordinates
-  // directly off the machine, no laptop/Serial Monitor needed.
-  tft.fillRect(0, tft.height() - 12, tft.width(), 12, COL_BLACK);
-  tft.setTextColor(COL_WHITE);
-  tft.setTextSize(1);
-  tft.setCursor(2, tft.height() - 10);
-  tft.print("Touch: x=" + String(x) + " y=" + String(y));
+  // Touch coordinates remain available in the USB Serial Monitor only.
+  // Do not draw them over the customer-facing TFT interface.
 }
 
 // ================= DIAGNOSTICS =================
@@ -892,24 +938,30 @@ void runDiagnostics() {
 
   Serial.println("--- Pen IR sensors (active LOW = beam broken) ---");
   for (int i = 0; i < 3; i++) {
-    int level = digitalRead(penIrPins[i]);
-    Serial.print("  Slot "); Serial.print(i + 1);
-    Serial.print(" (pin "); Serial.print(penIrPins[i]); Serial.print(")... ");
-    Serial.println(level == HIGH ? "OK - beam clear" : "WARNING - reading LOW at idle, check wiring/alignment");
-  }
-
-  Serial.println("--- Pen steppers (pins only - no position feedback) ---");
-  for (int i = 0; i < 3; i++) {
-    Serial.print("  Slot "); Serial.print(i + 1); Serial.print(": pins ");
-    for (int p = 0; p < 4; p++) {
-      Serial.print(penStopPins[i][p]);
-      if (p < 3) Serial.print(",");
-    }
-    Serial.print(" - configured. Send DIAG:MOVE"); Serial.print(i + 1);
-    Serial.println(" to jog it and confirm visually.");
+    Serial.print("  Slot "); Serial.print(i + 1); Serial.print(" (D");
+    Serial.print(penIrPins[i]); Serial.print("): ");
+    Serial.println(digitalRead(penIrPins[i]) == HIGH ? "OK - beam clear" : "WARNING - LOW at idle; check IR alignment");
   }
 
   Serial.println("==================================");
+}
+
+void printHardwareStatus() {
+  Serial.println("--- HARDWARE STATUS ---");
+  Serial.print("Credit: P"); Serial.println(credits);
+  Serial.print("Order active: "); Serial.println(orderInProgress ? "YES" : "NO");
+  Serial.print("Indicator: ");
+  Serial.println(indicatorState == INDICATOR_READY ? "READY (green)" : indicatorState == INDICATOR_ACTIVE ? "ACTIVE (blue)" : "ERROR (red)");
+  for (int i = 0; i < 3; i++) {
+    Serial.print("Pen IR "); Serial.print(i + 1); Serial.print(" (D");
+    Serial.print(penIrPins[i]); Serial.print("): ");
+    Serial.println(digitalRead(penIrPins[i]) == LOW ? "LOW / blocked" : "HIGH / clear");
+  }
+  Serial.print("Hopper relay D14: ");
+  Serial.println(digitalRead(CHANGE_HOPPER_MOTOR_PIN) == HOPPER_RELAY_ON ? "ON" : "OFF");
+  Serial.print("Hopper sensor D15: ");
+  Serial.println(digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW ? "LOW / blocked" : "HIGH / clear");
+  Serial.println("Commands: STATUS | HOPPER 1 | HOPPER ON | HOPPER OFF");
 }
 
 // ================= EXISTING MACHINE LOGIC =================
@@ -921,7 +973,7 @@ void setup() {
   #endif
   Serial.println("--- SYSTEM STARTING ---");
 
-  for (int i = 0; i < 3; i++) penSteppers[i]->setSpeed(10); // 10 RPM each - fixes vibration, keeps torque
+  for (int i = 0; i < 3; i++) penSteppers[i]->setSpeed(10);
   Serial.println("3 pen steppers configured (10 RPM each).");
 
   Wire.begin();
@@ -945,13 +997,21 @@ void setup() {
   tftUiBegin();
   Serial.println("Touchscreen UI initialized.");
 
+  pinMode(LED_GREEN_PIN, OUTPUT);
+  pinMode(LED_BLUE_PIN, OUTPUT);
+  pinMode(LED_RED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  // Start blue until the ESP32 confirms that the database connection path is
+  // available. The Wi-Fi status handler changes it to green/red afterward.
+  setMachineIndicator(INDICATOR_ACTIVE, true);
+
   pinMode(COIN_PIN, INPUT_PULLUP);
   pinMode(COIN_INHIBIT_PIN, OUTPUT);
   setCoinAcceptance(true);
   attachInterrupt(digitalPinToInterrupt(COIN_PIN), coinInterrupt, FALLING);
-  pinMode(PEN_IR_PIN, INPUT);
-  pinMode(PEN_IR_PIN2, INPUT);
-  pinMode(PEN_IR_PIN3, INPUT);
+  pinMode(PEN_IR_PIN, INPUT_PULLUP);
+  pinMode(PEN_IR_PIN2, INPUT_PULLUP);
+  pinMode(PEN_IR_PIN3, INPUT_PULLUP);
   for (int i = 0; i < 4; i++) {
     pinMode(PAPER_STEP_PINS[i], OUTPUT);
     pinMode(PAPER_DIR_PINS[i], OUTPUT);
@@ -961,7 +1021,7 @@ void setup() {
   pinMode(PAPER_ENABLE_PIN, OUTPUT);
   digitalWrite(PAPER_ENABLE_PIN, HIGH); // drivers disabled until a paper plan arrives
   pinMode(CHANGE_HOPPER_MOTOR_PIN, OUTPUT);
-  digitalWrite(CHANGE_HOPPER_MOTOR_PIN, LOW);
+  digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   pinMode(CHANGE_HOPPER_SENSOR_PIN, INPUT_PULLUP);
 
   servoChange.attach(SERVO_CHANGE_PIN);
@@ -1005,6 +1065,13 @@ void loop() {
     }
   }
 
+  // A manual hopper test must never leave the relay powered indefinitely.
+  if (hopperManualRunning && millis() - hopperManualStartedAt >= HOPPER_MANUAL_MAX_MS) {
+    digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
+    hopperManualRunning = false;
+    Serial.println("Hopper manual safety timeout: OFF");
+  }
+
   // --- Check if coins were inserted ---
   static uint16_t lastCredits = 65535;
   noInterrupts();
@@ -1031,22 +1098,99 @@ void loop() {
     handleCloudCommand(msg);
   }
 
-  // --- Diagnostics commands, typed into the Serial Monitor (USB serial) ---
-  // Separate from CLOUD_SERIAL, so this never interferes with ESP32 traffic.
+  // --- Hardware diagnostics, typed into the USB Serial Monitor ---
+  // These are intentionally separate from CLOUD_SERIAL, so a bench test
+  // cannot send a false transaction message to the ESP32/database.
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
+    cmd.toUpperCase();
     if (cmd == "DIAG") {
       runDiagnostics();
+    } else if (cmd == "STATUS") {
+      printHardwareStatus();
+    } else if (cmd == "TEST:GREEN") {
+      setMachineIndicator(INDICATOR_READY, true);
+      Serial.println("TEST: green LED and ready tone.");
+    } else if (cmd == "TEST:BLUE") {
+      setMachineIndicator(INDICATOR_ACTIVE, true);
+      Serial.println("TEST: blue LED and active tone.");
+    } else if (cmd == "TEST:RED") {
+      setMachineIndicator(INDICATOR_ERROR, true);
+      Serial.println("TEST: red LED and error tone.");
+    } else if (cmd == "TEST:BUZZER") {
+      tone(BUZZER_PIN, 1500, 300);
+      Serial.println("TEST: buzzer tone.");
+    } else if (cmd == "HOPPER ON") {
+      if (orderInProgress) {
+        Serial.println("HOPPER ABORT: an order is active.");
+      } else {
+        digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_ON);
+        hopperManualRunning = true;
+        hopperManualStartedAt = millis();
+        Serial.println("Hopper: ON (safety stop in 10 seconds; send HOPPER OFF to stop now).");
+      }
+    } else if (cmd == "HOPPER OFF") {
+      digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
+      hopperManualRunning = false;
+      Serial.println("Hopper: OFF");
+    } else if (cmd.startsWith("HOPPER ")) {
+      if (orderInProgress) {
+        Serial.println("HOPPER ABORT: an order is active.");
+      } else {
+        int coins = cmd.substring(7).toInt();
+        if (coins <= 0) {
+          Serial.println("HOPPER FAIL: use HOPPER 1, HOPPER 2, etc.");
+        } else {
+          int result = releaseVerifiedChange(coins * 100);
+          Serial.println(result == coins * 100 ? "HOPPER PASS: all coins sensor-confirmed." : "HOPPER FAIL: check hopper/sensor.");
+        }
+      }
+    } else if (cmd == "DIAG:STATUS") {
+      runDiagnostics();
+      printHardwareStatus();
+    } else if (cmd.startsWith("DIAG:PEN")) {
+      int slot = cmd.substring(8).toInt(); // DIAG:PEN1/2/3
+      if (orderInProgress) {
+        Serial.println("DIAG ABORT: an order is active.");
+      } else if (slot < 1 || slot > 3) {
+        Serial.println("DIAG FAIL: use DIAG:PEN1, DIAG:PEN2, or DIAG:PEN3.");
+      } else {
+        bool passed = dispenseOnePen(slot);
+        Serial.println(passed ? "PEN PASS: IR confirmed the item." : "PEN FAIL: sensor did not confirm an item.");
+      }
+    } else if (cmd.startsWith("DIAG:HOPPER")) {
+      String value = cmd.substring(11);
+      if (orderInProgress) {
+        Serial.println("DIAG ABORT: an order is active.");
+      } else if (value == "OFF") {
+        digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
+        hopperManualRunning = false;
+        Serial.println("Hopper: OFF");
+      } else {
+        int coins = value.toInt(); // DIAG:HOPPER1, DIAG:HOPPER2, etc.
+        if (coins <= 0) {
+          Serial.println("DIAG FAIL: use DIAG:HOPPER1, DIAG:HOPPER2, etc.");
+        } else {
+          int result = releaseVerifiedChange(coins * 100);
+          Serial.println(result == coins * 100 ? "HOPPER PASS: all coins sensor-confirmed." : "HOPPER FAIL: check hopper/sensor.");
+        }
+      }
     } else if (cmd.startsWith("DIAG:MOVE")) {
       int slot = cmd.substring(9).toInt(); // DIAG:MOVE1/2/3
-      int idx = constrain(slot - 1, 0, 2);
-      Serial.print("Jogging pen slot "); Serial.println(slot);
-      penSteppers[idx]->step(200);
-      delay(300);
-      penSteppers[idx]->step(-200);
-      stopStepper(idx);
-      Serial.println("Done - did slot " + String(slot) + " visibly move?");
+      if (orderInProgress || slot < 1 || slot > 3) {
+        Serial.println("DIAG ABORT: use an idle machine and DIAG:MOVE1/2/3.");
+      } else {
+        int idx = slot - 1;
+        Serial.print("Jogging pen slot "); Serial.println(slot);
+        penSteppers[idx]->step(200);
+        delay(300);
+        penSteppers[idx]->step(-200);
+        stopStepper(idx);
+        Serial.println("Done - did slot " + String(slot) + " visibly move?");
+      }
+    } else if (cmd.length()) {
+      Serial.println("Commands: STATUS | HOPPER 1 | HOPPER ON | HOPPER OFF | TEST:GREEN/BLUE/RED/BUZZER | DIAG | DIAG:PEN1..3 | DIAG:MOVE1..3");
     }
   }
 }
@@ -1056,10 +1200,14 @@ bool dispenseOnePen(int channel) {
   if (penIndex < 0 || penIndex > 2) return false;
   Stepper* pen = penSteppers[penIndex];
   int irPin = penIrPins[penIndex];
+  if (digitalRead(irPin) == LOW) {
+    Serial.println("PEN ABORT: IR is LOW before dispense; clear/align the chute.");
+    return false;
+  }
   pen->step(1024);
   unsigned long startedAt = millis();
   bool detected = false;
-  while (millis() - startedAt < 5000) {
+  while (millis() - startedAt < PEN_SENSOR_TIMEOUT_MS) {
     if (digitalRead(irPin) == LOW) { detected = true; break; }
   }
   delay(300);
@@ -1101,16 +1249,26 @@ bool dispenseOnePaper(int channel) {
   return false;
 }
 
+void stopStepper(int penIndex) {
+  for (int p = 0; p < 4; p++) digitalWrite(penStopPins[penIndex][p], LOW);
+}
+
 int releaseVerifiedChange(int changeCents) {
   if (changeCents == 0) return 0;
   // Initial release uses one physical P1 hopper.  The server reserves the
   // same denomination, so this routine must prove every requested coin via
   // the hopper's exit sensor before the machine is allowed to dispense goods.
   if (changeCents % 100 != 0) return -1;
+  // The hopper exit sensor must be clear before the motor starts. Otherwise
+  // an old blocked signal could be mistaken for a newly released P1 coin.
+  if (digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW) {
+    Serial.println("HOPPER ABORT: exit sensor is LOW; clear/verify it first.");
+    return -1;
+  }
   const int expectedCoins = changeCents / 100;
   int countedCoins = 0;
-  bool previousBlocked = digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW;
-  digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HIGH);
+  bool previousBlocked = false;
+  digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_ON);
   unsigned long lastCoinAt = millis();
   while (countedCoins < expectedCoins && millis() - lastCoinAt < CHANGE_COIN_TIMEOUT_MS) {
     bool blocked = digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW;
@@ -1120,7 +1278,7 @@ int releaseVerifiedChange(int changeCents) {
     }
     previousBlocked = blocked;
   }
-  digitalWrite(CHANGE_HOPPER_MOTOR_PIN, LOW);
+  digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   return countedCoins == expectedCoins ? countedCoins * 100 : -1;
 }
 
@@ -1188,6 +1346,7 @@ void finishUiAfterTransaction(String message) {
   activeTransactionId = "";
   updateLCD();
   if (completed) {
+    refreshMachineAvailability(true);
     tftUiShowSuccess("Take items");
     currentScreen = SCREEN_IDLE;
   } else {
@@ -1227,10 +1386,6 @@ void handleCloudCommand(String msg) {
   }
 }
 
-void stopStepper(int penIndex) {
-  for (int p = 0; p < 4; p++) digitalWrite(penStopPins[penIndex][p], LOW);
-}
-
 void updateLCD() {
   display.clearDisplay();
   display.setTextColor(SH110X_WHITE);
@@ -1251,6 +1406,7 @@ void updateLCD() {
 }
 
 void showError(String m) {
+  setMachineIndicator(INDICATOR_ERROR, true);
   drawStatusScreen("Error", m);
   tftUiShowError(m);
   if (orderInProgress) {
@@ -1260,6 +1416,7 @@ void showError(String m) {
     currentScreen = SCREEN_MAIN;
   }
   delay(2000);
+  refreshMachineAvailability();
   isProcessing = false;
   updateLCD();
   redrawCurrentScreen();
