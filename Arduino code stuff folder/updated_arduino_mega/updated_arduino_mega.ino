@@ -961,7 +961,47 @@ void printHardwareStatus() {
   Serial.println(digitalRead(CHANGE_HOPPER_MOTOR_PIN) == HOPPER_RELAY_ON ? "ON" : "OFF");
   Serial.print("Hopper sensor D15: ");
   Serial.println(digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW ? "LOW / blocked" : "HIGH / clear");
-  Serial.println("Commands: STATUS | HOPPER 1 | HOPPER ON | HOPPER OFF");
+  Serial.println("Commands: STATUS | SOFT_RESET | ESP_RESET | RESET:ALL | HOPPER 1 | HOPPER ON | HOPPER OFF");
+}
+
+void softResetMachineState() {
+  Serial.println("SOFT RESET: returning machine logic to idle state.");
+
+  digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
+  hopperManualRunning = false;
+  digitalWrite(PAPER_ENABLE_PIN, HIGH);
+  for (int i = 0; i < 3; i++) stopStepper(i);
+
+  noInterrupts();
+  credits = 0;
+  coinPulseReceived = false;
+  interrupts();
+
+  isProcessing = false;
+  orderInProgress = false;
+  activeTransactionId = "";
+  activeChangeCents = 0;
+  selectedPaperBrand = "Budget";
+  activeCatalogType = "paper";
+  cartCount = 0;
+  cartDispenseIndex = 0;
+  orderSummaryText = "";
+  orderTotalCost = 0;
+  resetPendingSelections();
+  setCoinAcceptance(true);
+
+  servoChange.write(0);
+  servoPen.write(0);
+
+  currentScreen = SCREEN_IDLE;
+  refreshMachineAvailability(true);
+  updateLCD();
+  tftUiSetCredits();
+  redrawCurrentScreen();
+  CLOUD_SERIAL.println("CREDIT:0");
+  CLOUD_SERIAL.println("SOFT_RESET");
+  CLOUD_SERIAL.println("STATUS?");
+  Serial.println("SOFT RESET: done.");
 }
 
 // ================= EXISTING MACHINE LOGIC =================
@@ -1121,6 +1161,14 @@ void loop() {
     } else if (cmd == "TEST:BUZZER") {
       tone(BUZZER_PIN, 1500, 300);
       Serial.println("TEST: buzzer tone.");
+    } else if (cmd == "SOFT_RESET") {
+      softResetMachineState();
+    } else if (cmd == "ESP_RESET") {
+      CLOUD_SERIAL.println("ESP_RESET");
+      Serial.println("Requested ESP32 software restart.");
+    } else if (cmd == "RESET:ALL") {
+      CLOUD_SERIAL.println("ESP_RESET");
+      softResetMachineState();
     } else if (cmd == "HOPPER ON") {
       if (orderInProgress) {
         Serial.println("HOPPER ABORT: an order is active.");
@@ -1190,7 +1238,7 @@ void loop() {
         Serial.println("Done - did slot " + String(slot) + " visibly move?");
       }
     } else if (cmd.length()) {
-      Serial.println("Commands: STATUS | HOPPER 1 | HOPPER ON | HOPPER OFF | TEST:GREEN/BLUE/RED/BUZZER | DIAG | DIAG:PEN1..3 | DIAG:MOVE1..3");
+      Serial.println("Commands: STATUS | SOFT_RESET | ESP_RESET | RESET:ALL | HOPPER 1 | HOPPER ON | HOPPER OFF | TEST:GREEN/BLUE/RED/BUZZER | DIAG | DIAG:PEN1..3 | DIAG:MOVE1..3");
     }
   }
 }

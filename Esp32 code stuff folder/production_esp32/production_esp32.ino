@@ -2,6 +2,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
+#include <Esp.h>
 
 // --- WIFI CONFIG ---
 const char* WIFI_SSID = "ashid";
@@ -33,6 +34,7 @@ bool connectToWifi(unsigned long timeoutMs);
 bool printNearbyWifiNetworks();
 void updateMachineStatus();
 void updateStatusKey(const String &key, const String &value);
+void softResetRuntime();
 
 void sendError(const String &message) {
   MEGA_SERIAL.println("ERR:" + message);
@@ -337,6 +339,27 @@ void handleMegaMessage(String message) {
   else if (message.startsWith("CHANGE_FAIL:")) cancelReservation(message);
   else if (message.startsWith("FINISH:")) finishTransaction(message);
   else if (message == "STATUS?") sendWifiStatus();
+  else if (message == "SOFT_RESET") softResetRuntime();
+  else if (message == "ESP_RESET") {
+    MEGA_SERIAL.println("ERR:ESP_RESTARTING");
+    Serial.println("ESP_RESET command received from Mega. Restarting...");
+    delay(250);
+    ESP.restart();
+  }
+}
+
+void softResetRuntime() {
+  Serial.println("SOFT_RESET command received from Mega. Refreshing ESP32 runtime state.");
+  wifiConnected = false;
+  lastHeartbeatAt = 0;
+  lastStatusUpdate = 0;
+  lastWiFiCheck = 0;
+  disconnectedSince = 0;
+  sendWifiStatus();
+  wifiConnected = connectToWifi(10000);
+  sendWifiStatus();
+  if (wifiConnected) updateMachineStatus();
+  Serial.println("ESP32 soft reset routine complete.");
 }
 
 // ================= SETUP / LOOP =================

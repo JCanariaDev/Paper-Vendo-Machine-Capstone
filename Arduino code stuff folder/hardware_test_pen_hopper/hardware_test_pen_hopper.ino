@@ -6,8 +6,8 @@
   Required wiring:
     Black pen ULN2003: IN1=D3, IN2=D11, IN3=D4, IN4=D12
     Black pen IR OUT:  D7   (expected HIGH clear, LOW when pen passes)
-    Hopper relay IN:   D14  (default assumes relay activates on HIGH)
-    Hopper sensor:     D15 (expected HIGH idle, LOW when a P1 coin passes)
+    Hopper relay IN:   D8   (default assumes relay activates on HIGH)
+    Hopper coin OUT:   D2   (expected HIGH idle, LOW when a P1 coin passes)
 
   Open Serial Monitor at 115200 baud and send one command:
     HELP         show commands
@@ -22,7 +22,7 @@
 
   Safety:
     - Test with hopper empty first, then add only P1 coins.
-    - Hopper must be powered through a relay/motor driver; never from D14.
+    - Hopper must be powered through a relay/motor driver; never from D8.
     - If relay turns ON at boot, set HOPPER_RELAY_ON to LOW below.
 */
 
@@ -30,8 +30,8 @@
 
 const int PEN_STEPS_PER_REVOLUTION = 2048;
 const int PEN_IR_PIN = 7;
-const int HOPPER_RELAY_PIN = 14;
-const int HOPPER_SENSOR_PIN = 15;
+const int HOPPER_RELAY_PIN = 8;
+const int HOPPER_SENSOR_PIN = 2;
 
 // Change this to LOW only if your relay is confirmed active-low.
 const int HOPPER_RELAY_ON = HIGH;
@@ -66,7 +66,7 @@ void hopperOn() {
 void printStatus() {
   Serial.print("Pen IR D7: ");
   Serial.println(digitalRead(PEN_IR_PIN) == LOW ? "LOW (blocked/detected)" : "HIGH (clear)");
-  Serial.print("Hopper sensor D15: ");
+  Serial.print("Hopper coin OUT D2: ");
   Serial.println(digitalRead(HOPPER_SENSOR_PIN) == LOW ? "LOW (coin/switch active)" : "HIGH (idle)");
 }
 
