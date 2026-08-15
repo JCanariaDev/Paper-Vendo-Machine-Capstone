@@ -2,11 +2,11 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
 #include <Servo.h>
-#include <HX711.h>
 #include <Stepper.h>
 #include <SPI.h>
 #include <Adafruit_ILI9341.h>
 #include <XPT2046_Touchscreen.h>
+#include <avr/wdt.h>   // hardware watchdog — used for hardware reset button
 
 /*
   Install via Library Manager if missing:
@@ -15,17 +15,106 @@
     - XPT2046_Touchscreen (by Paul Stoffregen)
 */
 
+// =============================================================
+// ARDUINO MEGA 2560 — COMPLETE PIN ASSIGNMENT REFERENCE
+// =============================================================
+//
+// ── DIGITAL I/O ──────────────────────────────────────────────
+//  D2   COIN_PIN            Coin acceptor pulse input (INPUT_PULLUP, INT0)
+//  D3   penStepper1 IN1     28BYJ-48 pen slot 1, ULN2003 coil A
+//  D4   penStepper1 IN2     28BYJ-48 pen slot 1, ULN2003 coil B
+//  D7   PEN_IR_PIN          IR sensor pen slot 1 (INPUT_PULLUP, LOW = beam broken)
+//  D8   LED_GREEN_PIN       Green LED — machine READY / AVAILABLE
+//  D9   SERVO_CHANGE_PIN    Change-dispense servo signal
+//  D10  SERVO_PEN_PIN       Pen-ejection servo signal
+//  D11  penStepper1 IN3     28BYJ-48 pen slot 1, ULN2003 coil C
+//  D12  penStepper1 IN4     28BYJ-48 pen slot 1, ULN2003 coil D
+//  D13  LED_BLUE_PIN        Blue LED  — machine IDLE / IN USE (busy)
+//  D14  CHANGE_HOPPER_MOTOR_PIN  Relay IN controlling coin hopper motor
+//  D15  CHANGE_HOPPER_SENSOR_PIN Coin hopper exit IR sensor (INPUT_PULLUP)
+//  D16  COIN_INHIBIT_PIN    Coin acceptor INHIBIT line (OUTPUT, active HIGH)
+//  D18  TX1 (Serial1)       → ESP32 RX2 (via 3.3V logic level converter)
+//  D19  RX1 (Serial1)       ← ESP32 TX2 (via 3.3V logic level converter)
+//  D22  penStepper2 IN1     28BYJ-48 pen slot 2, ULN2003 coil A
+//  D23  penStepper2 IN2     28BYJ-48 pen slot 2, ULN2003 coil B
+//  D24  penStepper2 IN3     28BYJ-48 pen slot 2, ULN2003 coil C
+//  D25  penStepper2 IN4     28BYJ-48 pen slot 2, ULN2003 coil D
+//  D26  penStepper3 IN1     28BYJ-48 pen slot 3, ULN2003 coil A
+//  D27  penStepper3 IN2     28BYJ-48 pen slot 3, ULN2003 coil B
+//  D28  penStepper3 IN3     28BYJ-48 pen slot 3, ULN2003 coil C
+//  D29  penStepper3 IN4     28BYJ-48 pen slot 3, ULN2003 coil D
+//  D30  PEN_IR_PIN2         IR sensor pen slot 2 (INPUT_PULLUP)
+//  D31  PEN_IR_PIN3         IR sensor pen slot 3 (INPUT_PULLUP)
+//  D32  PAPER_STEP_PINS[0]  Paper channel 1 STEP (A4988/TMC2209)
+//  D33  PAPER_DIR_PINS[0]   Paper channel 1 DIR
+//  D34  PAPER_STEP_PINS[1]  Paper channel 2 STEP
+//  D35  PAPER_DIR_PINS[1]   Paper channel 2 DIR
+//  D36  PAPER_STEP_PINS[2]  Paper channel 3 STEP
+//  D37  PAPER_DIR_PINS[2]   Paper channel 3 DIR
+//  D38  PAPER_STEP_PINS[3]  Paper channel 4 STEP
+//  D39  PAPER_DIR_PINS[3]   Paper channel 4 DIR
+//  D40  PAPER_ENABLE_PIN    Common ENABLE for all 4 paper stepper drivers (active LOW)
+//  D41  PAPER_EXIT_PINS[0]  Paper channel 1 exit IR sensor (INPUT_PULLUP)
+//  D42  PAPER_EXIT_PINS[1]  Paper channel 2 exit IR sensor (INPUT_PULLUP)
+//  D43  PAPER_EXIT_PINS[2]  Paper channel 3 exit IR sensor (INPUT_PULLUP)
+//  D44  PAPER_EXIT_PINS[3]  Paper channel 4 exit IR sensor (INPUT_PULLUP)
+//  D45  LED_RED_PIN         Red LED   — machine ERROR state
+//  D46  BUZZER_PIN          Passive buzzer (2-pin, driven by tone())
+//  D47  TOUCH_CS            XPT2046 touchscreen chip select (SPI)
+//  D48  TFT_DC              ILI9341 TFT data/command
+//  D49  TFT_RST             ILI9341 TFT reset
+//  D50  MISO  (hardware SPI) shared TFT + touch
+//  D51  MOSI  (hardware SPI) shared TFT + touch
+//  D52  SCK   (hardware SPI) shared TFT + touch
+//  D53  TFT_CS              ILI9341 TFT chip select (SPI)
+//
+// ── ANALOG HEADER (Used as Digital Inputs) ────────────────────
+//  A8   HW_RESET_BTN_PIN    Hardware-reset push button (INPUT_PULLUP)
+//       → Momentary press pulls to GND, triggers AVR watchdog full reboot
+//  A9   SW_RESET_BTN_PIN    Software-reset push button (INPUT_PULLUP)
+//       → Momentary press pulls to GND, calls softResetMachineState()
+//
+// ── I²C BUS (Wire) ───────────────────────────────────────────
+//  D20  SDA    SH1106G OLED 128×64 (address 0x3C)
+//  D21  SCL    SH1106G OLED 128×64
+//
+// ── HARDWARE SERIAL ──────────────────────────────────────────
+//  D0 / D1  Serial0 (USB / Serial Monitor at 115200 baud)
+//  D18 / D19 Serial1 (CLOUD_SERIAL to ESP32 at 9600 baud via LLC)
+//            D18 = TX1 → ESP32 RX2 (Pin 16)
+//            D19 = RX1 ← ESP32 TX2 (Pin 17)
+//
+// ── INDICATOR LEGEND ─────────────────────────────────────────
+//  GREEN (D8)  — Machine READY / AVAILABLE  → safe to insert coins
+//  BLUE  (D13) — Machine IDLE / IN USE      → booting, connecting, dispensing
+//  RED   (D45) — Machine ERROR              → Wi-Fi lost, dispense failed
+//  BUZZER (D46) — Passive 2-pin buzzer
+//    READY  tone: two short chirps  (1800 Hz × 80 ms, 60 ms gap, repeat)
+//    ACTIVE tone: one soft beep     (1100 Hz × 120 ms)
+//    ERROR  tone: long low buzz     ( 350 Hz × 500 ms)
+//
+// ── RESET BUTTONS ────────────────────────────────────────────
+//  SW RESET (A9):  Software reset — clears credits/cart/order, returns to
+//                  IDLE, notifies ESP32. Does NOT reboot the MCU.
+//  HW RESET (A8):  Hardware reset — triggers AVR watchdog for a full
+//                  board reboot (equivalent to pressing the RESET pin).
+// =============================================================
+
 // --- PINS (existing) ---
 const int COIN_PIN = 2;
 const int COIN_INHIBIT_PIN = 16; // added: coin acceptor inhibit input, active HIGH by default
 const bool COIN_INHIBIT_ACTIVE_HIGH = true;
 // Three machine-state LEDs and one two-wire passive buzzer.
+// GREEN = ready/available | BLUE = idle/in-use (busy) | RED = error
 const int LED_GREEN_PIN = 8;
 const int LED_BLUE_PIN = 13;
 const int LED_RED_PIN = 45;
 const int BUZZER_PIN = 46;
-const int LOADCELL_DOUT = 5;
-const int LOADCELL_SCK = 6;
+
+// --- RESET BUTTONS (Active-LOW: Pin -> Button -> GND) ---
+// Wired to dedicated analog header pins A8/A9 to keep D18/D19 free for Serial1 (ESP32).
+const int HW_RESET_BTN_PIN = A8; // A8 — full board reboot via watchdog
+const int SW_RESET_BTN_PIN = A9; // A9 — software state reset
 const int PEN_IR_PIN = 7;   // pen slot 1 IR sensor
 const int PEN_IR_PIN2 = 30; // pen slot 2 IR sensor
 const int PEN_IR_PIN3 = 31; // pen slot 3 IR sensor
@@ -89,7 +178,6 @@ const int penIrPins[3] = { PEN_IR_PIN, PEN_IR_PIN2, PEN_IR_PIN3 };
 
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 Servo servoChange, servoPen;
-HX711 scale;
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
 XPT2046_Touchscreen ts(TOUCH_CS);
@@ -135,23 +223,53 @@ String selectedPaperBrand = "Budget";
 bool diagOledOk = false;
 bool diagTftOk = false;
 bool diagTouchOk = false;
-bool diagScaleOk = false;
 bool hopperManualRunning = false;
 unsigned long hopperManualStartedAt = 0;
 
 enum IndicatorState { INDICATOR_READY, INDICATOR_ACTIVE, INDICATOR_ERROR };
 IndicatorState indicatorState = INDICATOR_READY;
 
+// --- RESET BUTTON DEBOUNCE TIMERS ---
+unsigned long hwResetDebounceUntil = 0;
+unsigned long swResetDebounceUntil = 0;
+
+// -----------------------------------------------------------------
+// setMachineIndicator(state, sound)
+//   GREEN (D8)  → INDICATOR_READY   : machine available, safe to insert coins
+//   BLUE  (D13) → INDICATOR_ACTIVE  : booting / connecting / dispensing (busy)
+//   RED   (D45) → INDICATOR_ERROR   : Wi-Fi lost, dispense failed, etc.
+//
+// Buzzer patterns (passive buzzer on D46, driven by tone()):
+//   READY  — two short chirps: 1800 Hz × 80 ms, 60 ms silence, 1800 Hz × 80 ms
+//   ACTIVE — one soft medium beep: 1100 Hz × 120 ms
+//   ERROR  — long descending buzz: 350 Hz × 500 ms
+// -----------------------------------------------------------------
 void setMachineIndicator(IndicatorState state, bool sound = false) {
   indicatorState = state;
-  digitalWrite(LED_GREEN_PIN, state == INDICATOR_READY ? HIGH : LOW);
+  digitalWrite(LED_GREEN_PIN, state == INDICATOR_READY  ? HIGH : LOW);
   digitalWrite(LED_BLUE_PIN,  state == INDICATOR_ACTIVE ? HIGH : LOW);
-  digitalWrite(LED_RED_PIN,   state == INDICATOR_ERROR ? HIGH : LOW);
+  digitalWrite(LED_RED_PIN,   state == INDICATOR_ERROR  ? HIGH : LOW);
 
   if (!sound) return;
-  if (state == INDICATOR_READY) tone(BUZZER_PIN, 1800, 90);
-  else if (state == INDICATOR_ACTIVE) tone(BUZZER_PIN, 1200, 110);
-  else tone(BUZZER_PIN, 350, 450);
+
+  switch (state) {
+    case INDICATOR_READY:
+      // Two short chirps — "ready to serve" confirmation
+      tone(BUZZER_PIN, 1800, 80);
+      delay(140); // 80 ms tone + 60 ms gap
+      tone(BUZZER_PIN, 1800, 80);
+      break;
+
+    case INDICATOR_ACTIVE:
+      // One soft beep — machine acknowledges an action (busy/dispensing)
+      tone(BUZZER_PIN, 1100, 120);
+      break;
+
+    case INDICATOR_ERROR:
+      // Long low buzz — draws attention to an error condition
+      tone(BUZZER_PIN, 350, 500);
+      break;
+  }
 }
 
 
@@ -914,15 +1032,6 @@ void runDiagnostics() {
   Serial.print("Touchscreen (XPT2046)..... ");
   Serial.println(diagTouchOk ? "OK" : "FAIL - ts.begin() returned false");
 
-  Serial.print("Load cell (HX711)......... ");
-  unsigned long scaleStart = millis();
-  bool scaleReady = false;
-  while (millis() - scaleStart < 500) {
-    if (scale.is_ready()) { scaleReady = true; break; }
-  }
-  diagScaleOk = scaleReady;
-  Serial.println(diagScaleOk ? "OK" : "NOT RESPONDING - normal if not wired up yet");
-
   Serial.print("Coin acceptor pin (D2).... ");
   Serial.println("configured (INPUT_PULLUP + interrupt) - insert a coin to confirm live");
 
@@ -961,6 +1070,10 @@ void printHardwareStatus() {
   Serial.println(digitalRead(CHANGE_HOPPER_MOTOR_PIN) == HOPPER_RELAY_ON ? "ON" : "OFF");
   Serial.print("Hopper sensor D15: ");
   Serial.println(digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW ? "LOW / blocked" : "HIGH / clear");
+  Serial.print("HW Reset btn A8: ");
+  Serial.println(digitalRead(HW_RESET_BTN_PIN) == LOW ? "PRESSED (shorted to GND)" : "OK - idle HIGH");
+  Serial.print("SW Reset btn A9: ");
+  Serial.println(digitalRead(SW_RESET_BTN_PIN) == LOW ? "PRESSED (shorted to GND)" : "OK - idle HIGH");
   Serial.println("Commands: STATUS | SOFT_RESET | ESP_RESET | RESET:ALL | HOPPER 1 | HOPPER ON | HOPPER OFF");
 }
 
@@ -1045,6 +1158,12 @@ void setup() {
   // available. The Wi-Fi status handler changes it to green/red afterward.
   setMachineIndicator(INDICATOR_ACTIVE, true);
 
+  // --- RESET BUTTONS ---
+  // Both wired active-LOW: pin → button → GND. INPUT_PULLUP keeps line HIGH at rest.
+  pinMode(HW_RESET_BTN_PIN, INPUT_PULLUP); // A8
+  pinMode(SW_RESET_BTN_PIN, INPUT_PULLUP); // A9
+  Serial.println("Reset buttons configured: HW=A8, SW=A9 (INPUT_PULLUP).");
+
   pinMode(COIN_PIN, INPUT_PULLUP);
   pinMode(COIN_INHIBIT_PIN, OUTPUT);
   setCoinAcceptance(true);
@@ -1070,10 +1189,6 @@ void setup() {
   servoPen.write(0);
   Serial.println("Servos configured.");
 
-  // The HX711 is not needed for coin counting. Leave it out of startup while
-  // testing because a faulty module or wiring can stop the controller here.
-  Serial.println("HX711 startup skipped for coin/OLED test.");
-
   Serial.println("Machine Ready!");
   updateLCD();
   CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)credits));
@@ -1094,6 +1209,32 @@ void coinInterrupt() {
 }
 
 void loop() {
+  unsigned long now = millis();
+
+  // ── HARDWARE RESET BUTTON (A8) ──────────────────────────────────────────
+  // Pressing A8 pulls pin LOW. We debounce for 80 ms, then trigger the AVR
+  // watchdog (15 ms timeout) for a full board reboot.
+  if (digitalRead(HW_RESET_BTN_PIN) == LOW && now >= hwResetDebounceUntil) {
+    hwResetDebounceUntil = now + 1000;
+    Serial.println("HW RESET BUTTON (A8): triggering watchdog reboot...");
+    Serial.flush();
+    setMachineIndicator(INDICATOR_ERROR, false);
+    tone(BUZZER_PIN, 500, 200);
+    delay(200);
+    noInterrupts();
+    wdt_enable(WDTO_15MS); // arm watchdog — board resets in ~15 ms
+    while (true) {}        // spin until WDT fires
+  }
+
+  // ── SOFTWARE RESET BUTTON (A9) ──────────────────────────────────────────
+  // Pressing A9 pulls pin LOW. Calls softResetMachineState() to clear orders,
+  // reset credits, and return to IDLE without restarting the MCU.
+  if (digitalRead(SW_RESET_BTN_PIN) == LOW && now >= swResetDebounceUntil) {
+    swResetDebounceUntil = now + 500;
+    Serial.println("SW RESET BUTTON (A9): performing software state reset...");
+    softResetMachineState();
+  }
+
   tftUiLoop();
 
   // Animate the WiFi-connecting spinner, independent of any full-screen
@@ -1239,6 +1380,7 @@ void loop() {
       }
     } else if (cmd.length()) {
       Serial.println("Commands: STATUS | SOFT_RESET | ESP_RESET | RESET:ALL | HOPPER 1 | HOPPER ON | HOPPER OFF | TEST:GREEN/BLUE/RED/BUZZER | DIAG | DIAG:PEN1..3 | DIAG:MOVE1..3");
+      Serial.println("Hardware buttons: A8=HW_RESET (watchdog reboot) | A9=SW_RESET (state reset)");
     }
   }
 }
