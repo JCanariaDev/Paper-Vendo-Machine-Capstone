@@ -1,32 +1,47 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../App';
-import { Search, Edit3, CheckCircle, AlertCircle, X, ChevronRight, Info, HelpCircle } from 'lucide-react';
+import { 
+  Search, Edit3, CheckCircle, AlertCircle, X, Layers, 
+  Package, RefreshCw, HelpCircle, ArrowRightLeft, ShieldCheck, 
+  Cpu, Activity, PlusCircle, Check
+} from 'lucide-react';
 
 export default function Inventory() {
   const { user } = useAuth();
   const [paper, setPaper] = useState([]);
+  const [paperCompartments, setPaperCompartments] = useState([]);
   const [pen, setPen] = useState([]);
+  const [penCompartments, setPenCompartments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   
-  // Modal Editing States
-  const [editingItem, setEditingItem] = useState(null); // 'paper' or 'pen'
+  // Modals
+  const [editingMasterItem, setEditingMasterItem] = useState(null); // 'paper' or 'pen'
+  const [editingBay, setEditingBay] = useState(null); // { type: 'paper' | 'pen', bay: object }
   const [formData, setFormData] = useState({});
+  const [bayFormData, setBayFormData] = useState({
+    assigned_product_id: '',
+    pads_refilled: 1,
+    pieces_refilled: 10,
+    presence_status: 'HIGH',
+    current_stock: 50
+  });
   const [submitting, setSubmitting] = useState(false);
 
-  // Example Formula Modal States
+  // Example Formula Modal
   const [isFormulaModalOpen, setIsFormulaModalOpen] = useState(false);
-  const [calcType, setCalcType] = useState('paper');
   const [calcCoins, setCalcCoins] = useState(5);
   const [calcCost, setCalcCost] = useState(1);
-  const [calcSheets, setCalcSheets] = useState(4);
+  const [calcSheets, setCalcSheets] = useState(3);
 
   const fetchInventory = async () => {
     try {
       const res = await axios.get('/api/machine/inventory');
-      setPaper(res.data.paper);
-      setPen(res.data.pen);
+      setPaper(res.data.paper || []);
+      setPaperCompartments(res.data.paper_compartments || []);
+      setPen(res.data.pen || []);
+      setPenCompartments(res.data.pen_compartments || []);
     } catch (err) {
       console.error('Error fetching inventory:', err);
     } finally {
@@ -38,38 +53,79 @@ export default function Inventory() {
     fetchInventory();
   }, []);
 
-  const openEditModal = (type, item) => {
-    setEditingItem(type);
+  const openMasterEditModal = (type, item) => {
+    setEditingMasterItem(type);
     setFormData({ ...item });
   };
 
-  const closeEditModal = () => {
-    setEditingItem(null);
+  const closeMasterEditModal = () => {
+    setEditingMasterItem(null);
     setFormData({});
   };
 
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
+  const openBayModal = (type, bay) => {
+    setEditingBay({ type, bay });
+    if (type === 'paper') {
+      setBayFormData({
+        assigned_product_id: bay.assigned_product_id || (paper[0]?.id || ''),
+        pads_refilled: 1,
+        presence_status: bay.presence_status || 'HIGH'
+      });
+    } else {
+      setBayFormData({
+        assigned_product_id: bay.assigned_product_id || (pen[0]?.id || ''),
+        pieces_refilled: 10,
+        current_stock: bay.current_stock || 0
+      });
+    }
   };
 
-  const handleUpdate = async (e) => {
+  const closeBayModal = () => {
+    setEditingBay(null);
+    setBayFormData({});
+  };
+
+  const handleMasterSubmit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
     try {
-      if (editingItem === 'paper') {
+      if (editingMasterItem === 'paper') {
         await axios.put(`/api/machine/paper/${formData.id}`, formData);
       } else {
         await axios.put(`/api/machine/pen/${formData.id}`, formData);
       }
       await fetchInventory();
-      closeEditModal();
+      closeMasterEditModal();
     } catch (err) {
-      console.error('Error updating settings:', err);
-      alert('Failed to save settings. Please try again.');
+      console.error('Error updating master product:', err);
+      alert('Failed to save master product setting. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleBaySubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      if (editingBay.type === 'paper') {
+        await axios.put(`/api/machine/paper-compartments/${editingBay.bay.compartment_number}`, {
+          assigned_product_id: bayFormData.assigned_product_id ? parseInt(bayFormData.assigned_product_id, 10) : null,
+          pads_refilled: parseInt(bayFormData.pads_refilled || 0, 10),
+          presence_status: bayFormData.presence_status
+        });
+      } else {
+        await axios.put(`/api/machine/pen-compartments/${editingBay.bay.compartment_number}`, {
+          assigned_product_id: bayFormData.assigned_product_id ? parseInt(bayFormData.assigned_product_id, 10) : null,
+          pieces_refilled: parseInt(bayFormData.pieces_refilled || 0, 10),
+          current_stock: parseInt(bayFormData.current_stock || 0, 10)
+        });
+      }
+      await fetchInventory();
+      closeBayModal();
+    } catch (err) {
+      console.error('Error updating compartment bay:', err);
+      alert('Failed to update compartment bay. Please check stock availability.');
     } finally {
       setSubmitting(false);
     }
@@ -83,566 +139,730 @@ export default function Inventory() {
     );
   }
 
-  const getPercentage = (curr, max) => {
-    return Math.min(Math.round((curr / max) * 100), 100);
-  };
-
   const filteredPaper = paper.filter(item => 
     item.brand_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     item.paper_size.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.physical_status.toLowerCase().includes(searchQuery.toLowerCase())
+    (item.location_status && item.location_status.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   const filteredPen = pen.filter(item => 
     item.item_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.physical_status.toLowerCase().includes(searchQuery.toLowerCase())
+    (item.location_status && item.location_status.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   return (
-    <div className="space-y-10 max-w-7xl mx-auto font-sans">
+    <div className="space-y-10 max-w-7xl mx-auto font-sans pb-12">
       
       {/* Top Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <div>
+        <div>
+          <div className="flex items-center gap-3">
             <h1 className="font-display font-extrabold text-3xl md:text-4xl text-slate-800 dark:text-white leading-tight">
-              Inventory Control
+              Inventory & Compartments
             </h1>
-            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-              {user?.role === 'staff' 
-                ? 'Monitor stock volumes, sheets allocation, and status.' 
-                : 'Adjust item settings, pricing, sheets allocation, and monitor stock volumes.'}
-            </p>
+            <span className="bg-primary-500/10 text-primary-600 dark:text-primary-400 text-xs font-bold px-2.5 py-1 rounded-full border border-primary-500/20">
+              Revamped 4-Bay Paper + 3-Bay Pen
+            </span>
           </div>
-          <button
-            onClick={() => setIsFormulaModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-100 dark:bg-white/[0.04] hover:bg-slate-200 dark:hover:bg-white/[0.08] text-slate-650 dark:text-slate-300 rounded-xl text-xs font-bold transition-colors w-fit border border-slate-200 dark:border-white/[0.06]"
-          >
-            <HelpCircle className="w-4 h-4 text-primary-500" />
-            <span>Example Formula</span>
-          </button>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
+            {user?.role === 'staff' 
+              ? 'Monitor machine dispenser bays, PAD stock volumes, and presence sensors.' 
+              : 'Dynamically assign items to dispenser bays, refill PADs from storage, and manage pricing.'}
+          </p>
         </div>
         
-        {/* Search Bar */}
-        <div className="relative w-full md:w-80 shrink-0">
-          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500">
-            <Search className="w-4.5 h-4.5" />
-          </span>
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search brand, size, status..."
-            className="w-full h-11 pl-10 pr-4 rounded-xl text-sm bg-white border border-slate-200 text-slate-800 placeholder-slate-400 dark:bg-[#161F30] dark:border-white/[0.08] dark:text-white dark:placeholder-slate-500 focus:border-primary-500 outline-none transition-colors shadow-sm"
-          />
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setIsFormulaModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-slate-100 dark:bg-white/[0.04] hover:bg-slate-200 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-colors border border-slate-200 dark:border-white/[0.06] shadow-sm"
+          >
+            <HelpCircle className="w-4 h-4 text-primary-500" />
+            <span>Pricing Formula</span>
+          </button>
+          
+          <div className="relative w-full md:w-72">
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search brand, size, status..."
+              className="w-full h-10 pl-9 pr-4 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 placeholder-slate-400 dark:bg-[#161F30] dark:border-white/[0.08] dark:text-white dark:placeholder-slate-500 focus:border-primary-500 outline-none transition-colors shadow-sm"
+            />
+          </div>
         </div>
       </div>
 
-      {/* 1. PAPER INVENTORY COMPONENT */}
-      <div className="p-6 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm">
-        <h2 className="font-display font-bold text-xl text-slate-800 dark:text-white mb-6 flex items-center gap-2">
-          <span>Paper Configuration Specs</span>
-          <span className="text-xs bg-primary-500/10 text-primary-500 px-2 py-0.5 rounded-full font-sans">Active Rows</span>
-        </h2>
+      {/* ========================================================================= */}
+      {/* SECTION 1: PHYSICAL DISPENSER COMPARTMENTS (LIVE MACHINE HARDWARE BAYS)   */}
+      {/* ========================================================================= */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="p-2 rounded-lg bg-primary-500/10 text-primary-500">
+              <Cpu className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="font-display font-bold text-lg text-slate-800 dark:text-white">
+                Live Physical Dispenser Bays
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                4 Stepper Paper Feeder Bays (L5290 Presence Detection) + 3 Pen Dispenser Bays
+              </p>
+            </div>
+          </div>
+          <button 
+            onClick={fetchInventory} 
+            className="flex items-center gap-1 text-xs text-slate-500 hover:text-primary-500 font-semibold transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Sync Live Status</span>
+          </button>
+        </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm border-collapse">
-            <thead>
-              <tr className="border-b border-slate-100 dark:border-white/[0.04] text-slate-400 font-bold">
-                <th className="py-3 px-4">Brand / Specification</th>
-                <th className="py-3 px-4 text-center">Sheets/Unit</th>
-                <th className="py-3 px-4 text-center">Cost/Unit</th>
-                <th className="py-3 px-4">Stock Levels</th>
-                <th className="py-3 px-4 text-center">Status</th>
-                {user?.role !== 'staff' && <th className="py-3 px-4 text-right">Actions</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
-              {filteredPaper.map((item) => {
-                const stockPercent = getPercentage(item.current_stock, item.max_capacity);
-                return (
-                  <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
-                    <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
-                      {item.brand_name}
-                    </td>
-                    <td className="py-4 px-4 text-center font-bold text-primary-500">{item.sheets_per_unit} sheets</td>
-                    <td className="py-4 px-4 text-center font-bold">₱{parseInt(item.cost_per_unit)}</td>
-                    <td className="py-4 px-4 min-w-[200px]">
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-white/10 overflow-hidden">
-                          <div 
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              stockPercent < 15 ? 'bg-amber-500' : 'bg-primary-500'
-                            }`}
-                            style={{ width: `${stockPercent}%` }}
-                          />
-                        </div>
-                        <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
-                          {item.current_stock}/{item.max_capacity}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="py-4 px-4 text-center">
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                        item.physical_status === 'Good' 
-                          ? 'bg-emerald-500/10 text-emerald-500' 
-                          : 'bg-red-500/10 text-red-500'
-                      }`}>
-                        {item.physical_status === 'Good' ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
-                        {item.physical_status}
+        {/* 4 Paper Bays Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {paperCompartments.map((bay) => {
+            const isHigh = bay.presence_status === 'HIGH';
+            return (
+              <div 
+                key={bay.compartment_number}
+                className={`p-5 rounded-2xl border transition-all duration-300 relative overflow-hidden bg-white dark:bg-[#161F30] shadow-sm flex flex-col justify-between ${
+                  isHigh 
+                    ? 'border-slate-200 dark:border-white/[0.08] hover:border-primary-500/50' 
+                    : 'border-red-300 dark:border-red-500/30 bg-red-50/20 dark:bg-red-950/10'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-black uppercase tracking-wider px-2.5 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-300">
+                      Paper Bay {bay.compartment_number}
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      Motor D{32 + (bay.compartment_number - 1) * 2}
+                    </span>
+                  </div>
+
+                  <h3 className="font-display font-bold text-base text-slate-800 dark:text-white leading-snug">
+                    {bay.brand_name} {bay.paper_size ? `(${bay.paper_size})` : ''}
+                  </h3>
+                  
+                  <div className="mt-2 text-xs text-slate-500 dark:text-slate-400 space-y-1">
+                    <div className="flex justify-between">
+                      <span>Rate:</span>
+                      <span className="font-bold text-slate-700 dark:text-slate-200">
+                        {bay.sheets_per_unit} sheets / ₱{bay.cost_per_unit}
                       </span>
-                    </td>
-                    {user?.role !== 'staff' && (
-                      <td className="py-4 px-4 text-right">
-                        <button 
-                          onClick={() => openEditModal('paper', item)}
-                          className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-primary-500 dark:hover:text-primary-400 transition-colors"
-                        >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                    </div>
+                  </div>
+
+                  {/* L5290 Presence Indicator */}
+                  <div className="mt-4 pt-3 border-t border-slate-100 dark:border-white/[0.04]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-medium text-slate-500">L5290 Sensor:</span>
+                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                        isHigh 
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' 
+                          : 'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 animate-pulse'
+                      }`}>
+                        {isHigh ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                        {isHigh ? 'Paper Present (HIGH)' : 'OUT OF PAPER (LOW)'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {user?.role !== 'staff' && (
+                  <div className="mt-5">
+                    <button
+                      onClick={() => openBayModal('paper', bay)}
+                      className="w-full py-2 px-3 rounded-xl bg-slate-100 dark:bg-white/[0.04] hover:bg-primary-500 hover:text-white dark:hover:bg-primary-500 text-slate-700 dark:text-slate-300 font-bold text-xs transition-all flex items-center justify-center gap-1.5 border border-slate-200 dark:border-white/[0.06]"
+                    >
+                      <ArrowRightLeft className="w-3.5 h-3.5" />
+                      <span>Reassign / Refill PAD</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 3 Pen Bays Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+          {penCompartments.map((bay) => {
+            const pct = Math.min(Math.round((bay.current_stock / (bay.max_capacity || 100)) * 100), 100);
+            return (
+              <div 
+                key={bay.compartment_number}
+                className="p-5 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#161F30] shadow-sm flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-black uppercase tracking-wider px-2.5 py-0.5 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                      Pen Bay {bay.compartment_number}
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      Ch {bay.dispenser_channel}
+                    </span>
+                  </div>
+
+                  <h3 className="font-display font-bold text-base text-slate-800 dark:text-white">
+                    {bay.item_name}
+                  </h3>
+                  
+                  <div className="mt-2 text-xs text-slate-500 dark:text-slate-400 flex justify-between">
+                    <span>Cost / Piece:</span>
+                    <span className="font-bold text-slate-700 dark:text-slate-200">₱{bay.cost_per_unit}</span>
+                  </div>
+
+                  <div className="mt-4">
+                    <div className="flex justify-between text-xs font-bold mb-1.5">
+                      <span className="text-slate-500">Bay Stock:</span>
+                      <span className={bay.current_stock < 15 ? 'text-amber-500' : 'text-slate-700 dark:text-slate-200'}>
+                        {bay.current_stock} / {bay.max_capacity} pcs
+                      </span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-slate-100 dark:bg-white/10 overflow-hidden">
+                      <div 
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          bay.current_stock < 15 ? 'bg-amber-500' : 'bg-primary-500'
+                        }`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {user?.role !== 'staff' && (
+                  <div className="mt-5">
+                    <button
+                      onClick={() => openBayModal('pen', bay)}
+                      className="w-full py-2 px-3 rounded-xl bg-slate-100 dark:bg-white/[0.04] hover:bg-primary-500 hover:text-white dark:hover:bg-primary-500 text-slate-700 dark:text-slate-300 font-bold text-xs transition-all flex items-center justify-center gap-1.5 border border-slate-200 dark:border-white/[0.06]"
+                    >
+                      <PlusCircle className="w-3.5 h-3.5" />
+                      <span>Refill Pen Stock</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* 2. BALLPEN INVENTORY COMPONENT */}
-      <div className="p-6 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm">
-        <h2 className="font-display font-bold text-xl text-slate-800 dark:text-white mb-6 flex items-center gap-2">
-          <span>Ballpen Configuration Specs</span>
-          <span className="text-xs bg-emerald-500/10 text-emerald-500 px-2 py-0.5 rounded-full font-sans">Active Rows</span>
-        </h2>
+      {/* ========================================================================= */}
+      {/* SECTION 2: MASTER INVENTORY (STORAGE ROOM STOCK BY PAD / PIECES)          */}
+      {/* ========================================================================= */}
+      <div className="space-y-6 pt-4">
+        
+        {/* Master Paper Table */}
+        <div className="p-6 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h2 className="font-display font-bold text-xl text-slate-800 dark:text-white flex items-center gap-2">
+                <span>Master Paper Catalog & Storage Stock</span>
+                <span className="text-xs bg-primary-500/10 text-primary-500 px-2.5 py-0.5 rounded-full font-sans font-bold">
+                  8 Product Types Tracked in Whole PADs
+                </span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-1">
+                When you refill a machine bay, whole PADs are transferred from storage into the active compartment.
+              </p>
+            </div>
+          </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm border-collapse">
-            <thead>
-              <tr className="border-b border-slate-100 dark:border-white/[0.04] text-slate-400 font-bold">
-                <th className="py-3 px-4">Item Brand Name</th>
-                <th className="py-3 px-4 text-center">Cost/Unit</th>
-                <th className="py-3 px-4">Stock Levels</th>
-                <th className="py-3 px-4 text-center">Status</th>
-                {user?.role !== 'staff' && <th className="py-3 px-4 text-right">Actions</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
-              {filteredPen.map((item) => {
-                const stockPercent = getPercentage(item.current_stock, item.max_capacity);
-                return (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-slate-100 dark:border-white/[0.04] text-slate-400 text-xs font-bold uppercase tracking-wider">
+                  <th className="py-3 px-4">Brand / Specification</th>
+                  <th className="py-3 px-4 text-center">Sheets / Unit</th>
+                  <th className="py-3 px-4 text-center">Price / Unit</th>
+                  <th className="py-3 px-4 text-center">Storage Stock (PADs)</th>
+                  <th className="py-3 px-4 text-center">Location State</th>
+                  {user?.role !== 'staff' && <th className="py-3 px-4 text-right">Actions</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
+                {filteredPaper.map((item) => {
+                  const isInBay = item.location_status === 'In compartment';
+                  return (
+                    <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
+                      <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full ${isInBay ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                          <span>{item.brand_name} – {item.paper_size}</span>
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 text-center font-bold text-primary-500">
+                        {item.sheets_per_unit} sheets
+                      </td>
+                      <td className="py-4 px-4 text-center font-bold">
+                        ₱{item.cost_per_unit}
+                      </td>
+                      <td className="py-4 px-4 text-center">
+                        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-100 dark:bg-white/[0.04] font-bold text-slate-700 dark:text-slate-200">
+                          <Package className="w-3.5 h-3.5 text-primary-500" />
+                          <span>{item.stock_pads} PADs</span>
+                        </span>
+                      </td>
+                      <td className="py-4 px-4 text-center">
+                        {isInBay ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                            <CheckCircle className="w-3 h-3" />
+                            Bay {item.assigned_bay} ({item.presence_status === 'HIGH' ? 'Active' : 'Empty'})
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 dark:bg-white/[0.05] text-slate-500">
+                            In Storage
+                          </span>
+                        )}
+                      </td>
+                      {user?.role !== 'staff' && (
+                        <td className="py-4 px-4 text-right">
+                          <button 
+                            onClick={() => openMasterEditModal('paper', item)}
+                            className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-400 hover:text-primary-500 transition-colors"
+                            title="Edit Pricing & Storage Pads"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Master Ballpen Table */}
+        <div className="p-6 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="font-display font-bold text-xl text-slate-800 dark:text-white flex items-center gap-2">
+              <span>Master Ballpen Inventory</span>
+              <span className="text-xs bg-blue-500/10 text-blue-500 px-2.5 py-0.5 rounded-full font-sans font-bold">
+                Pieces Management
+              </span>
+            </h2>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-slate-100 dark:border-white/[0.04] text-slate-400 text-xs font-bold uppercase tracking-wider">
+                  <th className="py-3 px-4">Pen Specification</th>
+                  <th className="py-3 px-4 text-center">Cost / Piece</th>
+                  <th className="py-3 px-4 text-center">Storage Stock (Pieces)</th>
+                  <th className="py-3 px-4 text-center">Location State</th>
+                  {user?.role !== 'staff' && <th className="py-3 px-4 text-right">Actions</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
+                {filteredPen.map((item) => (
                   <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
                     <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
                       {item.item_name}
                     </td>
-                    <td className="py-4 px-4 text-center font-bold">₱{parseInt(item.cost_per_unit)}</td>
-                    <td className="py-4 px-4 min-w-[200px]">
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-white/10 overflow-hidden">
-                          <div 
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              stockPercent < 15 ? 'bg-amber-500' : 'bg-primary-500'
-                            }`}
-                            style={{ width: `${stockPercent}%` }}
-                          />
-                        </div>
-                        <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
-                          {item.current_stock}/{item.max_capacity}
-                        </span>
-                      </div>
+                    <td className="py-4 px-4 text-center font-bold">₱{item.cost_per_unit}</td>
+                    <td className="py-4 px-4 text-center">
+                      <span className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-100 dark:bg-white/[0.04] font-bold text-slate-700 dark:text-slate-200">
+                        <Package className="w-3.5 h-3.5 text-blue-500" />
+                        <span>{item.storage_stock_pieces} pcs</span>
+                      </span>
                     </td>
                     <td className="py-4 px-4 text-center">
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                        item.physical_status === 'Good' 
-                          ? 'bg-emerald-500/10 text-emerald-500' 
-                          : 'bg-red-500/10 text-red-500'
-                      }`}>
-                        {item.physical_status === 'Good' ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
-                        {item.physical_status}
-                      </span>
+                      {item.assigned_bay ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-500/10 text-blue-500 border border-blue-500/20">
+                          <CheckCircle className="w-3 h-3" />
+                          Loaded in Bay {item.assigned_bay} ({item.current_bay_stock} pcs)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 dark:bg-white/[0.05] text-slate-500">
+                          In Storage
+                        </span>
+                      )}
                     </td>
                     {user?.role !== 'staff' && (
                       <td className="py-4 px-4 text-right">
                         <button 
-                          onClick={() => openEditModal('pen', item)}
-                          className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-primary-500 dark:hover:text-primary-400 transition-colors"
+                          onClick={() => openMasterEditModal('pen', item)}
+                          className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-400 hover:text-primary-500 transition-colors"
+                          title="Edit Pricing & Storage Pieces"
                         >
                           <Edit3 className="w-4 h-4" />
                         </button>
                       </td>
                     )}
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
+
       </div>
 
-      {/* 3. POPUP MODAL COMPONENT */}
-      {editingItem && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-[480px] rounded-3xl bg-white dark:bg-[#161F30] border border-slate-200 dark:border-white/[0.08] p-6 shadow-2xl relative animate-[fadeIn_0.2s_ease-out]">
-            
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100 dark:border-white/[0.04]">
+      {/* ========================================================================= */}
+      {/* MODAL 1: REASSIGN / REFILL DISPENSER BAY MODAL                            */}
+      {/* ========================================================================= */}
+      {editingBay && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white dark:bg-[#161F30] rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-white/[0.08]">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-white/[0.06]">
               <div>
-                <h3 className="font-display font-extrabold text-lg text-slate-800 dark:text-white">
-                  Adjust Settings
+                <h3 className="font-display font-bold text-lg text-slate-800 dark:text-white">
+                  {editingBay.type === 'paper' ? `Paper Feeder Bay ${editingBay.bay.compartment_number}` : `Pen Bay ${editingBay.bay.compartment_number}`}
                 </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Update database config specs.
+                <p className="text-xs text-slate-400">
+                  {editingBay.type === 'paper' 
+                    ? 'Reassign paper specification and load whole PADs into this feeder.' 
+                    : 'Reassign pen color and refill piece stock into this bay.'}
                 </p>
               </div>
-              <button 
-                onClick={closeEditModal}
-                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors"
-              >
+              <button onClick={closeBayModal} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Edit Form */}
-            <form onSubmit={handleUpdate} className="space-y-4">
-              
-              {/* Brand Description Title */}
-              <div className="space-y-1.5">
-                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Item Label Name</label>
-                <input
-                  type="text"
-                  name={editingItem === 'paper' ? 'brand_name' : 'item_name'}
-                  value={editingItem === 'paper' ? (formData.brand_name || '') : (formData.item_name || '')}
-                  onChange={handleInputChange}
-                  className="w-full h-11 px-3.5 rounded-xl text-sm bg-slate-50 border border-slate-200 dark:bg-slate-900 dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500"
+            <form onSubmit={handleBaySubmit} className="mt-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+                  Assigned Product Specification
+                </label>
+                <select
+                  value={bayFormData.assigned_product_id}
+                  onChange={(e) => setBayFormData({ ...bayFormData, assigned_product_id: e.target.value })}
+                  className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
                   required
-                />
+                >
+                  <option value="" disabled>Select product to assign...</option>
+                  {editingBay.type === 'paper' 
+                    ? paper.map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.brand_name} – {p.paper_size} ({p.stock_pads} PADs in storage)
+                        </option>
+                      ))
+                    : pen.map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.item_name} ({p.storage_stock_pieces} pcs in storage)
+                        </option>
+                      ))
+                  }
+                </select>
               </div>
 
-              {/* Layout size for paper */}
-              {editingItem === 'paper' && (
+              {editingBay.type === 'paper' ? (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+                        PADs to Load into Bay
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={bayFormData.pads_refilled}
+                        onChange={(e) => setBayFormData({ ...bayFormData, pads_refilled: e.target.value })}
+                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                        placeholder="e.g. 1"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+                        L5290 Presence State
+                      </label>
+                      <select
+                        value={bayFormData.presence_status}
+                        onChange={(e) => setBayFormData({ ...bayFormData, presence_status: e.target.value })}
+                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                      >
+                        <option value="HIGH">HIGH (Paper Present / Ready)</option>
+                        <option value="LOW">LOW (Empty / Out of Paper)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-400 bg-slate-100 dark:bg-white/[0.02] p-3 rounded-xl">
+                    💡 <strong>PAD Refill Rule:</strong> Loading PADs transfers that quantity out of Master Storage into this feeder bay.
+                  </p>
+                </>
+              ) : (
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Sheets Amount</label>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+                      Pieces to Refill
+                    </label>
                     <input
                       type="number"
-                      name="sheets_per_unit"
-                      value={formData.sheets_per_unit || 0}
-                      onChange={handleInputChange}
-                      min="1"
-                      max="500"
-                      step="1"
-                      className="w-full h-11 px-3.5 rounded-xl text-sm bg-slate-50 border border-slate-200 dark:bg-slate-900 dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                      required
+                      min="0"
+                      value={bayFormData.pieces_refilled}
+                      onChange={(e) => setBayFormData({ ...bayFormData, pieces_refilled: e.target.value })}
+                      className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Paper Layout Size</label>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+                      Direct Set Bay Stock
+                    </label>
                     <input
-                      type="text"
-                      name="paper_size"
-                      value={formData.paper_size || ''}
-                      onChange={handleInputChange}
-                      className="w-full h-11 px-3.5 rounded-xl text-sm bg-slate-50 border border-slate-200 dark:bg-slate-900 dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                      required
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={bayFormData.current_stock}
+                      onChange={(e) => setBayFormData({ ...bayFormData, current_stock: e.target.value })}
+                      className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
                     />
                   </div>
                 </div>
               )}
 
-              {/* Price, Stock, Capacity */}
-              <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Price (₱) — whole number, 1–100</label>
-                  <input
-                    type="number"
-                    step="1"
-                    min="1"
-                    max="100"
-                    name="cost_per_unit"
-                    value={formData.cost_per_unit || 0}
-                    onChange={handleInputChange}
-                    className="w-full h-11 px-3.5 rounded-xl text-sm bg-slate-50 border border-slate-200 dark:bg-slate-900 dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                    required
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Current Stock</label>
-                  <input
-                    type="number"
-                    name="current_stock"
-                    value={formData.current_stock || 0}
-                    onChange={handleInputChange}
-                    min="0"
-                    step="1"
-                    className="w-full h-11 px-3.5 rounded-xl text-sm bg-slate-50 border border-slate-200 dark:bg-slate-900 dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                    required
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Max Capacity</label>
-                  <input
-                    type="number"
-                    name="max_capacity"
-                    value={formData.max_capacity || 0}
-                    onChange={handleInputChange}
-                    min="1"
-                    step="1"
-                    className="w-full h-11 px-3.5 rounded-xl text-sm bg-slate-50 border border-slate-200 dark:bg-slate-900 dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                    required
-                  />
-                </div>
-              </div>
-
-              {/* Status */}
-              <div className="space-y-1.5">
-                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Physical Hardware Status</label>
-                <select
-                  name="physical_status"
-                  value={formData.physical_status || 'Good'}
-                  onChange={handleInputChange}
-                  className="w-full h-11 px-3.5 rounded-xl text-sm bg-slate-50 border border-slate-200 dark:bg-slate-900 dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                >
-                  <option value="Good">Good (Working normally)</option>
-                  <option value="Empty/Critical">Empty/Critical (Refill alert)</option>
-                  <option value="Under Maintenance">Under Maintenance</option>
-                </select>
-              </div>
-
-              {/* Submit Button */}
-              <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100 dark:border-white/[0.04]">
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-white/[0.06]">
                 <button
                   type="button"
-                  onClick={closeEditModal}
-                  className="px-4 py-2 rounded-xl text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/[0.04] text-sm font-semibold transition-colors"
+                  onClick={closeBayModal}
+                  className="px-5 py-2.5 rounded-xl border border-slate-200 dark:border-white/[0.08] text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.04]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="px-5 py-2.5 rounded-xl bg-primary-500 hover:bg-primary-600 disabled:opacity-75 text-white text-sm font-semibold transition-colors shadow-md shadow-primary-500/10"
+                  className="px-5 py-2.5 rounded-xl bg-primary-500 hover:bg-primary-600 text-white text-xs font-bold shadow-lg shadow-primary-500/20 disabled:opacity-50"
                 >
-                  {submitting ? 'Saving...' : 'Save Settings'}
+                  {submitting ? 'Updating Bay...' : 'Save & Sync Bay'}
                 </button>
               </div>
-
             </form>
           </div>
         </div>
       )}
 
-      {/* 4. EXAMPLE FORMULA / CALCULATOR MODAL */}
-      {isFormulaModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="w-full max-w-2xl rounded-3xl bg-white dark:bg-[#161F30] border border-slate-200 dark:border-white/[0.08] p-6 shadow-2xl relative my-8 animate-[fadeIn_0.2s_ease-out]">
-            
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100 dark:border-white/[0.04]">
+      {/* ========================================================================= */}
+      {/* MODAL 2: MASTER INVENTORY EDIT MODAL (PRICING & STORAGE STOCK)             */}
+      {/* ========================================================================= */}
+      {editingMasterItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white dark:bg-[#161F30] rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-white/[0.08]">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-white/[0.06]">
               <div>
-                <h3 className="font-display font-extrabold text-xl text-slate-800 dark:text-white flex items-center gap-2">
-                  <HelpCircle className="w-6 h-6 text-primary-500" />
-                  <span>Example Formula & Calculator</span>
+                <h3 className="font-display font-bold text-lg text-slate-800 dark:text-white">
+                  Edit Master {editingMasterItem === 'paper' ? 'Paper Product' : 'Ballpen Product'}
                 </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  See how the hardware calculates item outputs from coins inserted.
+                <p className="text-xs text-slate-400">
+                  Update price per unit, sheets allocation, and master storage quantity.
                 </p>
               </div>
-              <button 
-                onClick={() => setIsFormulaModalOpen(false)}
-                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors"
-              >
+              <button onClick={closeMasterEditModal} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-1">
-              
-              {/* Static Examples Section */}
-              <div>
-                <h4 className="text-sm font-bold text-slate-800 dark:text-white mb-3">Concrete Math Examples</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  
-                  {/* Paper Examples */}
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-white/[0.04] space-y-3">
-                    <span className="text-xs font-bold text-primary-500 uppercase tracking-wider">📄 Paper Examples</span>
-                    <div className="space-y-2 text-xs">
-                      <div className="p-2.5 rounded-lg bg-white dark:bg-[#161F30] border border-slate-100 dark:border-white/[0.04]">
-                        <span className="font-bold text-slate-700 dark:text-slate-350">Example 1: Budget 1/4 (₱1 per unit, 4 sheets)</span>
-                        <p className="text-slate-500 mt-1">Inserted: <b>₱5</b></p>
-                        <p className="text-slate-500">Purchased Units: 5 / 1 = <b>5 units</b></p>
-                        <p className="text-slate-500">Dispensed: 5 × 4 = <b>20 sheets</b></p>
-                        <p className="text-slate-550 dark:text-slate-400 mt-1 italic">Total Cost: ₱5 | Change: ₱0</p>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-white dark:bg-[#161F30] border border-slate-100 dark:border-white/[0.04]">
-                        <span className="font-bold text-slate-700 dark:text-slate-350">Example 2: Standard Whole (₱2 per unit, 2 sheets)</span>
-                        <p className="text-slate-500 mt-1">Inserted: <b>₱5</b></p>
-                        <p className="text-slate-500">Purchased Units: Floor(5 / 2) = <b>2 units</b></p>
-                        <p className="text-slate-500">Dispensed: 2 × 2 = <b>4 sheets</b></p>
-                        <p className="text-slate-550 dark:text-slate-400 mt-1 italic">Total Cost: ₱4 | Change: ₱1</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Pen Examples */}
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-white/[0.04] space-y-3">
-                    <span className="text-xs font-bold text-emerald-500 uppercase tracking-wider">✒️ Ballpen Examples</span>
-                    <div className="space-y-2 text-xs">
-                      <div className="p-2.5 rounded-lg bg-white dark:bg-[#161F30] border border-slate-100 dark:border-white/[0.04]">
-                        <span className="font-bold text-slate-700 dark:text-slate-350">Example 1: Budget Pen (₱5 per unit)</span>
-                        <p className="text-slate-500 mt-1">Inserted: <b>₱5</b></p>
-                        <p className="text-slate-500">Purchased Units: 5 / 5 = <b>1 unit</b></p>
-                        <p className="text-slate-500">Dispensed: <b>1 piece</b></p>
-                        <p className="text-slate-550 dark:text-slate-400 mt-1 italic">Total Cost: ₱5 | Change: ₱0</p>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-white dark:bg-[#161F30] border border-slate-100 dark:border-white/[0.04]">
-                        <span className="font-bold text-slate-700 dark:text-slate-350">Example 2: Standard Pen (₱10 per unit)</span>
-                        <p className="text-slate-500 mt-1">Inserted: <b>₱15</b></p>
-                        <p className="text-slate-500">Purchased Units: Floor(15 / 10) = <b>1 unit</b></p>
-                        <p className="text-slate-500">Dispensed: <b>1 piece</b></p>
-                        <p className="text-slate-550 dark:text-slate-400 mt-1 italic">Total Cost: ₱10 | Change: ₱5</p>
-                      </div>
-                    </div>
-                  </div>
-
-                </div>
-              </div>
-
-              {/* Interactive Calculator Section */}
-              <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-slate-50/50 dark:bg-slate-900/30">
-                <h4 className="text-sm font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-1.5">
-                  <span>Interactive Calculation Simulator</span>
-                  <span className="text-[10px] bg-slate-500/10 text-slate-500 px-2 py-0.5 rounded-full font-normal">Offline Calculation Test</span>
-                </h4>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  
-                  {/* Inputs */}
-                  <div className="space-y-4">
+            <form onSubmit={handleMasterSubmit} className="mt-6 space-y-4">
+              {editingMasterItem === 'paper' ? (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5">Product Type</label>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setCalcType('paper')}
-                          className={`flex-1 h-9 rounded-lg text-xs font-bold transition-all ${
-                            calcType === 'paper' 
-                              ? 'bg-primary-500 text-white shadow-sm' 
-                              : 'bg-white dark:bg-[#161F30] border border-slate-200 dark:border-white/[0.06] text-slate-500 hover:bg-slate-100'
-                          }`}
-                        >
-                          Paper
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCalcType('pen')}
-                          className={`flex-1 h-9 rounded-lg text-xs font-bold transition-all ${
-                            calcType === 'pen' 
-                              ? 'bg-primary-500 text-white shadow-sm' 
-                              : 'bg-white dark:bg-[#161F30] border border-slate-200 dark:border-white/[0.06] text-slate-500 hover:bg-slate-100'
-                          }`}
-                        >
-                          Ballpen
-                        </button>
-                      </div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Brand</label>
+                      <input
+                        type="text"
+                        value={formData.brand_name || ''}
+                        onChange={(e) => setFormData({ ...formData, brand_name: e.target.value })}
+                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                        required
+                      />
                     </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5">Coins Inserted (₱)</label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={calcCoins}
-                          onChange={(e) => setCalcCoins(Math.max(0, parseInt(e.target.value) || 0))}
-                          className="w-full h-10 px-3 rounded-lg text-xs bg-white dark:bg-[#161F30] border border-slate-200 dark:border-white/[0.06] text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5">Cost/Unit (₱)</label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={calcCost}
-                          onChange={(e) => setCalcCost(Math.max(1, parseInt(e.target.value) || 1))}
-                          className="w-full h-10 px-3 rounded-lg text-xs bg-white dark:bg-[#161F30] border border-slate-200 dark:border-white/[0.06] text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                        />
-                      </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Size</label>
+                      <input
+                        type="text"
+                        value={formData.paper_size || ''}
+                        onChange={(e) => setFormData({ ...formData, paper_size: e.target.value })}
+                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                        required
+                      />
                     </div>
-
-                    {calcType === 'paper' && (
-                      <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5">Sheets per Unit</label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={calcSheets}
-                          onChange={(e) => setCalcSheets(Math.max(1, parseInt(e.target.value) || 1))}
-                          className="w-full h-10 px-3 rounded-lg text-xs bg-white dark:bg-[#161F30] border border-slate-200 dark:border-white/[0.06] text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                        />
-                      </div>
-                    )}
                   </div>
-
-                  {/* Outputs */}
-                  <div className="p-4 rounded-xl bg-white dark:bg-[#161F30] border border-slate-200 dark:border-white/[0.04] space-y-4">
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Calculation Outputs</span>
-                    
-                    {(() => {
-                      const units = Math.floor(calcCoins / calcCost);
-                      const totalDispensed = calcType === 'paper' ? (units * calcSheets) : (units > 0 ? 1 : 0);
-                      const totalCost = units * calcCost;
-                      const change = calcCoins - totalCost;
-
-                      return (
-                        <div className="space-y-3 text-xs">
-                          <div className="flex justify-between pb-1.5 border-b border-slate-100 dark:border-white/[0.04]">
-                            <span className="text-slate-500">Purchased Units:</span>
-                            <span className="font-bold text-slate-800 dark:text-white">
-                              Floor({calcCoins} / {calcCost}) = {units} {units === 1 ? 'unit' : 'units'}
-                            </span>
-                          </div>
-                          <div className="flex justify-between pb-1.5 border-b border-slate-100 dark:border-white/[0.04]">
-                            <span className="text-slate-500">Total Dispensed:</span>
-                            <span className="font-bold text-primary-500">
-                              {calcType === 'paper' 
-                                ? `${units} units × ${calcSheets} sheets = ${totalDispensed} sheets` 
-                                : `${totalDispensed} piece (Standard Single Dispense)`}
-                            </span>
-                          </div>
-                          <div className="flex justify-between pb-1.5 border-b border-slate-100 dark:border-white/[0.04]">
-                            <span className="text-slate-500">Credits Deducted:</span>
-                            <span className="font-bold text-slate-800 dark:text-white">
-                              {units} units × ₱{calcCost} = ₱{totalCost}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">Change Returned:</span>
-                            <span className="font-bold text-emerald-500">
-                              ₱{calcCoins} - ₱{totalCost} = ₱{change}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })()}
+                  
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Sheets / Unit</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={formData.sheets_per_unit || 1}
+                        onChange={(e) => setFormData({ ...formData, sheets_per_unit: e.target.value })}
+                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Cost / Unit (₱)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        value={formData.cost_per_unit || 1}
+                        onChange={(e) => setFormData({ ...formData, cost_per_unit: e.target.value })}
+                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Storage PADs</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={formData.stock_pads || 0}
+                        onChange={(e) => setFormData({ ...formData, stock_pads: e.target.value })}
+                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                        required
+                      />
+                    </div>
                   </div>
-
+                </>
+              ) : (
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Item Name</label>
+                    <input
+                      type="text"
+                      value={formData.item_name || ''}
+                      onChange={(e) => setFormData({ ...formData, item_name: e.target.value })}
+                      className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Cost / Piece (₱)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={formData.cost_per_unit || 1}
+                      onChange={(e) => setFormData({ ...formData, cost_per_unit: e.target.value })}
+                      className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Storage Pieces</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formData.storage_stock_pieces || 0}
+                      onChange={(e) => setFormData({ ...formData, storage_stock_pieces: e.target.value })}
+                      className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                      required
+                    />
+                  </div>
                 </div>
+              )}
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-white/[0.06]">
+                <button
+                  type="button"
+                  onClick={closeMasterEditModal}
+                  className="px-5 py-2.5 rounded-xl border border-slate-200 dark:border-white/[0.08] text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.04]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="px-5 py-2.5 rounded-xl bg-primary-500 hover:bg-primary-600 text-white text-xs font-bold shadow-lg shadow-primary-500/20 disabled:opacity-50"
+                >
+                  {submitting ? 'Saving...' : 'Save Changes'}
+                </button>
               </div>
+            </form>
+          </div>
+        </div>
+      )}
 
-            </div>
-
-            {/* Close Button Footer */}
-            <div className="pt-4 mt-6 flex items-center justify-end border-t border-slate-100 dark:border-white/[0.04]">
-              <button
-                type="button"
-                onClick={() => setIsFormulaModalOpen(false)}
-                className="px-5 py-2.5 rounded-xl bg-primary-500 hover:bg-primary-600 text-white text-sm font-semibold transition-colors shadow-md"
-              >
-                Close Examples
+      {/* ========================================================================= */}
+      {/* MODAL 3: INTERACTIVE PRICING FORMULA HELPER                                */}
+      {/* ========================================================================= */}
+      {isFormulaModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white dark:bg-[#161F30] rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-white/[0.08]">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-white/[0.06]">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-primary-500/10 text-primary-500">
+                  <HelpCircle className="w-5 h-5" />
+                </div>
+                <h3 className="font-display font-bold text-lg text-slate-800 dark:text-white">
+                  Pricing & Dispensing Math
+                </h3>
+              </div>
+              <button onClick={() => setIsFormulaModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white">
+                <X className="w-5 h-5" />
               </button>
             </div>
 
+            <div className="mt-5 space-y-4 text-xs">
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.06] space-y-2">
+                <p className="font-bold text-slate-700 dark:text-slate-200">
+                  📐 Paper Dispense Formula:
+                </p>
+                <div className="font-mono text-primary-500 text-sm">
+                  Total Sheets = (Inserted Coins / Cost per Unit) × Sheets per Unit
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-slate-500 mb-1 font-semibold">Coins (₱)</label>
+                  <input
+                    type="number"
+                    value={calcCoins}
+                    onChange={(e) => setCalcCoins(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-full h-10 px-3 rounded-lg bg-white dark:bg-white/[0.05] border border-slate-200 dark:border-white/[0.08] text-slate-800 dark:text-white font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-500 mb-1 font-semibold">Cost (₱)</label>
+                  <input
+                    type="number"
+                    value={calcCost}
+                    onChange={(e) => setCalcCost(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-full h-10 px-3 rounded-lg bg-white dark:bg-white/[0.05] border border-slate-200 dark:border-white/[0.08] text-slate-800 dark:text-white font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-500 mb-1 font-semibold">Sheets/Unit</label>
+                  <input
+                    type="number"
+                    value={calcSheets}
+                    onChange={(e) => setCalcSheets(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-full h-10 px-3 rounded-lg bg-white dark:bg-white/[0.05] border border-slate-200 dark:border-white/[0.08] text-slate-800 dark:text-white font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-primary-500/10 border border-primary-500/20 text-center">
+                <span className="text-slate-600 dark:text-slate-300 font-medium">Customer Receives: </span>
+                <span className="text-lg font-black text-primary-500">
+                  {Math.floor(calcCoins / calcCost) * calcSheets} Total Sheets
+                </span>
+                {calcCoins % calcCost > 0 && (
+                  <p className="text-[11px] text-amber-500 mt-1">
+                    + ₱{calcCoins % calcCost} Returned via Coin Hopper
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <button
+                onClick={() => setIsFormulaModalOpen(false)}
+                className="w-full py-2.5 rounded-xl bg-slate-100 dark:bg-white/[0.04] hover:bg-slate-200 text-slate-700 dark:text-slate-300 font-bold text-xs"
+              >
+                Close Calculator
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -8,29 +8,62 @@ const asInt = (value, fallback = 0) => {
 
 const asMoney = (cents) => asInt(cents) / 100;
 
-function flattenPaperSetting(row) {
-  const channel = row.paper_channels || {};
+function flattenPaperInventory(row, assignedBays = []) {
+  const bay = assignedBays.find((b) => b.assigned_product_id === row.id);
   return {
     ...row,
-    paper_channel_id: row.paper_channel_id,
-    channel_code: channel.channel_code,
-    motor_channel: channel.motor_channel,
-    sensor_channel: channel.sensor_channel,
     cost_per_unit: asMoney(row.cost_per_unit_cents),
-    current_stock: asInt(channel.current_sheet_stock),
-    reserved_stock: asInt(channel.reserved_sheet_stock),
-    max_capacity: asInt(channel.max_sheet_capacity),
-    physical_status: channel.physical_status || 'Unknown'
+    stock_pads: asInt(row.stock_pads),
+    sheets_per_unit: asInt(row.sheets_per_unit, 1),
+    assigned_bay: bay ? bay.compartment_number : null,
+    presence_status: bay ? bay.presence_status : 'N/A'
   };
 }
 
-function flattenPenSetting(row) {
+function flattenPaperCompartment(row) {
+  const product = row.paper_inventory || {};
+  return {
+    id: row.id,
+    compartment_number: row.compartment_number,
+    assigned_product_id: row.assigned_product_id,
+    brand_name: product.brand_name || 'Unassigned',
+    paper_size: product.paper_size || '',
+    sheets_per_unit: asInt(product.sheets_per_unit, 1),
+    cost_per_unit: asMoney(product.cost_per_unit_cents),
+    presence_status: row.presence_status || 'HIGH', // 'HIGH' (Has Paper) or 'LOW' (Empty)
+    motor_channel: row.motor_channel,
+    sensor_channel: row.sensor_channel,
+    physical_status: row.physical_status || 'Good',
+    updated_at: row.updated_at
+  };
+}
+
+function flattenPenInventory(row, assignedBays = []) {
+  const bay = assignedBays.find((b) => b.assigned_product_id === row.id);
   return {
     ...row,
     cost_per_unit: asMoney(row.cost_per_unit_cents),
-    current_stock: asInt(row.current_stock),
-    reserved_stock: asInt(row.reserved_stock),
-    max_capacity: asInt(row.max_capacity)
+    storage_stock_pieces: asInt(row.storage_stock_pieces),
+    assigned_bay: bay ? bay.compartment_number : null,
+    current_bay_stock: bay ? asInt(bay.current_piece_stock) : 0
+  };
+}
+
+function flattenPenCompartment(row) {
+  const product = row.ballpen_inventory || {};
+  return {
+    id: row.id,
+    compartment_number: row.compartment_number,
+    assigned_product_id: row.assigned_product_id,
+    item_name: product.item_name || 'Unassigned',
+    cost_per_unit: asMoney(product.cost_per_unit_cents),
+    current_stock: asInt(row.current_piece_stock),
+    reserved_stock: asInt(row.reserved_piece_stock),
+    max_capacity: asInt(row.max_piece_capacity, 100),
+    dispenser_channel: row.dispenser_channel,
+    physical_status: row.physical_status || 'Good',
+    active: row.active !== false,
+    updated_at: row.updated_at
   };
 }
 
@@ -62,15 +95,26 @@ function flattenTransactionLine(line) {
 }
 
 async function getInventory(supabase) {
-  const [paperResult, penResult] = await Promise.all([
-    supabase.from('paper_settings').select('*, paper_channels(*)').order('id', { ascending: true }),
-    supabase.from('ballpen_settings').select('*').order('id', { ascending: true })
+  const [paperInvRes, paperCompRes, penInvRes, penCompRes] = await Promise.all([
+    supabase.from('paper_inventory').select('*').order('id', { ascending: true }),
+    supabase.from('paper_compartments').select('*, paper_inventory(*)').order('compartment_number', { ascending: true }),
+    supabase.from('ballpen_inventory').select('*').order('id', { ascending: true }),
+    supabase.from('ballpen_compartments').select('*, ballpen_inventory(*)').order('compartment_number', { ascending: true })
   ]);
-  if (paperResult.error) throw paperResult.error;
-  if (penResult.error) throw penResult.error;
+
+  if (paperInvRes.error) throw paperInvRes.error;
+  if (paperCompRes.error) throw paperCompRes.error;
+  if (penInvRes.error) throw penInvRes.error;
+  if (penCompRes.error) throw penCompRes.error;
+
+  const paperBays = paperCompRes.data || [];
+  const penBays = penCompRes.data || [];
+
   return {
-    paper: (paperResult.data || []).map(flattenPaperSetting),
-    pen: (penResult.data || []).map(flattenPenSetting)
+    paper: (paperInvRes.data || []).map((row) => flattenPaperInventory(row, paperBays)),
+    paper_compartments: paperBays.map(flattenPaperCompartment),
+    pen: (penInvRes.data || []).map((row) => flattenPenInventory(row, penBays)),
+    pen_compartments: penBays.map(flattenPenCompartment)
   };
 }
 
@@ -124,66 +168,147 @@ export function createMachineRouter(supabase) {
     }
   });
 
+  // Reassign / Refill Paper Compartment Bay (1-4)
+  router.put('/paper-compartments/:compartment_number', authorizeRoles('superadmin'), async (req, res) => {
+    const compartmentNumber = asInt(req.params.compartment_number);
+    const { assigned_product_id, pads_refilled = 0, presence_status = 'HIGH', physical_status = 'Good' } = req.body;
+
+    try {
+      const productId = assigned_product_id ? asInt(assigned_product_id) : null;
+      const pads = asInt(pads_refilled, 0);
+
+      // Call database procedure to reassign and deduct pads safely
+      const { error: rpcError } = await supabase.rpc('admin_reassign_paper_bay', {
+        p_compartment_number: compartmentNumber,
+        p_new_product_id: productId,
+        p_pads_refilled: pads,
+        p_presence_status: presence_status
+      });
+
+      if (rpcError) {
+        // Fallback direct update if procedure is not yet created
+        if (productId) {
+          if (pads > 0) {
+            const { data: prod } = await supabase.from('paper_inventory').select('stock_pads').eq('id', productId).single();
+            if (prod && prod.stock_pads >= pads) {
+              await supabase.from('paper_inventory').update({
+                stock_pads: prod.stock_pads - pads,
+                location_status: 'In compartment',
+                updated_at: new Date().toISOString()
+              }).eq('id', productId);
+            }
+          } else {
+            await supabase.from('paper_inventory').update({
+              location_status: 'In compartment',
+              updated_at: new Date().toISOString()
+            }).eq('id', productId);
+          }
+        }
+        await supabase.from('paper_compartments').update({
+          assigned_product_id: productId,
+          presence_status: presence_status,
+          physical_status,
+          updated_at: new Date().toISOString()
+        }).eq('compartment_number', compartmentNumber);
+      }
+
+      return res.status(200).json({ message: `Paper Compartment ${compartmentNumber} updated successfully.` });
+    } catch (err) {
+      console.error('Error updating paper compartment:', err);
+      return res.status(500).json({ message: 'Failed to update paper compartment.' });
+    }
+  });
+
+  // Reassign / Refill Pen Compartment Bay (1-3)
+  router.put('/pen-compartments/:compartment_number', authorizeRoles('superadmin'), async (req, res) => {
+    const compartmentNumber = asInt(req.params.compartment_number);
+    const { assigned_product_id, pieces_refilled = 0, current_stock, max_capacity, physical_status = 'Good' } = req.body;
+
+    try {
+      const productId = assigned_product_id ? asInt(assigned_product_id) : null;
+      const refilled = asInt(pieces_refilled, 0);
+
+      const { data: comp } = await supabase.from('ballpen_compartments').select('*').eq('compartment_number', compartmentNumber).single();
+      const newStock = current_stock !== undefined ? asInt(current_stock) : ((comp?.current_piece_stock || 0) + refilled);
+
+      if (productId && refilled > 0) {
+        const { data: prod } = await supabase.from('ballpen_inventory').select('storage_stock_pieces').eq('id', productId).single();
+        if (prod && prod.storage_stock_pieces >= refilled) {
+          await supabase.from('ballpen_inventory').update({
+            storage_stock_pieces: prod.storage_stock_pieces - refilled,
+            location_status: 'In compartment',
+            updated_at: new Date().toISOString()
+          }).eq('id', productId);
+        }
+      }
+
+      const { error } = await supabase.from('ballpen_compartments').update({
+        assigned_product_id: productId,
+        current_piece_stock: newStock,
+        max_piece_capacity: max_capacity ? asInt(max_capacity) : 100,
+        physical_status,
+        updated_at: new Date().toISOString()
+      }).eq('compartment_number', compartmentNumber);
+
+      if (error) throw error;
+      return res.status(200).json({ message: `Ballpen Compartment ${compartmentNumber} updated successfully.` });
+    } catch (err) {
+      console.error('Error updating ballpen compartment:', err);
+      return res.status(500).json({ message: 'Failed to update ballpen compartment.' });
+    }
+  });
+
+  // Master Paper Product Update
   router.put('/paper/:id', authorizeRoles('superadmin'), async (req, res) => {
     const { id } = req.params;
-    const { brand_name, paper_size, cost_per_unit, sheets_per_unit, current_stock, max_capacity, physical_status, active } = req.body;
+    const { brand_name, paper_size, cost_per_unit, sheets_per_unit, stock_pads, location_status, active } = req.body;
     try {
-      const { data: existing, error: existingError } = await supabase
-        .from('paper_settings').select('paper_channel_id').eq('id', id).single();
-      if (existingError) throw existingError;
-
       const { data, error } = await supabase
-        .from('paper_settings')
+        .from('paper_inventory')
         .update({
           brand_name,
           paper_size,
           cost_per_unit_cents: Math.round(Number(cost_per_unit) * 100),
           sheets_per_unit: asInt(sheets_per_unit, 1),
-          active: active !== false
-        })
-        .eq('id', id)
-        .select('*, paper_channels(*)');
-      if (error) throw error;
-
-      const { error: channelError } = await supabase
-        .from('paper_channels')
-        .update({
-          current_sheet_stock: asInt(current_stock),
-          max_sheet_capacity: asInt(max_capacity),
-          physical_status,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', existing.paper_channel_id);
-      if (channelError) throw channelError;
-      return res.status(200).json({ message: 'Paper product and shared physical channel updated.', data: flattenPaperSetting(data[0]) });
-    } catch (err) {
-      console.error('Error updating paper setting:', err);
-      return res.status(500).json({ message: 'Failed to update paper setting.' });
-    }
-  });
-
-  router.put('/pen/:id', authorizeRoles('superadmin'), async (req, res) => {
-    const { id } = req.params;
-    const { item_name, cost_per_unit, current_stock, max_capacity, physical_status, active } = req.body;
-    try {
-      const { data, error } = await supabase
-        .from('ballpen_settings')
-        .update({
-          item_name,
-          cost_per_unit_cents: Math.round(Number(cost_per_unit) * 100),
-          current_stock: asInt(current_stock),
-          max_capacity: asInt(max_capacity),
-          physical_status,
+          stock_pads: asInt(stock_pads, 0),
+          location_status: location_status || 'In stock',
           active: active !== false,
           updated_at: new Date().toISOString()
         })
         .eq('id', id)
         .select();
+
       if (error) throw error;
-      return res.status(200).json({ message: 'Ballpen setting updated.', data: flattenPenSetting(data[0]) });
+      return res.status(200).json({ message: 'Paper product updated in master inventory.', data: data[0] });
     } catch (err) {
-      console.error('Error updating pen setting:', err);
-      return res.status(500).json({ message: 'Failed to update pen setting.' });
+      console.error('Error updating paper inventory:', err);
+      return res.status(500).json({ message: 'Failed to update paper inventory.' });
+    }
+  });
+
+  // Master Pen Product Update
+  router.put('/pen/:id', authorizeRoles('superadmin'), async (req, res) => {
+    const { id } = req.params;
+    const { item_name, cost_per_unit, storage_stock_pieces, location_status, active } = req.body;
+    try {
+      const { data, error } = await supabase
+        .from('ballpen_inventory')
+        .update({
+          item_name,
+          cost_per_unit_cents: Math.round(Number(cost_per_unit) * 100),
+          storage_stock_pieces: asInt(storage_stock_pieces, 0),
+          location_status: location_status || 'In compartment',
+          active: active !== false,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id)
+        .select();
+
+      if (error) throw error;
+      return res.status(200).json({ message: 'Ballpen product updated in master inventory.', data: data[0] });
+    } catch (err) {
+      console.error('Error updating pen inventory:', err);
+      return res.status(500).json({ message: 'Failed to update pen inventory.' });
     }
   });
 
@@ -242,11 +367,12 @@ export function createMachineRouter(supabase) {
       });
 
       const lowStockItems = [
-        ...inventory.paper.filter((item) => item.current_stock < 15).map((item) => `${item.paper_size} channel`),
-        ...inventory.pen.filter((item) => item.current_stock < 15).map((item) => item.item_name)
+        ...inventory.paper_compartments.filter((bay) => bay.presence_status === 'LOW').map((bay) => `Paper Bay ${bay.compartment_number} (${bay.brand_name} ${bay.paper_size}) - EMPTY`),
+        ...inventory.pen_compartments.filter((bay) => bay.current_stock < 15).map((bay) => `Pen Bay ${bay.compartment_number} (${bay.item_name}) - ${bay.current_stock} pcs left`)
       ];
       const peakHour = hourlySales.reduce((best, item) => item.transactions > best.transactions ? item : best, hourlySales[0]);
       const peakDay = dayOfWeekSales.reduce((best, item) => item.transactions > best.transactions ? item : best, dayOfWeekSales[0]);
+      
       return res.status(200).json({
         kpis: {
           totalRevenue,
