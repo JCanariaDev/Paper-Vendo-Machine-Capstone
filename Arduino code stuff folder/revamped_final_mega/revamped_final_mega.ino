@@ -10,20 +10,22 @@
 
 /*
   ==============================================================================
-  REVAMPED ARDUINO MEGA 2560 — MASTER CONTROLLER (FULL PRODUCTION FIRMWARE)
-  Merged with complete ILI9341 Touch UI, SH1106 OLED, Diagnostics, and
-  Dynamic 4-Bay Paper (L5290 Presence Sensors) + 3-Bay Ballpen Vending.
+  REVAMPED ARDUINO MEGA 2560 — MASTER CONTROLLER (OPTION A DUAL-BOARD SYSTEM)
+  - Manages ILI9341 Touch UI, SH1106 OLED, Coin Acceptor, Coin Hopper, and 3 Pens.
+  - Communicates with ESP32 (Cloud Gateway) via Serial1 (Pins 18/19).
+  - Communicates with Arduino Uno (Dedicated 4-Bay Paper Controller) via Serial2 (Pins 16/17).
   ==============================================================================
 */
 
 // =============================================================
-// ARDUINO MEGA 2560 — COMPLETE PIN ASSIGNMENT REFERENCE
+// ARDUINO MEGA 2560 — PIN ASSIGNMENTS (OPTION A ARCHITECTURE)
 // =============================================================
 //
 // ── DIGITAL I/O ──────────────────────────────────────────────
 //  D2   COIN_PIN            Coin acceptor pulse input (INPUT_PULLUP, INT0)
 //  D3   penStepper1 IN1     28BYJ-48 pen slot 1, ULN2003 coil A
 //  D4   penStepper1 IN2     28BYJ-48 pen slot 1, ULN2003 coil B
+//  D6   COIN_INHIBIT_PIN    Coin acceptor INHIBIT line (OUTPUT, active HIGH)
 //  D7   PEN_IR_PIN          IR sensor pen slot 1 (INPUT_PULLUP, LOW = beam broken)
 //  D8   LED_GREEN_PIN       Green LED — machine READY / AVAILABLE
 //  D9   SERVO_CHANGE_PIN    Change-dispense servo signal
@@ -33,7 +35,8 @@
 //  D13  LED_BLUE_PIN        Blue LED  — machine IDLE / IN USE (busy)
 //  D14  CHANGE_HOPPER_MOTOR_PIN  Relay IN controlling coin hopper motor
 //  D15  CHANGE_HOPPER_SENSOR_PIN Coin hopper exit IR sensor (INPUT_PULLUP)
-//  D16  COIN_INHIBIT_PIN    Coin acceptor INHIBIT line (OUTPUT, active HIGH)
+//  D16  TX2 (Serial2)       → Arduino Uno RX (Pin D0) at 5V logic
+//  D17  RX2 (Serial2)       ← Arduino Uno TX (Pin D1) at 5V logic
 //  D18  TX1 (Serial1)       → ESP32 RX2 (via 3.3V logic level converter)
 //  D19  RX1 (Serial1)       ← ESP32 TX2 (via 3.3V logic level converter)
 //  D22  penStepper2 IN1     28BYJ-48 pen slot 2, ULN2003 coil A
@@ -46,19 +49,6 @@
 //  D29  penStepper3 IN4     28BYJ-48 pen slot 3, ULN2003 coil D
 //  D30  PEN_IR_PIN2         IR sensor pen slot 2 (INPUT_PULLUP)
 //  D31  PEN_IR_PIN3         IR sensor pen slot 3 (INPUT_PULLUP)
-//  D32  PAPER_STEP_PINS[0]  Paper channel 1 STEP (A4988/TMC2209)
-//  D33  PAPER_DIR_PINS[0]   Paper channel 1 DIR
-//  D34  PAPER_STEP_PINS[1]  Paper channel 2 STEP
-//  D35  PAPER_DIR_PINS[1]   Paper channel 2 DIR
-//  D36  PAPER_STEP_PINS[2]  Paper channel 3 STEP
-//  D37  PAPER_DIR_PINS[2]   Paper channel 3 DIR
-//  D38  PAPER_STEP_PINS[3]  Paper channel 4 STEP
-//  D39  PAPER_DIR_PINS[3]   Paper channel 4 DIR
-//  D40  PAPER_ENABLE_PIN    Common ENABLE for all 4 paper stepper drivers (active LOW)
-//  D41  PAPER_TRAY_PINS[0]  Paper channel 1 L5290 tray sensor (INPUT_PULLUP: HIGH=Present, LOW=Empty)
-//  D42  PAPER_TRAY_PINS[1]  Paper channel 2 L5290 tray sensor (INPUT_PULLUP)
-//  D43  PAPER_TRAY_PINS[2]  Paper channel 3 L5290 tray sensor (INPUT_PULLUP)
-//  D44  PAPER_TRAY_PINS[3]  Paper channel 4 L5290 tray sensor (INPUT_PULLUP)
 //  D45  LED_RED_PIN         Red LED   — machine ERROR state
 //  D46  BUZZER_PIN          Passive buzzer (2-pin, driven by tone())
 //  D47  TOUCH_CS            XPT2046 touchscreen chip select (SPI)
@@ -71,24 +61,16 @@
 //
 // ── ANALOG HEADER (Used as Digital Inputs) ────────────────────
 //  A8   HW_RESET_BTN_PIN    Hardware-reset push button (INPUT_PULLUP)
-//       → Momentary press pulls to GND, triggers AVR watchdog full reboot
 //  A9   SW_RESET_BTN_PIN    Software-reset push button (INPUT_PULLUP)
-//       → Momentary press pulls to GND, calls softResetMachineState()
 //
 // ── I²C BUS (Wire) ───────────────────────────────────────────
 //  D20  SDA    SH1106G OLED 128×64 (address 0x3C)
 //  D21  SCL    SH1106G OLED 128×64
-//
-// ── HARDWARE SERIAL ──────────────────────────────────────────
-//  D0 / D1  Serial0 (USB / Serial Monitor at 115200 baud)
-//  D18 / D19 Serial1 (CLOUD_SERIAL to ESP32 at 9600 baud via LLC)
-//            D18 = TX1 → ESP32 RX2 (Pin 16)
-//            D19 = RX1 ← ESP32 TX2 (Pin 17)
 // =============================================================
 
 // --- PINS (existing) ---
 const int COIN_PIN = 2;
-const int COIN_INHIBIT_PIN = 16;
+const int COIN_INHIBIT_PIN = 6; // Moved from D16 to D6 to free D16/D17 for Serial2 (Uno)
 const bool COIN_INHIBIT_ACTIVE_HIGH = true;
 
 const int LED_GREEN_PIN = 8;
@@ -104,18 +86,12 @@ const int PEN_IR_PIN3 = 31;
 const int SERVO_CHANGE_PIN = 9;
 const int SERVO_PEN_PIN = 10;
 
-// --- 4 PHYSICAL PAPER CHANNELS + L5290 TRAY SENSORS ---
-const int PAPER_STEP_PINS[4] = { 32, 34, 36, 38 };
-const int PAPER_DIR_PINS[4]  = { 33, 35, 37, 39 };
-const int PAPER_TRAY_PINS[4] = { 41, 42, 43, 44 }; // L5290 Tray Sensor (HIGH=Paper Present, LOW=Empty)
-const int PAPER_ENABLE_PIN   = 40; // Common active LOW
-
 const int CHANGE_HOPPER_MOTOR_PIN  = 14;
 const int CHANGE_HOPPER_SENSOR_PIN = 15;
-const unsigned long PAPER_SHEET_TIMEOUT_MS = 12000;
 const unsigned long CHANGE_COIN_TIMEOUT_MS  = 5000;
 const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
+const unsigned long PAPER_DISPENSE_TIMEOUT_MS = 15000;
 
 const int HOPPER_RELAY_ON  = HIGH;
 const int HOPPER_RELAY_OFF = (HOPPER_RELAY_ON == HIGH) ? LOW : HIGH;
@@ -145,11 +121,8 @@ const int penIrPins[3] = { PEN_IR_PIN, PEN_IR_PIN2, PEN_IR_PIN3 };
 #define OLED_RESET -1
 #define SCREEN_ADDRESS 0x3C
 
-#if defined(HAVE_HWSERIAL1)
-#define CLOUD_SERIAL Serial1
-#else
-#define CLOUD_SERIAL Serial
-#endif
+#define CLOUD_SERIAL Serial1 // ESP32 Gateway (Pins 18/19)
+#define UNO_SERIAL   Serial2 // Uno Paper Controller (Pins 16/17)
 
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 Servo servoChange, servoPen;
@@ -225,9 +198,10 @@ void drawStatusScreen(String headline, String message);
 void refreshMachineAvailability(bool sound = false);
 void stopStepper(int penIndex);
 bool dispenseOnePen(int channel);
-bool dispenseOnePaper(int channel);
+int dispensePaperFromUno(int bayNumber, int sheetCount);
 int releaseVerifiedChange(int changeCents);
 void handleCloudCommand(String msg);
+void handleUnoMessage(String msg);
 void coinInterrupt();
 void softResetMachineState();
 
@@ -258,22 +232,28 @@ struct CatalogItem {
   int id;
   const char* name;
   float price;
+  bool isPaperPresent; // Synced from Uno's L5290 sensors
 };
 
 const int PAPER_COUNT = 4;
 CatalogItem paperCatalog[PAPER_COUNT] = {
-  {1, "1/4",        1.00},
-  {2, "Crosswise",  1.00},
-  {3, "Lengthwise", 1.00},
-  {4, "Whole",      1.00}
+  {1, "Bay 1 Paper",  1.00, true},
+  {2, "Bay 2 Paper",  1.00, true},
+  {3, "Bay 3 Paper",  1.00, true},
+  {4, "Bay 4 Paper",  1.00, true}
 };
 
 const int BALLPEN_COUNT = 3;
 CatalogItem ballpenCatalog[BALLPEN_COUNT] = {
-  {1, "Black Ballpen", 5.00},
-  {2, "Blue Ballpen",  5.00},
-  {3, "Red Ballpen",   5.00}
+  {1, "Pen Slot 1", 5.00, true},
+  {2, "Pen Slot 2", 5.00, true},
+  {3, "Pen Slot 3", 5.00, true}
 };
+
+// Dynamic name buffers — updated by ESP32 PAPER_BAY: / PEN_BAY: messages
+char paperCatalogNames[PAPER_COUNT][32];
+char ballpenCatalogNames[BALLPEN_COUNT][32];
+int  paperCatalogStock[BALLPEN_COUNT]; // pen stock per bay (pieces)
 
 const int MAX_CATALOG_ROWS = 4;
 int pendingQty[MAX_CATALOG_ROWS];
@@ -336,8 +316,9 @@ float cartTotal() {
 }
 
 float catalogDisplayPrice(int index) {
+  // Price is dynamically set from ESP32 catalog sync per bay
   if (activeCatalogType == "paper") {
-    return selectedPaperBrand == "Standard" ? 2.00 : 1.00;
+    return paperCatalog[index].price;
   }
   return ballpenCatalog[index].price;
 }
@@ -464,12 +445,7 @@ void drawCatalogScreen() {
     int rowY = catalogRowY(i, count);
     int btnSize = catalogButtonSize(count);
     bool selected = pendingQty[i] > 0;
-
-    // Check L5290 sensor if paper
-    bool isAvailable = true;
-    if (activeCatalogType == "paper") {
-      isAvailable = (digitalRead(PAPER_TRAY_PINS[i]) == HIGH);
-    }
+    bool isAvailable = catalog[i].isPaperPresent;
 
     if (selected) {
       tft.drawRoundRect(4, rowY, 232, btnSize + 8, 8, COL_GREEN);
@@ -626,12 +602,12 @@ void drawCartScreen() {
 
 void redrawCurrentScreen() {
   switch (currentScreen) {
-    case SCREEN_IDLE:    drawIdleScreen();    break;
-    case SCREEN_MAIN:    drawMainScreen();    break;
-    case SCREEN_PAPER_BRAND: drawPaperBrandScreen(); break;
-    case SCREEN_CATALOG: drawCatalogScreen(); break;
-    case SCREEN_CART:    drawCartScreen();    break;
-    case SCREEN_SUMMARY: drawSummaryScreen(); break;
+    case SCREEN_IDLE:        drawIdleScreen();        break;
+    case SCREEN_MAIN:        drawMainScreen();        break;
+    case SCREEN_PAPER_BRAND: drawPaperBrandScreen();   break;
+    case SCREEN_CATALOG:     drawCatalogScreen();     break;
+    case SCREEN_CART:        drawCartScreen();        break;
+    case SCREEN_SUMMARY:     drawSummaryScreen();     break;
   }
 }
 
@@ -674,7 +650,8 @@ void startOrder() {
 }
 
 void handleMainTouch(int x, int y) {
-  if (x >= 20 && x <= 230 && y >= 320 && y <= 340) {
+  // VIEW CART — works even offline
+  if (x >= 20 && x <= 230 && y >= 285 && y <= 315) {
     currentScreen = SCREEN_CART;
     drawCartScreen();
     return;
@@ -686,10 +663,11 @@ void handleMainTouch(int x, int y) {
   }
 
   if (x >= 20 && x <= 220 && y >= 95 && y <= 150) {
+    // BUY PAPER: go directly to 4-bay catalog (no brand picker)
     activeCatalogType = "paper";
     resetPendingSelections();
-    currentScreen = SCREEN_PAPER_BRAND;
-    drawPaperBrandScreen();
+    currentScreen = SCREEN_CATALOG;
+    drawCatalogScreen();
   } else if (x >= 20 && x <= 220 && y >= 160 && y <= 215) {
     activeCatalogType = "pen";
     resetPendingSelections();
@@ -736,9 +714,8 @@ void handleCatalogTouch(int x, int y) {
       return;
     }
     if (x >= plusX - 4 && x <= plusX + btnSize + 4 && y >= rowY && y <= rowY + btnSize + 8) {
-      // Check L5290 sensor if paper
-      if (activeCatalogType == "paper" && digitalRead(PAPER_TRAY_PINS[i]) == LOW) {
-        tftUiShowError("Bay is Out of Paper");
+      if (!catalog[i].isPaperPresent) {
+        tftUiShowError(activeCatalogType == "paper" ? "Bay is Out of Paper" : "Out of Stock");
         return;
       }
 
@@ -760,13 +737,7 @@ void handleCatalogTouch(int x, int y) {
   if (x >= 20 && x <= 120 && y >= 270 && y <= 350) { // ADD
     for (int i = 0; i < count; i++) {
       if (pendingQty[i] > 0) {
-        int productId = catalog[i].id;
-        String productName = catalog[i].name;
-        if (activeCatalogType == "paper") {
-          if (selectedPaperBrand == "Standard") productId += 4;
-          productName = selectedPaperBrand + " " + productName;
-        }
-        addToCart(activeCatalogType, productId, productName.c_str(), catalogDisplayPrice(i), pendingQty[i]);
+        addToCart(activeCatalogType, catalog[i].id, catalog[i].name, catalogDisplayPrice(i), pendingQty[i]);
       }
     }
     currentScreen = SCREEN_MAIN;
@@ -899,14 +870,139 @@ void tftUiLoop() {
   }
 }
 
+// ================= UNO SERIAL MESSAGES (L5290 PRESENCE & STATUS) =================
+// ================= CATALOG SYNC FROM ESP32 =================
+// Handles: PAPER_BAY:<bay>:<prod_id>:<presence>:<sheets>:<price_cents>:<name>
+void parsePaperBay(String msg) {
+  // Strip prefix
+  String data = msg.substring(10); // after "PAPER_BAY:"
+  int p1 = data.indexOf(':');
+  int p2 = data.indexOf(':', p1 + 1);
+  int p3 = data.indexOf(':', p2 + 1);
+  int p4 = data.indexOf(':', p3 + 1);
+  int p5 = data.indexOf(':', p4 + 1);
+  if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0) return;
+
+  int bayNum   = data.substring(0, p1).toInt();          // 1-4
+  int prodId   = data.substring(p1 + 1, p2).toInt();
+  String pres  = data.substring(p2 + 1, p3);             // HIGH or LOW
+  // p3..p4 = sheets (unused for display but kept)
+  int priceCents = data.substring(p4 + 1, p5).toInt();
+  String name  = data.substring(p5 + 1);
+  name.trim();
+
+  int idx = bayNum - 1;
+  if (idx < 0 || idx >= PAPER_COUNT) return;
+
+  paperCatalog[idx].id    = prodId;
+  paperCatalog[idx].price = priceCents / 100.0;
+  paperCatalog[idx].isPaperPresent = (pres == "HIGH");
+  name.toCharArray(paperCatalogNames[idx], 32);
+  paperCatalog[idx].name = paperCatalogNames[idx];
+
+  Serial.print("Catalog Sync Paper Bay "); Serial.print(bayNum);
+  Serial.print(": "); Serial.print(name);
+  Serial.print(" P"); Serial.print(priceCents / 100.0, 2);
+  Serial.print(" ["); Serial.print(pres); Serial.println("]");
+
+  if (currentScreen == SCREEN_CATALOG && activeCatalogType == "paper") {
+    drawCatalogScreen();
+  }
+}
+
+// Handles: PEN_BAY:<bay>:<prod_id>:<stock>:<price_cents>:<name>
+void parsePenBay(String msg) {
+  String data = msg.substring(8); // after "PEN_BAY:"
+  int p1 = data.indexOf(':');
+  int p2 = data.indexOf(':', p1 + 1);
+  int p3 = data.indexOf(':', p2 + 1);
+  int p4 = data.indexOf(':', p3 + 1);
+  if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0) return;
+
+  int bayNum     = data.substring(0, p1).toInt();        // 1-3
+  int prodId     = data.substring(p1 + 1, p2).toInt();
+  int stock      = data.substring(p2 + 1, p3).toInt();
+  int priceCents = data.substring(p3 + 1, p4).toInt();
+  String name    = data.substring(p4 + 1);
+  name.trim();
+
+  int idx = bayNum - 1;
+  if (idx < 0 || idx >= BALLPEN_COUNT) return;
+
+  ballpenCatalog[idx].id    = prodId;
+  ballpenCatalog[idx].price = priceCents / 100.0;
+  ballpenCatalog[idx].isPaperPresent = (stock > 0); // available if stock > 0
+  name.toCharArray(ballpenCatalogNames[idx], 32);
+  ballpenCatalog[idx].name = ballpenCatalogNames[idx];
+
+  Serial.print("Catalog Sync Pen Bay "); Serial.print(bayNum);
+  Serial.print(": "); Serial.print(name);
+  Serial.print(" P"); Serial.print(priceCents / 100.0, 2);
+  Serial.print(" Stock: "); Serial.println(stock);
+
+  if (currentScreen == SCREEN_CATALOG && activeCatalogType == "pen") {
+    drawCatalogScreen();
+  }
+}
+
+void handleUnoMessage(String msg) {
+  msg.trim();
+  if (msg.startsWith("STATUS:")) {
+    // Format: STATUS:HIGH,HIGH,LOW,HIGH
+    // Uno reports live L5290 sensor states; update paperCatalog presence flags
+    String list = msg.substring(7);
+    int start = 0;
+    for (int i = 0; i < 4; i++) {
+      int comma = list.indexOf(',', start);
+      String val = (comma == -1) ? list.substring(start) : list.substring(start, comma);
+      paperCatalog[i].isPaperPresent = (val == "HIGH");
+      if (comma == -1) break;
+      start = comma + 1;
+    }
+    if (currentScreen == SCREEN_CATALOG && activeCatalogType == "paper") {
+      drawCatalogScreen();
+    }
+  }
+}
+
+// Sends dispense command to Arduino Uno and waits for sensor confirmation
+int dispensePaperFromUno(int bayNumber, int sheetCount) {
+  if (bayNumber < 1 || bayNumber > 4) return 0;
+  UNO_SERIAL.println("DISPENSE:" + String(bayNumber) + ":" + String(sheetCount));
+
+  unsigned long startedAt = millis();
+  while (millis() - startedAt < PAPER_DISPENSE_TIMEOUT_MS) {
+    if (UNO_SERIAL.available()) {
+      String response = UNO_SERIAL.readStringUntil('\n');
+      response.trim();
+      if (response.startsWith("DONE:")) {
+        // Format: DONE:<bay>:<count>
+        int second = response.indexOf(':', 5);
+        int count = response.substring(second + 1).toInt();
+        return count;
+      }
+      else if (response.startsWith("EMPTY:")) {
+        // Format: EMPTY:<bay>:<count>
+        int second = response.indexOf(':', 6);
+        int count = (second > 0) ? response.substring(second + 1).toInt() : 0;
+        paperCatalog[bayNumber - 1].isPaperPresent = false;
+        CLOUD_SERIAL.println("BAY_EMPTY:" + String(bayNumber));
+        return count;
+      }
+    }
+  }
+  return 0; // Timeout
+}
+
 // ================= DIAGNOSTICS =================
 void runDiagnostics() {
   Serial.println();
-  Serial.println("========== DIAGNOSTICS ==========");
+  Serial.println("========== DIAGNOSTICS (OPTION A) ==========");
   Serial.print("Uptime: "); Serial.print(millis() / 1000); Serial.println("s");
   Serial.print("OLED (SH1106)............ "); Serial.println(diagOledOk ? "OK" : "FAIL");
   Serial.print("Touchscreen (XPT2046)..... "); Serial.println(diagTouchOk ? "OK" : "FAIL");
   Serial.print("Coin acceptor pin (D2).... "); Serial.println("INPUT_PULLUP + interrupt INT0 configured");
+  Serial.println("Serial2 (Pins 16/17) ---> Arduino Uno Paper Controller connected at 9600 baud");
 
   Serial.println("--- Pen IR sensors (active LOW = beam broken) ---");
   for (int i = 0; i < 3; i++) {
@@ -915,14 +1011,8 @@ void runDiagnostics() {
     Serial.println(digitalRead(penIrPins[i]) == HIGH ? "OK - beam clear" : "WARNING - LOW at idle");
   }
 
-  Serial.println("--- Paper L5290 Presence Sensors (HIGH = Present, LOW = Empty) ---");
-  for (int i = 0; i < 4; i++) {
-    Serial.print("  Bay "); Serial.print(i + 1); Serial.print(" (D");
-    Serial.print(PAPER_TRAY_PINS[i]); Serial.print("): ");
-    Serial.println(digitalRead(PAPER_TRAY_PINS[i]) == HIGH ? "PAPER PRESENT (HIGH)" : "EMPTY / OUT OF PAPER (LOW)");
-  }
-
-  Serial.println("==================================");
+  Serial.println("============================================");
+  UNO_SERIAL.println("STATUS?");
 }
 
 void printHardwareStatus() {
@@ -936,11 +1026,6 @@ void printHardwareStatus() {
     Serial.print(penIrPins[i]); Serial.print("): ");
     Serial.println(digitalRead(penIrPins[i]) == LOW ? "LOW / blocked" : "HIGH / clear");
   }
-  for (int i = 0; i < 4; i++) {
-    Serial.print("Paper L5290 Bay "); Serial.print(i + 1); Serial.print(" (D");
-    Serial.print(PAPER_TRAY_PINS[i]); Serial.print("): ");
-    Serial.println(digitalRead(PAPER_TRAY_PINS[i]) == HIGH ? "PRESENT (HIGH)" : "EMPTY (LOW)");
-  }
   Serial.print("Hopper relay D14: "); Serial.println(digitalRead(CHANGE_HOPPER_MOTOR_PIN) == HOPPER_RELAY_ON ? "ON" : "OFF");
   Serial.print("Hopper sensor D15: "); Serial.println(digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW ? "LOW / blocked" : "HIGH / clear");
 }
@@ -949,7 +1034,6 @@ void softResetMachineState() {
   Serial.println("SOFT RESET: returning machine logic to idle state.");
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   hopperManualRunning = false;
-  digitalWrite(PAPER_ENABLE_PIN, HIGH);
   for (int i = 0; i < 3; i++) stopStepper(i);
 
   noInterrupts();
@@ -981,16 +1065,18 @@ void softResetMachineState() {
   CLOUD_SERIAL.println("CREDIT:0");
   CLOUD_SERIAL.println("SOFT_RESET");
   CLOUD_SERIAL.println("STATUS?");
+  delay(300);
+  CLOUD_SERIAL.println("GET_CATALOG");
+  UNO_SERIAL.println("STATUS?");
   Serial.println("SOFT RESET: done.");
 }
 
 // ================= SETUP =================
 void setup() {
   Serial.begin(115200);
-#if defined(HAVE_HWSERIAL1)
-  CLOUD_SERIAL.begin(9600); // UART to ESP32
-#endif
-  Serial.println("--- REVAMPED SMART PAPER VENDO FIRMWARE STARTING ---");
+  CLOUD_SERIAL.begin(9600); // UART to ESP32 (Pins 18/19)
+  UNO_SERIAL.begin(9600);   // UART to Arduino Uno (Pins 16/17)
+  Serial.println("--- REVAMPED SMART PAPER VENDO FIRMWARE (OPTION A) STARTING ---");
 
   for (int i = 0; i < 3; i++) penSteppers[i]->setSpeed(10);
 
@@ -1028,15 +1114,6 @@ void setup() {
   pinMode(PEN_IR_PIN2, INPUT_PULLUP);
   pinMode(PEN_IR_PIN3, INPUT_PULLUP);
 
-  for (int i = 0; i < 4; i++) {
-    pinMode(PAPER_STEP_PINS[i], OUTPUT);
-    pinMode(PAPER_DIR_PINS[i], OUTPUT);
-    pinMode(PAPER_TRAY_PINS[i], INPUT_PULLUP); // L5290 Presence Sensor
-    digitalWrite(PAPER_STEP_PINS[i], LOW);
-  }
-  pinMode(PAPER_ENABLE_PIN, OUTPUT);
-  digitalWrite(PAPER_ENABLE_PIN, HIGH); // drivers disabled until plan arrives
-
   pinMode(CHANGE_HOPPER_MOTOR_PIN, OUTPUT);
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   pinMode(CHANGE_HOPPER_SENSOR_PIN, INPUT_PULLUP);
@@ -1049,6 +1126,10 @@ void setup() {
   updateLCD();
   CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)credits));
   CLOUD_SERIAL.println("STATUS?");
+  // Request live catalog from ESP32 after boot so TFT shows real bay assignments
+  delay(500);
+  CLOUD_SERIAL.println("GET_CATALOG");
+  UNO_SERIAL.println("STATUS?");
   runDiagnostics();
 }
 
@@ -1125,6 +1206,12 @@ void loop() {
     handleCloudCommand(msg);
   }
 
+  if (UNO_SERIAL.available()) {
+    String msg = UNO_SERIAL.readStringUntil('\n');
+    msg.trim();
+    handleUnoMessage(msg);
+  }
+
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
@@ -1166,40 +1253,6 @@ bool dispenseOnePen(int channel) {
   pen->step(-1024);
   stopStepper(penIndex);
   return detected;
-}
-
-// Dispenses sheet-by-sheet with L5290 tray sensor verification
-bool dispenseOnePaper(int channel) {
-  int index = channel - 1;
-  if (index < 0 || index > 3) return false;
-  const int traySensorPin = PAPER_TRAY_PINS[index];
-  const int stepPin = PAPER_STEP_PINS[index];
-
-  // 1. Check L5290 Presence Sensor before starting
-  if (digitalRead(traySensorPin) == LOW) {
-    Serial.println("PAPER ABORT: L5290 indicates bay is empty / out of paper.");
-    CLOUD_SERIAL.println("BAY_EMPTY:" + String(channel));
-    return false;
-  }
-
-  digitalWrite(PAPER_DIR_PINS[index], HIGH);
-  digitalWrite(PAPER_ENABLE_PIN, LOW);
-
-  // Pulse feeder stepper motor to dispense 1 sheet
-  for (int s = 0; s < 400; s++) {
-    // Continuous L5290 check during rotation
-    if (digitalRead(traySensorPin) == LOW) {
-      digitalWrite(PAPER_ENABLE_PIN, HIGH);
-      CLOUD_SERIAL.println("BAY_EMPTY:" + String(channel));
-      return false;
-    }
-    digitalWrite(stepPin, HIGH); delayMicroseconds(700);
-    digitalWrite(stepPin, LOW);  delayMicroseconds(700);
-  }
-
-  digitalWrite(PAPER_ENABLE_PIN, HIGH);
-  delay(200);
-  return true;
 }
 
 void stopStepper(int penIndex) {
@@ -1252,11 +1305,19 @@ void executeDispensePlan(String message) {
     int channel = line.substring(p2 + 1, p3).toInt();
     int expectedOutput = line.substring(p3 + 1).toInt();
     int actualOutput = 0;
-    for (int item = 0; item < expectedOutput; item++) {
-      bool released = type == "paper" ? dispenseOnePaper(channel) : dispenseOnePen(channel);
-      if (!released) break;
-      actualOutput++;
+
+    if (type == "paper") {
+      // Delegate 4-bay paper dispense to Arduino Uno
+      actualOutput = dispensePaperFromUno(channel, expectedOutput);
+    } else {
+      // Dispense pens directly on Mega
+      for (int item = 0; item < expectedOutput; item++) {
+        bool released = dispenseOnePen(channel);
+        if (!released) break;
+        actualOutput++;
+      }
     }
+
     if (results.length()) results += ';';
     results += type + "," + String(productId) + "," + String(actualOutput);
     if (end < 0) break;
@@ -1308,6 +1369,10 @@ void handleCloudCommand(String msg) {
   else if (msg.startsWith("PLAN:")) executeDispensePlan(msg);
   else if (msg.startsWith("FINISHED:")) finishUiAfterTransaction(msg);
   else if (msg.startsWith("ERR:")) showError(msg.substring(4));
+  // ── Dynamic catalog sync from ESP32 ──────────────────────────
+  else if (msg.startsWith("PAPER_BAY:")) parsePaperBay(msg);
+  else if (msg.startsWith("PEN_BAY:"))   parsePenBay(msg);
+  // ─────────────────────────────────────────────────────────────
   else if (msg.startsWith("WIFI:")) {
     bool connected = msg.substring(5) == "1";
     tftUiSetWifiConnected(connected);
