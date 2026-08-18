@@ -590,33 +590,49 @@ export default function Inventory() {
                   </p>
                 </>
               ) : (
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
-                      Pieces to Refill
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={bayFormData.pieces_refilled}
-                      onChange={(e) => setBayFormData({ ...bayFormData, pieces_refilled: e.target.value })}
-                      className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                    />
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+                        Pieces to Refill (from Storage)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={bayFormData.pieces_refilled}
+                        onChange={(e) => setBayFormData({ ...bayFormData, pieces_refilled: e.target.value })}
+                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                        placeholder="e.g. 10"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+                        Resulting Bay Stock
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={
+                          parseInt(bayFormData.pieces_refilled || 0, 10) > 0
+                            ? Math.min((editingBay.bay.current_stock || 0) + parseInt(bayFormData.pieces_refilled || 0, 10), editingBay.bay.max_capacity || 100)
+                            : (bayFormData.current_stock || 0)
+                        }
+                        onChange={(e) => {
+                          setBayFormData({
+                            ...bayFormData,
+                            current_stock: e.target.value,
+                            pieces_refilled: 0
+                          });
+                        }}
+                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
-                      Direct Set Bay Stock
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={bayFormData.current_stock}
-                      onChange={(e) => setBayFormData({ ...bayFormData, current_stock: e.target.value })}
-                      className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                    />
-                  </div>
-                </div>
+                  <p className="text-[11px] text-slate-400 bg-slate-100 dark:bg-white/[0.02] p-3 rounded-xl">
+                    💡 <strong>Ballpen Refill Rule:</strong> Entering refill pieces transfers them directly from Master Storage into this dispenser bay (Bay Stock increases, Storage Stock decreases).
+                  </p>
+                </>
               )}
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-white/[0.06]">

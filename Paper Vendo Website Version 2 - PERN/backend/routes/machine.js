@@ -227,30 +227,54 @@ export function createMachineRouter(supabase) {
     try {
       const productId = assigned_product_id ? asInt(assigned_product_id) : null;
       const refilled = asInt(pieces_refilled, 0);
+      const directStock = (current_stock !== undefined && refilled === 0) ? asInt(current_stock) : null;
 
-      const { data: comp } = await supabase.from('ballpen_compartments').select('*').eq('compartment_number', compartmentNumber).single();
-      const newStock = current_stock !== undefined ? asInt(current_stock) : ((comp?.current_piece_stock || 0) + refilled);
+      // 1. Try atomic database stored procedure
+      const { error: rpcError } = await supabase.rpc('admin_reassign_pen_bay', {
+        p_compartment_number: compartmentNumber,
+        p_new_product_id: productId,
+        p_pieces_refilled: refilled,
+        p_direct_stock: directStock
+      });
 
-      if (productId && refilled > 0) {
-        const { data: prod } = await supabase.from('ballpen_inventory').select('storage_stock_pieces').eq('id', productId).single();
-        if (prod && prod.storage_stock_pieces >= refilled) {
+      if (rpcError) {
+        console.warn('RPC admin_reassign_pen_bay error, using direct table fallback:', rpcError.message);
+        const { data: comp } = await supabase.from('ballpen_compartments').select('*').eq('compartment_number', compartmentNumber).single();
+        const maxCap = max_capacity ? asInt(max_capacity) : (comp?.max_piece_capacity || 100);
+        let newStock = comp?.current_piece_stock || 0;
+
+        if (productId && refilled > 0) {
+          const { data: prod } = await supabase.from('ballpen_inventory').select('storage_stock_pieces').eq('id', productId).single();
+          if (prod && prod.storage_stock_pieces >= refilled) {
+            await supabase.from('ballpen_inventory').update({
+              storage_stock_pieces: prod.storage_stock_pieces - refilled,
+              location_status: 'In compartment',
+              updated_at: new Date().toISOString()
+            }).eq('id', productId);
+            newStock = Math.min(newStock + refilled, maxCap);
+          }
+        } else if (current_stock !== undefined) {
+          newStock = Math.min(asInt(current_stock), maxCap);
+        }
+
+        if (productId) {
           await supabase.from('ballpen_inventory').update({
-            storage_stock_pieces: prod.storage_stock_pieces - refilled,
             location_status: 'In compartment',
             updated_at: new Date().toISOString()
           }).eq('id', productId);
         }
+
+        const { error } = await supabase.from('ballpen_compartments').update({
+          assigned_product_id: productId,
+          current_piece_stock: newStock,
+          max_piece_capacity: maxCap,
+          physical_status,
+          updated_at: new Date().toISOString()
+        }).eq('compartment_number', compartmentNumber);
+
+        if (error) throw error;
       }
 
-      const { error } = await supabase.from('ballpen_compartments').update({
-        assigned_product_id: productId,
-        current_piece_stock: newStock,
-        max_piece_capacity: max_capacity ? asInt(max_capacity) : 100,
-        physical_status,
-        updated_at: new Date().toISOString()
-      }).eq('compartment_number', compartmentNumber);
-
-      if (error) throw error;
       return res.status(200).json({ message: `Ballpen Compartment ${compartmentNumber} updated successfully.` });
     } catch (err) {
       console.error('Error updating ballpen compartment:', err);

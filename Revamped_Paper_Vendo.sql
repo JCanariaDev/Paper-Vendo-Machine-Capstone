@@ -487,8 +487,90 @@ BEGIN
 END;
 $$;
 
+-- ------------------------------------------------------------------------------
+-- Reassign / Refill Ballpen Compartment
+-- Deducts pieces from main storage and adds them to the physical bay stock
+-- ------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION admin_reassign_pen_bay(
+    p_compartment_number INTEGER,
+    p_new_product_id INTEGER,
+    p_pieces_refilled INTEGER DEFAULT 0,
+    p_direct_stock INTEGER DEFAULT NULL
+)
+RETURNS VOID LANGUAGE plpgsql AS $$
+DECLARE
+    v_old_product_id INTEGER;
+    v_available_pieces INTEGER;
+    v_current_stock INTEGER;
+    v_max_capacity INTEGER;
+    v_new_stock INTEGER;
+BEGIN
+    SELECT assigned_product_id, current_piece_stock, max_piece_capacity
+      INTO v_old_product_id, v_current_stock, v_max_capacity
+      FROM ballpen_compartments
+     WHERE compartment_number = p_compartment_number
+     FOR UPDATE;
+     
+    IF NOT FOUND THEN RAISE EXCEPTION 'Ballpen compartment % does not exist', p_compartment_number; END IF;
+
+    -- If changing assigned product, check if old product returns to 'In stock'
+    IF v_old_product_id IS NOT NULL AND v_old_product_id <> p_new_product_id THEN
+        IF NOT EXISTS (SELECT 1 FROM ballpen_compartments WHERE assigned_product_id = v_old_product_id AND compartment_number <> p_compartment_number) THEN
+            UPDATE ballpen_inventory
+               SET location_status = 'In stock', updated_at = NOW()
+             WHERE id = v_old_product_id;
+        END IF;
+    END IF;
+
+    -- Validate new product
+    IF p_new_product_id IS NOT NULL THEN
+        SELECT storage_stock_pieces INTO v_available_pieces
+          FROM ballpen_inventory
+         WHERE id = p_new_product_id
+         FOR UPDATE;
+         
+        IF NOT FOUND THEN RAISE EXCEPTION 'Ballpen product % not found', p_new_product_id; END IF;
+        
+        IF p_pieces_refilled > 0 THEN
+            IF v_available_pieces < p_pieces_refilled THEN
+                RAISE EXCEPTION 'Insufficient storage pieces (% available, % requested)', v_available_pieces, p_pieces_refilled;
+            END IF;
+            -- Deduct refilled pieces from master storage
+            UPDATE ballpen_inventory
+               SET storage_stock_pieces = storage_stock_pieces - p_pieces_refilled,
+                   location_status = 'In compartment',
+                   updated_at = NOW()
+             WHERE id = p_new_product_id;
+             
+            v_new_stock := LEAST(v_current_stock + p_pieces_refilled, v_max_capacity);
+        ELSE
+            UPDATE ballpen_inventory
+               SET location_status = 'In compartment',
+                   updated_at = NOW()
+             WHERE id = p_new_product_id;
+             
+            IF p_direct_stock IS NOT NULL THEN
+                v_new_stock := LEAST(p_direct_stock, v_max_capacity);
+            ELSE
+                v_new_stock := v_current_stock;
+            END IF;
+        END IF;
+    ELSE
+        v_new_stock := 0;
+    END IF;
+
+    -- Update compartment state
+    UPDATE ballpen_compartments
+       SET assigned_product_id = p_new_product_id,
+           current_piece_stock = v_new_stock,
+           updated_at = NOW()
+     WHERE compartment_number = p_compartment_number;
+END;
+$$;
+
 GRANT EXECUTE ON FUNCTION machine_reserve_transaction(INTEGER, JSONB) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_mark_change_paid(UUID, INTEGER) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_cancel_reserved_transaction(UUID, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_finish_transaction(UUID, JSONB) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) TO anon, authenticated;
