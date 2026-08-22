@@ -32,44 +32,48 @@ const int HOPPER_RELAY_PIN  = 7; // Controls the 5V Relay Module (SRD-05VDC-SL-C
 const int HOPPER_SENSOR_PIN = 2; // Green PCB IR Sensor Signal (Interrupt 0)
 
 // --- RELAY POLARITY CONFIGURATION ---
-// Most standard SRD-05VDC-SL-C blue relay modules with optocoupler are Active-LOW:
-// LOW  (0V) = Relay ON  (Motor Runs)
-// HIGH (5V) = Relay OFF (Motor Stops)
-#define RELAY_ACTIVE_LOW 1
+// Set to 0 if your relay is Active-HIGH (HIGH = ON, LOW = OFF)
+// Set to 1 if your relay is Active-LOW  (LOW = ON, HIGH = OFF)
+// We provide an automatic software toggle 'INVERT' in Serial Monitor
+int relayActiveLow = 1; // Default Active-LOW
 
-#if RELAY_ACTIVE_LOW
-  const int RELAY_ON  = LOW;
-  const int RELAY_OFF = HIGH;
-#else
-  const int RELAY_ON  = HIGH;
-  const int RELAY_OFF = LOW;
-#endif
+int getRelayOnLevel()  { return relayActiveLow ? LOW : HIGH; }
+int getRelayOffLevel() { return relayActiveLow ? HIGH : LOW; }
 
 // --- SAFETY TIMEOUTS ---
-const unsigned long COIN_TIMEOUT_MS = 3500; // Shuts off if no coin passes within 3.5s (empty/jam protection)
-const unsigned long DEBOUNCE_MS     = 40;   // Optical sensor pulse debounce threshold
+const unsigned long COIN_TIMEOUT_MS = 4000; // Shuts off if no coin passes within 4s (empty/jam protection)
+const unsigned long DEBOUNCE_MS     = 30;   // Optical sensor pulse debounce threshold
 
 // --- RUNTIME STATE ---
 volatile int coinsDispensedCount = 0;
 volatile unsigned long lastPulseTime = 0;
 volatile bool newCoinPulseFlag = false;
 
-bool isDispensing = false;
+volatile bool isDispensing = false;
 int targetCoinCount = 3; // Default 3 coins
 unsigned long dispenseStartedAt = 0;
 unsigned long lastCoinDispensedAt = 0;
 
+void turnMotorOn() {
+  digitalWrite(HOPPER_RELAY_PIN, getRelayOnLevel());
+}
+
+void turnMotorOff() {
+  digitalWrite(HOPPER_RELAY_PIN, getRelayOffLevel());
+}
+
 void coinSensorISR() {
   unsigned long now = millis();
-  // Filter out electrical double-bounces
+  // Filter out electrical double-bounces (30ms threshold)
   if (now - lastPulseTime > DEBOUNCE_MS) {
     coinsDispensedCount++;
     lastPulseTime = now;
     newCoinPulseFlag = true;
 
-    // INSTANT MOTOR SHUTOFF inside ISR for microsecond precision stopping
+    // IMMEDIATE HARD CUTOFF inside interrupt
     if (isDispensing && coinsDispensedCount >= targetCoinCount) {
-      digitalWrite(HOPPER_RELAY_PIN, RELAY_OFF); // Cut power immediately!
+      isDispensing = false;
+      digitalWrite(HOPPER_RELAY_PIN, getRelayOffLevel()); // Cut power instantly!
     }
   }
 }
@@ -79,24 +83,18 @@ void printMenu() {
   Serial.println(F("=========================================================="));
   Serial.println(F("   ALLAN 220V AC COIN HOPPER TEST - ARDUINO UNO + RELAY   "));
   Serial.println(F("=========================================================="));
+  Serial.print(F(" Current Relay Mode: "));
+  Serial.println(relayActiveLow ? F("Active-LOW (Standard)") : F("Active-HIGH"));
   Serial.println(F(" Commands you can type in Serial Monitor:"));
-  Serial.println(F("   3           -> Dispense 3 coins (Default test)"));
-  Serial.println(F("   5 or 10     -> Dispense custom number of coins"));
+  Serial.println(F("   3           -> Dispense 3 coins"));
+  Serial.println(F("   <number>    -> Dispense custom number of coins (e.g. 5, 10)"));
   Serial.println(F("   ON          -> Manually turn Relay/Motor ON"));
-  Serial.println(F("   OFF         -> Manually turn Relay/Motor OFF"));
+  Serial.println(F("   OFF         -> Manually turn Relay/Motor OFF (CUT POWER)"));
+  Serial.println(F("   INVERT      -> Flip Relay ON/OFF logic (if relay is inverted)"));
   Serial.println(F("   SENSOR      -> Check live Green PCB Sensor state"));
   Serial.println(F("   HELP        -> Print this menu"));
   Serial.println(F("=========================================================="));
-  Serial.println(F("Type a command and press ENTER (or type 3 to test):"));
   Serial.println();
-}
-
-void turnMotorOn() {
-  digitalWrite(HOPPER_RELAY_PIN, RELAY_ON);
-}
-
-void turnMotorOff() {
-  digitalWrite(HOPPER_RELAY_PIN, RELAY_OFF);
 }
 
 void startDispense(int target) {
@@ -105,20 +103,13 @@ void startDispense(int target) {
     return;
   }
 
-  // Pre-check sensor state
-  if (digitalRead(HOPPER_SENSOR_PIN) == LOW) {
-    Serial.println(F("WARNING: Coin sensor is currently BLOCKED (LOW) before starting!"));
-    Serial.println(F("Please check if a coin is stuck in the exit chute or if sensor is misaligned."));
-    return;
-  }
-
   targetCoinCount = target;
   noInterrupts();
   coinsDispensedCount = 0;
   newCoinPulseFlag = false;
+  isDispensing = true;
   interrupts();
 
-  isDispensing = true;
   dispenseStartedAt = millis();
   lastCoinDispensedAt = millis();
 
@@ -126,7 +117,7 @@ void startDispense(int target) {
   Serial.print(F(">>> STARTING DISPENSE: Target = "));
   Serial.print(targetCoinCount);
   Serial.println(F(" Coins <<<"));
-  Serial.println(F("Relay CLOSED -> Motor spinning..."));
+  Serial.println(F("Relay ON -> Motor spinning..."));
 
   turnMotorOn();
 }
@@ -141,7 +132,7 @@ void checkSensorState() {
   } else {
     Serial.println(F("LOW (Beam Broken / Coin Detected / Blocked)"));
   }
-  Serial.println(F("Tip: Manually pass a coin or opaque card through the sensor slot to verify it changes to LOW."));
+  Serial.println(F("Tip: Pass a coin through the sensor slot to verify it changes to LOW."));
   Serial.println();
 }
 
@@ -158,6 +149,17 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(HOPPER_SENSOR_PIN), coinSensorISR, FALLING);
 
   printMenu();
+
+  // Automatic 3-coin test countdown
+  Serial.println(F(">>> AUTOMATIC TEST: Starting 3-coin dispense in 3 seconds... <<<"));
+  delay(1000);
+  Serial.println(F(" 2..."));
+  delay(1000);
+  Serial.println(F(" 1..."));
+  delay(1000);
+
+  // Auto-start dispensing 3 coins
+  startDispense(3);
 }
 
 void loop() {
@@ -171,10 +173,8 @@ void loop() {
 
     Serial.print(F(" [COIN PULSE #"));
     Serial.print(coinsDispensedCount);
-    if (isDispensing) {
-      Serial.print(F(" of "));
-      Serial.print(targetCoinCount);
-    }
+    Serial.print(F(" of "));
+    Serial.print(targetCoinCount);
     Serial.print(F("] at +"));
     Serial.print(elapsed);
     Serial.println(F(" ms"));
@@ -214,10 +214,6 @@ void loop() {
       Serial.print(coinsDispensedCount);
       Serial.print(F(" of "));
       Serial.println(targetCoinCount);
-      Serial.println(F("  Possible causes:"));
-      Serial.println(F("   - Hopper is out of coins (empty)"));
-      Serial.println(F("   - Coin jam in the spinning disc"));
-      Serial.println(F("   - Sensor wiring disconnected (Pin D2)"));
       Serial.println(F("**************************************************"));
       Serial.println();
     }
@@ -239,10 +235,19 @@ void loop() {
       isDispensing = false;
       turnMotorOn();
     }
-    else if (input == "OFF") {
+    else if (input == "OFF" || input == "STOP") {
       Serial.println(F("MANUAL OVERRIDE: Turning Motor OFF."));
       isDispensing = false;
       turnMotorOff();
+    }
+    else if (input == "INVERT") {
+      relayActiveLow = !relayActiveLow;
+      turnMotorOff();
+      Serial.println();
+      Serial.print(F(">>> RELAY LOGIC INVERTED! Current Mode: "));
+      Serial.println(relayActiveLow ? F("Active-LOW") : F("Active-HIGH"));
+      Serial.println(F("Motor set to OFF with new polarity."));
+      Serial.println();
     }
     else if (input == "SENSOR" || input == "TEST") {
       checkSensorState();
@@ -254,7 +259,7 @@ void loop() {
     else {
       Serial.print(F("Unknown command: '"));
       Serial.print(input);
-      Serial.println(F("'. Type HELP or enter a number (e.g. 10)."));
+      Serial.println(F("'. Type 3 to dispense or INVERT to flip relay logic."));
     }
   }
 }

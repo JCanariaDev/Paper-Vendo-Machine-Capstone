@@ -70,8 +70,11 @@
 
 // --- PINS (existing) ---
 const int COIN_PIN = 2;
-const int COIN_INHIBIT_PIN = 6; // Moved from D16 to D6 to free D16/D17 for Serial2 (Uno)
-const bool COIN_INHIBIT_ACTIVE_HIGH = true;
+const int COIN_INHIBIT_PIN = 6; // Pin D6: Drives Coin Acceptor Relay
+int coinRelayOnLevel  = HIGH;   // HIGH = Relay ON (powers coin acceptor)
+int coinRelayOffLevel = LOW;    // LOW  = Relay OFF (cuts power to coin acceptor)
+const uint16_t MAX_CREDITS_ALLOWED = 30; // Maximum allowed credits (PHP 30 cap)
+volatile unsigned long ignoreCoinPulsesUntil = 0; // Anti-glitch surge filter on relay switching
 
 const int LED_GREEN_PIN = 8;
 const int LED_BLUE_PIN = 13;
@@ -324,10 +327,15 @@ float catalogDisplayPrice(int index) {
 }
 
 void setCoinAcceptance(bool allowed) {
-  int level = allowed
-    ? (COIN_INHIBIT_ACTIVE_HIGH ? LOW : HIGH)
-    : (COIN_INHIBIT_ACTIVE_HIGH ? HIGH : LOW);
-  digitalWrite(COIN_INHIBIT_PIN, level);
+  // If credits reached or exceeded maximum limit (PHP 30), force reject coins
+  if (credits >= MAX_CREDITS_ALLOWED) {
+    allowed = false;
+  }
+  // Anti-glitch: Ignore power surge / relay transient noise on Pin D2 for 600ms
+  ignoreCoinPulsesUntil = millis() + 600;
+  
+  int targetLevel = allowed ? coinRelayOnLevel : coinRelayOffLevel;
+  digitalWrite(COIN_INHIBIT_PIN, targetLevel);
 }
 
 const int CATALOG_TOP = 58;
@@ -1135,12 +1143,18 @@ void setup() {
 
 void coinInterrupt() {
   if (orderInProgress) return;
-  static unsigned long lastPulse = 0;
   unsigned long now = millis();
+  // Anti-glitch: Ignore power surge / relay transient noise on Pin D2
+  if (now < ignoreCoinPulsesUntil) return;
+
+  static unsigned long lastPulse = 0;
   if (now - lastPulse > 50) {
-    credits++;
+    credits++; // Always add every valid coin pulse to user balance (e.g. 25 + 10 = 35)
     coinPulseReceived = true;
     lastPulse = now;
+    if (credits >= MAX_CREDITS_ALLOWED) {
+      setCoinAcceptance(false); // Cut power to coin acceptor relay to block NEW coins
+    }
   }
 }
 
@@ -1198,6 +1212,14 @@ void loop() {
     tftUiSetCredits();
     CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)creditSnapshot));
     Serial.println("Credits inserted! Total: P" + String((unsigned int)creditSnapshot));
+
+    if (creditSnapshot >= MAX_CREDITS_ALLOWED) {
+      setCoinAcceptance(false);
+      Serial.println("MAX CREDIT CAP (P30) REACHED: Coin acceptor relay turned OFF (Power Cut).");
+      tftUiShowError("Max P30 credit reached");
+    } else if (!orderInProgress && uiWifiConnected) {
+      setCoinAcceptance(true);
+    }
   }
 
   if (CLOUD_SERIAL.available()) {
@@ -1220,7 +1242,31 @@ void loop() {
     else if (cmd == "STATUS") printHardwareStatus();
     else if (cmd == "SOFT_RESET") softResetMachineState();
     else if (cmd == "ESP_RESET") CLOUD_SERIAL.println("ESP_RESET");
-    else if (cmd == "HOPPER ON") {
+    else if (cmd == "COIN ON" || cmd == "ACCEPTOR ON") {
+      setCoinAcceptance(true);
+      Serial.print("MANUAL COIN ACCEPTOR: Power ON. Pin D6 level = ");
+      Serial.println(digitalRead(COIN_INHIBIT_PIN) == HIGH ? "HIGH (5V)" : "LOW (0V)");
+    } else if (cmd == "COIN OFF" || cmd == "ACCEPTOR OFF") {
+      ignoreCoinPulsesUntil = millis() + 600;
+      digitalWrite(COIN_INHIBIT_PIN, coinRelayOffLevel);
+      Serial.print("MANUAL COIN ACCEPTOR: Power OFF (Cut). Pin D6 level = ");
+      Serial.println(digitalRead(COIN_INHIBIT_PIN) == HIGH ? "HIGH (5V)" : "LOW (0V)");
+    } else if (cmd == "COIN INVERT") {
+      int tmp = coinRelayOnLevel;
+      coinRelayOnLevel = coinRelayOffLevel;
+      coinRelayOffLevel = tmp;
+      setCoinAcceptance(credits < MAX_CREDITS_ALLOWED);
+      Serial.print("COIN RELAY POLARITY FLIPPED. ON level is now = ");
+      Serial.println(coinRelayOnLevel == HIGH ? "HIGH (5V)" : "LOW (0V)");
+    } else if (cmd == "COIN 1") {
+      ignoreCoinPulsesUntil = millis() + 600;
+      digitalWrite(COIN_INHIBIT_PIN, HIGH);
+      Serial.println("DIRECT PIN D6 -> HIGH (5V)");
+    } else if (cmd == "COIN 0") {
+      ignoreCoinPulsesUntil = millis() + 600;
+      digitalWrite(COIN_INHIBIT_PIN, LOW);
+      Serial.println("DIRECT PIN D6 -> LOW (0V)");
+    } else if (cmd == "HOPPER ON") {
       digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_ON);
       hopperManualRunning = true;
       hopperManualStartedAt = millis();
