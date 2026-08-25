@@ -71,10 +71,18 @@
 // --- PINS (existing) ---
 const int COIN_PIN = 2;
 const int COIN_INHIBIT_PIN = 6; // Pin D6: Drives Coin Acceptor Relay
-int coinRelayOnLevel  = HIGH;   // HIGH = Relay ON (powers coin acceptor)
-int coinRelayOffLevel = LOW;    // LOW  = Relay OFF (cuts power to coin acceptor)
+// EXACT HARDWARE CALIBRATION:
+// Pin D6 HIGH -> Relay LED OFF -> 12V ON (Coin Acceptor Powered ON)
+// Pin D6 LOW  -> Relay LED ON  -> 12V CUT (Coin Acceptor Powered OFF / Rejects Coins)
+int coinRelayOnLevel  = HIGH;   // HIGH = Power ON
+int coinRelayOffLevel = LOW;    // LOW  = Power OFF (Cut at >= 30 credits)
 const uint16_t MAX_CREDITS_ALLOWED = 30; // Maximum allowed credits (PHP 30 cap)
 volatile unsigned long ignoreCoinPulsesUntil = 0; // Anti-glitch surge filter on relay switching
+volatile bool coinAcceptorEnabled = true;         // Software gate for coin pulses
+// Option A: Delayed relay cutoff to capture all pulses from last inserted coin
+volatile bool pendingCoinAcceptorOff = false;     // Relay cut is queued, waiting for burst to finish
+volatile unsigned long lastCoinBurstTime = 0;     // Timestamp of most recent valid coin pulse
+const unsigned long COIN_BURST_SILENCE_MS = 350;  // Wait 350ms of silence before physically cutting relay
 
 const int LED_GREEN_PIN = 8;
 const int LED_BLUE_PIN = 13;
@@ -331,6 +339,8 @@ void setCoinAcceptance(bool allowed) {
   if (credits >= MAX_CREDITS_ALLOWED) {
     allowed = false;
   }
+  coinAcceptorEnabled = allowed;
+
   // Anti-glitch: Ignore power surge / relay transient noise on Pin D2 for 600ms
   ignoreCoinPulsesUntil = millis() + 600;
   
@@ -1143,17 +1153,26 @@ void setup() {
 
 void coinInterrupt() {
   if (orderInProgress) return;
+  // Hard software gate: If acceptor was cut off and not waiting for burst remainder, reject pulse!
+  if (!coinAcceptorEnabled && !pendingCoinAcceptorOff) return;
+
   unsigned long now = millis();
   // Anti-glitch: Ignore power surge / relay transient noise on Pin D2
+  // (only active after MANUAL relay switching, not after coin-triggered cutoff)
   if (now < ignoreCoinPulsesUntil) return;
 
   static unsigned long lastPulse = 0;
   if (now - lastPulse > 50) {
-    credits++; // Always add every valid coin pulse to user balance (e.g. 25 + 10 = 35)
+    credits++;            // Count every pulse — including the remainder of a multi-peso coin
     coinPulseReceived = true;
+    lastCoinBurstTime = now;  // Track when the last pulse arrived
     lastPulse = now;
+
     if (credits >= MAX_CREDITS_ALLOWED) {
-      setCoinAcceptance(false); // Cut power to coin acceptor relay to block NEW coins
+      // Option A: Do NOT cut relay here.
+      // Queue the cutoff and let loop() fire it only after 350ms of silence,
+      // so all remaining pulses of the current coin are fully counted first.
+      pendingCoinAcceptorOff = true;
     }
   }
 }
@@ -1199,11 +1218,25 @@ void loop() {
   noInterrupts();
   uint16_t creditSnapshot = credits;
   bool pulseSnapshot = coinPulseReceived;
+  bool pendingOff = pendingCoinAcceptorOff;
+  unsigned long burstTime = lastCoinBurstTime;
   coinPulseReceived = false;
   interrupts();
 
   if (pulseSnapshot) {
     Serial.println("Coin pulse detected on D2.");
+  }
+
+  // Option A: Fire deferred relay cutoff only after 350ms of coin pulse silence.
+  // This ensures all remaining pulses of the last inserted multi-peso coin are credited
+  // before we physically cut 12V power to the coin acceptor.
+  if (pendingOff && (millis() - burstTime >= COIN_BURST_SILENCE_MS)) {
+    noInterrupts();
+    pendingCoinAcceptorOff = false;  // Clear the flag
+    interrupts();
+    setCoinAcceptance(false);
+    Serial.println("MAX CREDIT CAP (P" + String(MAX_CREDITS_ALLOWED) + ") REACHED: Coin acceptor relay turned OFF (Power Cut). Final credits: P" + String((unsigned int)creditSnapshot));
+    tftUiShowError("Max P30 credit reached");
   }
 
   if (creditSnapshot != lastCredits) {
@@ -1213,11 +1246,8 @@ void loop() {
     CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)creditSnapshot));
     Serial.println("Credits inserted! Total: P" + String((unsigned int)creditSnapshot));
 
-    if (creditSnapshot >= MAX_CREDITS_ALLOWED) {
-      setCoinAcceptance(false);
-      Serial.println("MAX CREDIT CAP (P30) REACHED: Coin acceptor relay turned OFF (Power Cut).");
-      tftUiShowError("Max P30 credit reached");
-    } else if (!orderInProgress && uiWifiConnected) {
+    // Re-enable coin acceptor if credits dropped below the cap (e.g. after purchase/reset)
+    if (creditSnapshot < MAX_CREDITS_ALLOWED && !pendingOff && !orderInProgress && uiWifiConnected) {
       setCoinAcceptance(true);
     }
   }
@@ -1247,8 +1277,7 @@ void loop() {
       Serial.print("MANUAL COIN ACCEPTOR: Power ON. Pin D6 level = ");
       Serial.println(digitalRead(COIN_INHIBIT_PIN) == HIGH ? "HIGH (5V)" : "LOW (0V)");
     } else if (cmd == "COIN OFF" || cmd == "ACCEPTOR OFF") {
-      ignoreCoinPulsesUntil = millis() + 600;
-      digitalWrite(COIN_INHIBIT_PIN, coinRelayOffLevel);
+      setCoinAcceptance(false);
       Serial.print("MANUAL COIN ACCEPTOR: Power OFF (Cut). Pin D6 level = ");
       Serial.println(digitalRead(COIN_INHIBIT_PIN) == HIGH ? "HIGH (5V)" : "LOW (0V)");
     } else if (cmd == "COIN INVERT") {
