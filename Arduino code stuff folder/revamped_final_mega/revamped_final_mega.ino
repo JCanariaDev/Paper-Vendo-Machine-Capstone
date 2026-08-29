@@ -104,8 +104,8 @@ const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
 const unsigned long PAPER_DISPENSE_TIMEOUT_MS = 15000;
 
-const int HOPPER_RELAY_ON  = HIGH;
-const int HOPPER_RELAY_OFF = (HOPPER_RELAY_ON == HIGH) ? LOW : HIGH;
+const int HOPPER_RELAY_ON  = LOW;  // LOW  = Relay LED ON  -> Motor ON
+const int HOPPER_RELAY_OFF = HIGH; // HIGH = Relay LED OFF -> Motor OFF
 
 // --- TFT & TOUCH PINS ---
 #define TFT_CS   53
