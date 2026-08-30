@@ -344,23 +344,13 @@ float catalogDisplayPrice(int index) {
 }
 
 void setCoinAcceptance(bool allowed) {
-  // If credits reached or exceeded maximum limit (PHP 30), force reject coins
   if (credits >= MAX_CREDITS_ALLOWED) {
     allowed = false;
   }
-
+  coinAcceptorEnabled = allowed;
+  ignoreCoinPulsesUntil = millis() + 600;  
   int targetLevel = allowed ? coinRelayOnLevel : coinRelayOffLevel;
-
-  // Only switch relay and reset anti-glitch timer if the state is actually changing.
-  // Calling setCoinAcceptance(true) while already enabled was resetting ignoreCoinPulsesUntil
-  // to millis()+600, which blocked the 2nd-5th pulses of a multi-peso coin burst.
-  if (allowed != coinAcceptorEnabled) {
-    coinAcceptorEnabled = allowed;
-    digitalWrite(COIN_INHIBIT_PIN, targetLevel);
-    // Anti-glitch: Ignore power surge / relay transient noise on Pin D2 for 600ms
-    // Only fires on actual relay state change (not on redundant re-enable calls)
-    ignoreCoinPulsesUntil = millis() + 600;
-  }
+  digitalWrite(COIN_INHIBIT_PIN, targetLevel);
 }
 
 const int CATALOG_TOP = 58;
@@ -1332,7 +1322,7 @@ void loop() {
     Serial.println("Credits inserted! Total: P" + String((unsigned int)creditSnapshot));
 
     // Re-enable coin acceptor after each credit update (no WiFi dependency)
-    if (creditSnapshot < MAX_CREDITS_ALLOWED && !pendingOff && !orderInProgress) {
+    if (creditSnapshot < MAX_CREDITS_ALLOWED && !pendingOff && !orderInProgress && uiWifiConnected) {
       setCoinAcceptance(true);
     }
   }
