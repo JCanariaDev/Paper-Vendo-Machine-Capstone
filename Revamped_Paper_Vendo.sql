@@ -16,6 +16,15 @@ DROP TABLE IF EXISTS ballpen_inventory CASCADE;
 DROP TABLE IF EXISTS machine_status CASCADE;
 DROP TABLE IF EXISTS admins CASCADE;
 
+-- Drop all existing RPC functions so signature changes are applied cleanly
+DROP FUNCTION IF EXISTS machine_reserve_transaction(INTEGER, JSONB) CASCADE;
+DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB, INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB) CASCADE;
+DROP FUNCTION IF EXISTS machine_mark_change_paid(UUID, INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS machine_cancel_reserved_transaction(UUID, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) CASCADE;
+
 -- ------------------------------------------------------------------------------
 -- 1. Admins Table
 -- ------------------------------------------------------------------------------
