@@ -33,8 +33,8 @@ if (!supabaseUrl || !supabaseKey) {
 const supabase = createClient(supabaseUrl, supabaseKey);
 console.log('>>> Connected securely to Supabase Database Client');
 
-// Health Check Endpoint
-app.get('/api/health', (req, res) => {
+// Health Check Endpoints (Supports Render default and custom checks)
+app.get(['/', '/health', '/api/health'], (req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date() });
 });
 
@@ -48,9 +48,10 @@ app.use((err, req, res, next) => {
   res.status(500).json({ message: 'A server error occurred.' });
 });
 
-app.listen(PORT, () => {
+// Bind to 0.0.0.0 for Render / containerized deployment
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`========================================`);
   console.log(` PAPER VENDO SERVER ONLINE ON PORT ${PORT}`);
-  console.log(` Development URL: http://localhost:${PORT}`);
+  console.log(` Listening on host: 0.0.0.0:${PORT}`);
   console.log(`========================================`);
 });
