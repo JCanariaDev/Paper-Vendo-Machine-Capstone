@@ -104,9 +104,11 @@ CREATE TABLE change_inventory (
 -- ------------------------------------------------------------------------------
 CREATE TABLE sales_transactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    transaction_number BIGSERIAL UNIQUE,
+    tr_number TEXT GENERATED ALWAYS AS ('TR-' || LPAD(transaction_number::text, 5, '0')) STORED,
     machine_id TEXT NOT NULL DEFAULT 'paper-vendo-01',
     status TEXT NOT NULL DEFAULT 'RESERVED'
-      CHECK (status IN ('RESERVED', 'CHANGE_PAID', 'COMPLETED', 'CANCELLED', 'FAILED_CHANGE', 'FAILED_DISPENSE')),
+      CHECK (status IN ('RESERVED', 'CHANGE_PAID', 'COMPLETED', 'CANCELLED', 'FAILED_CHANGE', 'FAILED_DISPENSE', 'COMPLETED_CHANGE_OWED')),
     credit_received_cents INTEGER NOT NULL CHECK (credit_received_cents >= 0),
     subtotal_cents INTEGER NOT NULL CHECK (subtotal_cents >= 0),
     change_due_cents INTEGER NOT NULL CHECK (change_due_cents >= 0),
@@ -198,7 +200,7 @@ INSERT INTO machine_status (status_key, status_value) VALUES
 
 -- Reserve Transaction
 CREATE OR REPLACE FUNCTION machine_reserve_transaction(p_credit_cents INTEGER, p_lines JSONB)
-RETURNS TABLE(transaction_id UUID, subtotal_cents INTEGER, change_due_cents INTEGER, dispense_plan JSONB)
+RETURNS TABLE(transaction_id UUID, tr_number TEXT, subtotal_cents INTEGER, change_due_cents INTEGER, dispense_plan JSONB)
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -222,6 +224,7 @@ DECLARE
     v_change_plan JSONB := '[]'::jsonb;
     v_dispense_plan JSONB := '[]'::jsonb;
     v_tx UUID := gen_random_uuid();
+    v_tr_number TEXT;
 BEGIN
     IF p_credit_cents <= 0 OR jsonb_typeof(p_lines) <> 'array' OR jsonb_array_length(p_lines) = 0 THEN
         RAISE EXCEPTION 'A positive credit and at least one cart line are required';
@@ -288,7 +291,7 @@ BEGIN
     v_change := p_credit_cents - v_subtotal;
     v_remaining := v_change;
 
-    -- Calculate Change from Coin Hopper
+    -- Calculate Change from Coin Hopper if available (does not block purchase if hopper is short)
     FOR v_coin IN SELECT * FROM change_inventory ORDER BY denomination_cents DESC FOR UPDATE LOOP
         v_take := LEAST(v_remaining / v_coin.denomination_cents, v_coin.current_coin_count - v_coin.reserved_coin_count);
         IF v_take > 0 THEN
@@ -296,13 +299,10 @@ BEGIN
             v_remaining := v_remaining - (v_take * v_coin.denomination_cents);
         END IF;
     END LOOP;
-    
-    IF v_remaining <> 0 THEN 
-        RAISE EXCEPTION 'Exact change is unavailable'; 
-    END IF;
 
     INSERT INTO sales_transactions (id, credit_received_cents, subtotal_cents, change_due_cents, change_plan)
-    VALUES (v_tx, p_credit_cents, v_subtotal, v_change, v_change_plan);
+    VALUES (v_tx, p_credit_cents, v_subtotal, v_change, v_change_plan)
+    RETURNING sales_transactions.tr_number INTO v_tr_number;
 
     -- Record transaction lines
     FOR v_line IN SELECT value FROM jsonb_array_elements(p_lines) LOOP
@@ -332,14 +332,14 @@ BEGIN
         v_dispense_plan := v_dispense_plan || jsonb_build_array(jsonb_build_object('item_type', v_type, 'product_id', v_product_id, 'physical_channel', v_channel, 'qty_requested', v_qty));
     END LOOP;
 
-    -- Reserve Coins
+    -- Reserve Coins in Hopper (if available)
     FOR v_coin IN SELECT * FROM jsonb_array_elements(v_change_plan) LOOP
         UPDATE change_inventory
            SET reserved_coin_count = reserved_coin_count + ((v_coin.value->>'count')::INTEGER), updated_at = NOW()
          WHERE hopper_channel = ((v_coin.value->>'hopper_channel')::INTEGER);
     END LOOP;
 
-    RETURN QUERY SELECT v_tx, v_subtotal, v_change, v_dispense_plan;
+    RETURN QUERY SELECT v_tx, v_tr_number, v_subtotal, v_change, v_dispense_plan;
 END;
 $$;
 
@@ -350,11 +350,10 @@ DECLARE v_tx sales_transactions%ROWTYPE; v_coin JSONB;
 BEGIN
     SELECT * INTO v_tx FROM sales_transactions WHERE id = p_transaction_id FOR UPDATE;
     IF NOT FOUND OR v_tx.status <> 'RESERVED' THEN RAISE EXCEPTION 'Transaction is not reserved'; END IF;
-    IF p_change_paid_cents <> v_tx.change_due_cents THEN RAISE EXCEPTION 'Change confirmation does not match transaction'; END IF;
     FOR v_coin IN SELECT value FROM jsonb_array_elements(v_tx.change_plan) LOOP
         UPDATE change_inventory
-           SET current_coin_count = current_coin_count - ((v_coin->>'count')::INTEGER),
-               reserved_coin_count = reserved_coin_count - ((v_coin->>'count')::INTEGER), updated_at = NOW()
+           SET current_coin_count = GREATEST(0, current_coin_count - ((v_coin->>'count')::INTEGER)),
+               reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)), updated_at = NOW()
          WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
     END LOOP;
     UPDATE sales_transactions SET status = 'CHANGE_PAID', change_paid_cents = p_change_paid_cents WHERE id = p_transaction_id;
@@ -376,20 +375,38 @@ BEGIN
         END IF;
     END LOOP;
     FOR v_coin IN SELECT value FROM jsonb_array_elements(v_tx.change_plan) LOOP
-        UPDATE change_inventory SET reserved_coin_count = reserved_coin_count - ((v_coin->>'count')::INTEGER), updated_at = NOW() WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
+        UPDATE change_inventory SET reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)), updated_at = NOW() WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
     END LOOP;
     UPDATE sales_transactions SET status = 'CANCELLED', failure_reason = p_reason, completed_at = NOW() WHERE id = p_transaction_id;
 END;
 $$;
 
--- Finish Transaction
-CREATE OR REPLACE FUNCTION machine_finish_transaction(p_transaction_id UUID, p_results JSONB)
-RETURNS TEXT LANGUAGE plpgsql AS $$
-DECLARE v_tx sales_transactions%ROWTYPE; v_line RECORD; v_result JSONB; v_actual INTEGER; v_all_success BOOLEAN := TRUE;
+-- Finish Transaction (Product-First with accurate Change Logging)
+CREATE OR REPLACE FUNCTION machine_finish_transaction(
+    p_transaction_id UUID, 
+    p_results JSONB, 
+    p_change_paid_cents INTEGER DEFAULT 0
+)
+RETURNS TABLE(tr_number TEXT, final_status TEXT, change_due_cents INTEGER, change_paid_cents INTEGER)
+LANGUAGE plpgsql AS $$
+DECLARE 
+    v_tx sales_transactions%ROWTYPE; 
+    v_line RECORD; 
+    v_result JSONB; 
+    v_actual INTEGER; 
+    v_all_success BOOLEAN := TRUE;
+    v_coin JSONB;
+    v_paid INTEGER;
+    v_final_status TEXT;
+    v_reason TEXT := NULL;
 BEGIN
     SELECT * INTO v_tx FROM sales_transactions WHERE id = p_transaction_id FOR UPDATE;
-    IF NOT FOUND OR v_tx.status <> 'CHANGE_PAID' THEN RAISE EXCEPTION 'Transaction is not ready for completion'; END IF;
+    IF NOT FOUND THEN RAISE EXCEPTION 'Transaction % not found', p_transaction_id; END IF;
     
+    v_paid := COALESCE(p_change_paid_cents, 0);
+    IF v_paid > v_tx.change_due_cents THEN v_paid := v_tx.change_due_cents; END IF;
+
+    -- Deduct physical item inventory
     FOR v_line IN SELECT * FROM sales_transaction_lines WHERE transaction_id = p_transaction_id FOR UPDATE LOOP
         SELECT value INTO v_result FROM jsonb_array_elements(p_results)
          WHERE (value->>'item_type') = v_line.item_type AND (value->>'product_id')::INTEGER = v_line.product_id;
@@ -411,14 +428,34 @@ BEGIN
         
         IF v_actual <> v_line.qty_requested THEN v_all_success := FALSE; END IF;
     END LOOP;
-    
+
+    -- Adjust change inventory (deduct actually released coins, free unused reservations)
+    FOR v_coin IN SELECT value FROM jsonb_array_elements(v_tx.change_plan) LOOP
+        UPDATE change_inventory 
+           SET reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)),
+               current_coin_count = GREATEST(0, current_coin_count - LEAST(v_paid / ((v_coin->>'denomination_cents')::INTEGER), (v_coin->>'count')::INTEGER)),
+               updated_at = NOW() 
+         WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
+    END LOOP;
+
+    IF NOT v_all_success THEN
+        v_final_status := 'FAILED_DISPENSE';
+        v_reason := 'Physical dispense sensor did not confirm all requested output';
+    ELSIF v_paid < v_tx.change_due_cents THEN
+        v_final_status := 'COMPLETED_CHANGE_OWED';
+        v_reason := 'Unreleased change of PHP ' || TO_CHAR((v_tx.change_due_cents - v_paid) / 100.0, 'FM999,990.00') || ' owed to student';
+    ELSE
+        v_final_status := 'COMPLETED';
+    END IF;
+
     UPDATE sales_transactions 
-       SET status = CASE WHEN v_all_success THEN 'COMPLETED' ELSE 'FAILED_DISPENSE' END,
-           failure_reason = CASE WHEN v_all_success THEN NULL ELSE 'Physical dispense sensor did not confirm all requested output' END,
+       SET status = v_final_status,
+           change_paid_cents = v_paid,
+           failure_reason = v_reason,
            completed_at = NOW() 
      WHERE id = p_transaction_id;
      
-    RETURN CASE WHEN v_all_success THEN 'COMPLETED' ELSE 'FAILED_DISPENSE' END;
+    RETURN QUERY SELECT v_tx.tr_number, v_final_status, v_tx.change_due_cents, v_paid;
 END;
 $$;
 
@@ -571,6 +608,6 @@ $$;
 GRANT EXECUTE ON FUNCTION machine_reserve_transaction(INTEGER, JSONB) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_mark_change_paid(UUID, INTEGER) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_cancel_reserved_transaction(UUID, TEXT) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION machine_finish_transaction(UUID, JSONB) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION machine_finish_transaction(UUID, JSONB, INTEGER) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) TO anon, authenticated;

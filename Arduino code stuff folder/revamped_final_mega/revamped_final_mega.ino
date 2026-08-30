@@ -166,7 +166,9 @@ volatile uint16_t credits = 0;
 volatile bool coinPulseReceived = false;
 bool isProcessing = false;
 String activeTransactionId = "";
-int activeChangeCents = 0;
+String activeTrNumber = "";          // Human-readable TR Record Number (e.g. "TR-00001")
+int activeChangeDueCents = 0;        // Total change owed to user
+int activeChangePaidCents = 0;       // Total change physically released by hopper
 String selectedPaperBrand = "Budget";
 
 // --- DIAGNOSTICS STATE ---
@@ -196,11 +198,13 @@ void drawPaperBrandScreen();
 void drawCatalogScreen();
 void drawSummaryScreen();
 void drawCartScreen();
+void drawReceiptScreen();
 void redrawCurrentScreen();
 void handleMainTouch(int x, int y);
 void handlePaperBrandTouch(int x, int y);
 void handleCatalogTouch(int x, int y);
 void handleCartTouch(int x, int y);
+void handleReceiptTouch(int x, int y);
 void tftUiShowError(String message);
 void tftUiShowSuccess(String message);
 void updateLCD();
@@ -283,7 +287,7 @@ CartItem cart[MAX_CART_ITEMS];
 int cartCount = 0;
 
 // ================= UI STATE =================
-enum UiScreen { SCREEN_IDLE, SCREEN_MAIN, SCREEN_PAPER_BRAND, SCREEN_CATALOG, SCREEN_CART, SCREEN_SUMMARY };
+enum UiScreen { SCREEN_IDLE, SCREEN_MAIN, SCREEN_PAPER_BRAND, SCREEN_CATALOG, SCREEN_CART, SCREEN_SUMMARY, SCREEN_RECEIPT };
 UiScreen currentScreen = SCREEN_IDLE;
 
 bool uiWifiConnected = false;
@@ -367,9 +371,16 @@ void drawTftStatusBar() {
   tft.fillRect(0, 0, tft.width(), 26, COL_BLACK);
   tft.setTextSize(1);
 
-  tft.setTextColor(uiWifiConnected ? COL_GREEN : COL_RED);
-  tft.setCursor(6, 8);
-  tft.print(uiWifiConnected ? "WIFI OK" : "WIFI --");
+  if (activeTrNumber.length() > 0) {
+    // Show official TR Record Number on top-left throughout checkout/dispense
+    tft.setTextColor(COL_ORANGE);
+    tft.setCursor(6, 8);
+    tft.print(activeTrNumber);
+  } else {
+    tft.setTextColor(uiWifiConnected ? COL_GREEN : COL_RED);
+    tft.setCursor(6, 8);
+    tft.print(uiWifiConnected ? "WIFI OK" : "WIFI --");
+  }
 
   String creditText = "Credits: P" + String((unsigned int)credits);
   int16_t x1, y1; uint16_t w, h;
@@ -618,6 +629,56 @@ void drawCartScreen() {
   printCentered("BACK", tft.width() / 2, 275 + 17);
 }
 
+void drawReceiptScreen() {
+  tft.fillScreen(COL_BLACK);
+  drawTftStatusBar();
+
+  tft.setTextSize(2);
+  if (activeChangeDueCents == 0) {
+    // Scenario 1: Exact payment
+    tft.setTextColor(COL_WHITE);
+    printCentered("Take your items!", tft.width() / 2, 85);
+    tft.setTextColor(COL_GREEN);
+    printCentered("Thank you!", tft.width() / 2, 125);
+  }
+  else if (activeChangePaidCents >= activeChangeDueCents && activeChangeDueCents > 0) {
+    // Scenario 2: Change successfully released
+    tft.setTextColor(COL_WHITE);
+    printCentered("Take your items!", tft.width() / 2, 70);
+    tft.setTextColor(COL_GREEN);
+    printCentered("Change Released:", tft.width() / 2, 105);
+    printCentered("PHP " + String(activeChangePaidCents / 100.0, 2), tft.width() / 2, 135);
+  }
+  else {
+    // Scenario 3: Change failed or incomplete (Claim message displayed)
+    tft.setTextColor(COL_WHITE);
+    printCentered("Take your items!", tft.width() / 2, 60);
+    tft.setTextColor(COL_ORANGE);
+    printCentered("Change Owed: P" + String((activeChangeDueCents - activeChangePaidCents) / 100.0, 2), tft.width() / 2, 95);
+    tft.setTextColor(COL_RED);
+    tft.setTextSize(1);
+    printCentered("Please present " + activeTrNumber, tft.width() / 2, 130);
+    printCentered("to the admin to claim.", tft.width() / 2, 150);
+  }
+
+  // Draw Confirm Button
+  tft.fillRoundRect(20, 240, 200, 55, 8, COL_BLUE);
+  tft.setTextColor(COL_WHITE);
+  tft.setTextSize(2);
+  printCentered("CONFIRM", tft.width() / 2, 267);
+}
+
+void handleReceiptTouch(int x, int y) {
+  if (x >= 20 && x <= 220 && y >= 240 && y <= 295) {
+    activeTrNumber = "";
+    activeTransactionId = "";
+    activeChangeDueCents = 0;
+    activeChangePaidCents = 0;
+    currentScreen = SCREEN_IDLE;
+    drawIdleScreen();
+  }
+}
+
 void redrawCurrentScreen() {
   switch (currentScreen) {
     case SCREEN_IDLE:        drawIdleScreen();        break;
@@ -626,6 +687,7 @@ void redrawCurrentScreen() {
     case SCREEN_CATALOG:     drawCatalogScreen();     break;
     case SCREEN_CART:        drawCartScreen();        break;
     case SCREEN_SUMMARY:     drawSummaryScreen();     break;
+    case SCREEN_RECEIPT:     drawReceiptScreen();     break;
   }
 }
 
@@ -804,10 +866,14 @@ void tftUiBegin() {
 
 void tftUiSetCredits() {
   bool hasCredits = credits > 0;
-  if (currentScreen == SCREEN_IDLE && hasCredits) {
+  if ((currentScreen == SCREEN_IDLE || currentScreen == SCREEN_RECEIPT) && hasCredits) {
+    activeTrNumber = "";
+    activeTransactionId = "";
+    activeChangeDueCents = 0;
+    activeChangePaidCents = 0;
     currentScreen = SCREEN_MAIN;
     redrawCurrentScreen();
-  } else if (currentScreen != SCREEN_IDLE && !hasCredits && !orderInProgress) {
+  } else if (currentScreen != SCREEN_IDLE && currentScreen != SCREEN_RECEIPT && !hasCredits && !orderInProgress) {
     currentScreen = SCREEN_IDLE;
     cartCount = 0;
     redrawCurrentScreen();
@@ -884,6 +950,7 @@ void tftUiLoop() {
     case SCREEN_PAPER_BRAND: handlePaperBrandTouch(x, y);   break;
     case SCREEN_CATALOG:     handleCatalogTouch(x, y);     break;
     case SCREEN_CART:        handleCartTouch(x, y);        break;
+    case SCREEN_RECEIPT:     handleReceiptTouch(x, y);     break;
     default: break;
   }
 }
@@ -1334,12 +1401,11 @@ void stopStepper(int penIndex) {
   for (int p = 0; p < 4; p++) digitalWrite(penStopPins[penIndex][p], LOW);
 }
 
+// Releases verified change using Coin Hopper (Non-blocking fallback)
 int releaseVerifiedChange(int changeCents) {
-  if (changeCents == 0) return 0;
-  if (changeCents % 100 != 0) return -1;
+  if (changeCents <= 0) return 0;
   if (digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW) {
-    Serial.println("HOPPER ABORT: exit sensor is LOW; clear it first.");
-    return -1;
+    Serial.println("HOPPER WARNING: exit sensor is LOW at start.");
   }
   const int expectedCoins = changeCents / 100;
   int countedCoins = 0;
@@ -1355,30 +1421,73 @@ int releaseVerifiedChange(int changeCents) {
     previousBlocked = blocked;
   }
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
-  return (countedCoins == expectedCoins) ? countedCoins * 100 : -1;
+  return countedCoins * 100; // Returns exact amount released
 }
 
 void executeDispensePlan(String message) {
-  int first = message.indexOf(':');
-  int second = message.indexOf(':', first + 1);
-  if (first < 0 || second < 0) { showError("Bad dispense plan"); return; }
-  const String transactionId = message.substring(first + 1, second);
-  const String encodedPlan = message.substring(second + 1);
-  if (transactionId != activeTransactionId) { showError("Wrong transaction"); return; }
+  // Format: PLAN:<tx_id>:<tr_number>:<subtotal_cents>:<change_due_cents>:<encodedPlan>
+  int p1 = message.indexOf(':');
+  int p2 = message.indexOf(':', p1 + 1);
+  int p3 = message.indexOf(':', p2 + 1);
+  int p4 = message.indexOf(':', p3 + 1);
+  
+  String transactionId = "";
+  String trNumber = "";
+  int subtotalCents = 0;
+  int changeDueCents = 0;
+  String encodedPlan = "";
 
+  if (p4 > 0) {
+    transactionId = message.substring(p1 + 1, p2);
+    trNumber = message.substring(p2 + 1, p3);
+    subtotalCents = message.substring(p3 + 1, p4).toInt();
+    int p5 = message.indexOf(':', p4 + 1);
+    if (p5 > 0) {
+      changeDueCents = message.substring(p4 + 1, p5).toInt();
+      encodedPlan = message.substring(p5 + 1);
+    } else {
+      changeDueCents = message.substring(p4 + 1).toInt();
+    }
+  } else if (p2 > 0) {
+    // Fallback for legacy 2-part format
+    transactionId = message.substring(p1 + 1, p2);
+    encodedPlan = message.substring(p2 + 1);
+    trNumber = "TR-00000";
+  }
+
+  activeTransactionId = transactionId;
+  activeTrNumber = trNumber;
+  activeChangeDueCents = changeDueCents;
+  activeChangePaidCents = 0;
+  orderTotalCost = subtotalCents / 100.0;
+
+  // Render Status Bar (displays TR Number on top-left)
+  drawTftStatusBar();
+
+  // Show "Dispensing items..." on TFT
+  tft.fillScreen(COL_BLACK);
+  drawTftStatusBar();
+  tft.setTextColor(COL_WHITE);
+  tft.setTextSize(2);
+  printCentered("Dispensing Items...", tft.width() / 2, 130);
+  tft.setTextSize(1);
+  tft.setTextColor(COL_ORANGE);
+  printCentered("Please wait for your paper / pens", tft.width() / 2, 165);
+
+  // ── STEP 1: GUARANTEED PRODUCT-FIRST PHYSICAL DISPENSING ──
   String results = "";
   int start = 0;
   while (start < encodedPlan.length()) {
     int end = encodedPlan.indexOf(';', start);
     String line = end < 0 ? encodedPlan.substring(start) : encodedPlan.substring(start, end);
-    int p1 = line.indexOf(',');
-    int p2 = line.indexOf(',', p1 + 1);
-    int p3 = line.indexOf(',', p2 + 1);
-    if (p1 <= 0 || p2 <= p1 || p3 <= p2) { showError("Bad plan line"); return; }
-    String type = line.substring(0, p1);
-    int productId = line.substring(p1 + 1, p2).toInt();
-    int channel = line.substring(p2 + 1, p3).toInt();
-    int expectedOutput = line.substring(p3 + 1).toInt();
+    int c1 = line.indexOf(',');
+    int c2 = line.indexOf(',', c1 + 1);
+    int c3 = line.indexOf(',', c2 + 1);
+    if (c1 <= 0 || c2 <= c1 || c3 <= c2) break;
+    String type = line.substring(0, c1);
+    int productId = line.substring(c1 + 1, c2).toInt();
+    int channel = line.substring(c2 + 1, c3).toInt();
+    int expectedOutput = line.substring(c3 + 1).toInt();
     int actualOutput = 0;
 
     if (type == "paper") {
@@ -1398,45 +1507,67 @@ void executeDispensePlan(String message) {
     if (end < 0) break;
     start = end + 1;
   }
-  CLOUD_SERIAL.println("FINISH:" + activeTransactionId + ":" + results);
+
+  // ── STEP 2: NON-BLOCKING COIN HOPPER CHANGE ATTEMPT ──
+  if (activeChangeDueCents > 0) {
+    tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
+    tft.setTextSize(2);
+    tft.setTextColor(COL_WHITE);
+    printCentered("Releasing Change...", tft.width() / 2, 130);
+    int verifiedChange = releaseVerifiedChange(activeChangeDueCents);
+    activeChangePaidCents = max(0, verifiedChange);
+  } else {
+    activeChangePaidCents = 0;
+  }
+
+  // ── STEP 3: NOTIFY ESP32 CLOUD GATEWAY ──
+  CLOUD_SERIAL.println("FINISH:" + activeTransactionId + ":" + results + ":" + String(activeChangePaidCents));
 }
 
 void beginReservedTransaction(String message) {
+  // Legacy handler kept for compatibility
   int first = message.indexOf(':');
   int second = message.indexOf(':', first + 1);
-  int third = message.indexOf(':', second + 1);
-  if (first < 0 || second < 0 || third < 0) { showError("Bad reservation"); return; }
+  if (first < 0 || second < 0) return;
   activeTransactionId = message.substring(first + 1, second);
-  orderTotalCost = message.substring(second + 1, third).toInt() / 100.0;
-  activeChangeCents = message.substring(third + 1).toInt();
-  orderSummaryText = "Reserved\nChange: P" + String(activeChangeCents / 100.0, 2);
-  drawSummaryScreen();
-
-  int verifiedChange = releaseVerifiedChange(activeChangeCents);
-  if (verifiedChange < 0) {
-    CLOUD_SERIAL.println("CHANGE_FAIL:" + activeTransactionId + ":HOPPER_SENSOR_TIMEOUT");
-    showError("Change not released");
-    return;
-  }
-  CLOUD_SERIAL.println("CHANGE_OK:" + activeTransactionId + ":" + String(verifiedChange));
 }
 
 void finishUiAfterTransaction(String message) {
-  bool completed = message.endsWith(":COMPLETED");
+  // Format: FINISHED:<tx_id>:<tr_number>:<status>:<change_due>:<change_paid>
+  int p1 = message.indexOf(':');
+  int p2 = message.indexOf(':', p1 + 1);
+  int p3 = message.indexOf(':', p2 + 1);
+  int p4 = message.indexOf(':', p3 + 1);
+  int p5 = message.indexOf(':', p4 + 1);
+
+  String trNum = activeTrNumber;
+  int dueCents = activeChangeDueCents;
+  int paidCents = activeChangePaidCents;
+
+  if (p2 > 0) {
+    if (p3 > 0) trNum = message.substring(p2 + 1, p3);
+    if (p5 > 0) {
+      dueCents = message.substring(p4 + 1, p5).toInt();
+      paidCents = message.substring(p5 + 1).toInt();
+    }
+  }
+
   credits = 0;
   orderInProgress = false;
   setCoinAcceptance(true);
   cartCount = 0;
-  activeTransactionId = "";
   updateLCD();
-  if (completed) {
-    refreshMachineAvailability(true);
-    tftUiShowSuccess("Take items");
-    currentScreen = SCREEN_IDLE;
-  } else {
-    showError("Partial dispense");
-  }
-  redrawCurrentScreen();
+  refreshMachineAvailability(true);
+
+  activeTrNumber = trNum;
+  activeChangeDueCents = dueCents;
+  activeChangePaidCents = paidCents;
+
+  tone(BUZZER_PIN, 1000, 300);
+
+  // Switch to non-blocking Receipt Screen with CONFIRM button
+  currentScreen = SCREEN_RECEIPT;
+  drawReceiptScreen();
 }
 
 void handleCloudCommand(String msg) {

@@ -69,9 +69,14 @@ function flattenPenCompartment(row) {
 
 function flattenTransactionLine(line) {
   const transaction = line.sales_transactions || {};
+  const dueCents = asInt(transaction.change_due_cents);
+  const paidCents = asInt(transaction.change_paid_cents);
+  const owedCents = Math.max(0, dueCents - paidCents);
+
   return {
     id: line.id,
     transaction_id: transaction.id,
+    tr_number: transaction.tr_number || (transaction.id ? `TR-${String(transaction.id).slice(0, 5).toUpperCase()}` : 'TR-00000'),
     status: transaction.status,
     item_type: line.item_type,
     brand_id: line.product_id,
@@ -87,7 +92,10 @@ function flattenTransactionLine(line) {
     amount_paid: asMoney(asInt(line.unit_price_cents) * asInt(line.units_requested)),
     credit_received: asMoney(transaction.credit_received_cents),
     subtotal: asMoney(transaction.subtotal_cents),
-    change_due: asMoney(transaction.change_due_cents),
+    change_due: asMoney(dueCents),
+    change_paid: asMoney(paidCents),
+    change_owed: asMoney(owedCents),
+    failure_reason: transaction.failure_reason,
     transaction_date: transaction.created_at,
     completed_at: transaction.completed_at,
     line_status: line.line_status
@@ -121,7 +129,7 @@ async function getInventory(supabase) {
 async function getTransactionLines(supabase) {
   const { data, error } = await supabase
     .from('sales_transaction_lines')
-    .select('*, sales_transactions!inner(id, status, credit_received_cents, subtotal_cents, change_due_cents, created_at, completed_at)');
+    .select('*, sales_transactions!inner(id, tr_number, status, credit_received_cents, subtotal_cents, change_due_cents, change_paid_cents, failure_reason, created_at, completed_at)');
   if (error) throw error;
   return (data || [])
     .map(flattenTransactionLine)

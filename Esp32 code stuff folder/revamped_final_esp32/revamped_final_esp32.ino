@@ -282,28 +282,37 @@ void reserveCart(const String &message) {
   if (!callRpc("machine_reserve_transaction", request, response)) return;
   JsonObject result = response[0];
   if (result.isNull()) { sendError("EMPTY_RESERVATION"); return; }
-  MEGA_SERIAL.println("RESERVED:" + result["transaction_id"].as<String>() + ":" + String(result["subtotal_cents"].as<int>()) + ":" + String(result["change_due_cents"].as<int>()));
+
+  String txId = result["transaction_id"].as<String>();
+  String trNumber = result["tr_number"].as<String>();
+  if (trNumber.length() == 0) trNumber = "TR-00000";
+  int subtotalCents = result["subtotal_cents"] | 0;
+  int changeDueCents = result["change_due_cents"] | 0;
+
+  // Build encoded dispense plan directly from RPC response
+  String encodedPlan;
+  JsonArray planArray = result["dispense_plan"].as<JsonArray>();
+  for (JsonObject line : planArray) {
+    if (encodedPlan.length()) encodedPlan += ';';
+    encodedPlan += line["item_type"].as<String>() + "," + String(line["product_id"].as<int>()) + "," + String(line["physical_channel"].as<int>()) + "," + String(line["qty_requested"].as<int>());
+  }
+
+  // Send complete Plan + TR Number directly to Mega (Product-First Flow)
+  // Format: PLAN:<tx_id>:<tr_number>:<subtotal_cents>:<change_due_cents>:<encodedPlan>
+  MEGA_SERIAL.println("PLAN:" + txId + ":" + trNumber + ":" + String(subtotalCents) + ":" + String(changeDueCents) + ":" + encodedPlan);
 }
 
 void changePaid(const String &message) {
+  // Deprecated in Product-First flow, kept for compatibility
   const int first = message.indexOf(':');
   const int second = message.indexOf(':', first + 1);
-  if (second < 0) { sendError("BAD_CHANGE_CONFIRMATION"); return; }
+  if (second < 0) return;
   const String transactionId = message.substring(first + 1, second);
   const int paidCents = message.substring(second + 1).toInt();
   DynamicJsonDocument request(512), response(512);
   request["p_transaction_id"] = transactionId;
   request["p_change_paid_cents"] = paidCents;
-  if (!callRpc("machine_mark_change_paid", request, response)) return;
-
-  DynamicJsonDocument plan(2048);
-  if (!getTransactionPlan(transactionId, plan)) { sendError("PLAN_UNAVAILABLE"); return; }
-  String encodedPlan;
-  for (JsonObject line : plan.as<JsonArray>()) {
-    if (encodedPlan.length()) encodedPlan += ';';
-    encodedPlan += line["item_type"].as<String>() + "," + String(line["product_id"].as<int>()) + "," + String(line["physical_channel"].as<int>()) + "," + String(line["qty_requested"].as<int>());
-  }
-  MEGA_SERIAL.println("PLAN:" + transactionId + ":" + encodedPlan);
+  callRpc("machine_mark_change_paid", request, response);
 }
 
 void cancelReservation(const String &message) {
@@ -317,13 +326,27 @@ void cancelReservation(const String &message) {
 }
 
 void finishTransaction(const String &message) {
+  // Format from Mega: FINISH:<tx_id>:<encodedResults>:<change_paid_cents>
   const int first = message.indexOf(':');
   const int second = message.indexOf(':', first + 1);
   if (second < 0) { sendError("BAD_FINISH_FORMAT"); return; }
-  DynamicJsonDocument request(2048), response(512);
-  request["p_transaction_id"] = message.substring(first + 1, second);
+  const String transactionId = message.substring(first + 1, second);
+  
+  int third = message.indexOf(':', second + 1);
+  String encodedResults;
+  int changePaidCents = 0;
+  if (third > 0) {
+    encodedResults = message.substring(second + 1, third);
+    changePaidCents = message.substring(third + 1).toInt();
+  } else {
+    encodedResults = message.substring(second + 1);
+  }
+
+  DynamicJsonDocument request(2048), response(1024);
+  request["p_transaction_id"] = transactionId;
+  request["p_change_paid_cents"] = changePaidCents;
   JsonArray results = request.createNestedArray("p_results");
-  const String encodedResults = message.substring(second + 1);
+  
   int start = 0;
   while (start < encodedResults.length()) {
     const int end = encodedResults.indexOf(';', start);
@@ -339,7 +362,15 @@ void finishTransaction(const String &message) {
     start = end + 1;
   }
   if (!callRpc("machine_finish_transaction", request, response)) return;
-  MEGA_SERIAL.println("FINISHED:" + request["p_transaction_id"].as<String>() + ":" + response.as<String>());
+  
+  JsonObject res = response[0];
+  String trNum = res["tr_number"] | "TR-00000";
+  String status = res["final_status"] | "COMPLETED";
+  int dueCents = res["change_due_cents"] | 0;
+  int paidCents = res["change_paid_cents"] | 0;
+
+  // Format: FINISHED:<tx_id>:<tr_number>:<status>:<change_due>:<change_paid>
+  MEGA_SERIAL.println("FINISHED:" + transactionId + ":" + trNum + ":" + status + ":" + String(dueCents) + ":" + String(paidCents));
 }
 
 // Update Bay Presence in Supabase if L5290 detects empty during operation
