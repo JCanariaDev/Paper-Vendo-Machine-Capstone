@@ -186,6 +186,7 @@ unsigned long swResetDebounceUntil = 0;
 
 // Forward declarations
 void setMachineIndicator(IndicatorState state, bool sound = false);
+void printCentered(const String &text, int cx, int cy);
 void printCentered(const char* text, int cx, int cy);
 float cartTotal();
 float catalogDisplayPrice(int index);
@@ -316,12 +317,16 @@ void refreshMachineAvailability(bool sound) {
 }
 
 // ================= DRAWING HELPERS =================
-void printCentered(const char* text, int cx, int cy) {
+void printCentered(const String &text, int cx, int cy) {
   int16_t x1, y1;
   uint16_t w, h;
-  tft.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+  tft.getTextBounds(text.c_str(), 0, 0, &x1, &y1, &w, &h);
   tft.setCursor(cx - w / 2, cy - h / 2);
   tft.print(text);
+}
+
+void printCentered(const char* text, int cx, int cy) {
+  printCentered(String(text), cx, cy);
 }
 
 float cartTotal() {
@@ -343,13 +348,19 @@ void setCoinAcceptance(bool allowed) {
   if (credits >= MAX_CREDITS_ALLOWED) {
     allowed = false;
   }
-  coinAcceptorEnabled = allowed;
 
-  // Anti-glitch: Ignore power surge / relay transient noise on Pin D2 for 600ms
-  ignoreCoinPulsesUntil = millis() + 600;
-  
   int targetLevel = allowed ? coinRelayOnLevel : coinRelayOffLevel;
-  digitalWrite(COIN_INHIBIT_PIN, targetLevel);
+
+  // Only switch relay and reset anti-glitch timer if the state is actually changing.
+  // Calling setCoinAcceptance(true) while already enabled was resetting ignoreCoinPulsesUntil
+  // to millis()+600, which blocked the 2nd-5th pulses of a multi-peso coin burst.
+  if (allowed != coinAcceptorEnabled) {
+    coinAcceptorEnabled = allowed;
+    digitalWrite(COIN_INHIBIT_PIN, targetLevel);
+    // Anti-glitch: Ignore power surge / relay transient noise on Pin D2 for 600ms
+    // Only fires on actual relay state change (not on redundant re-enable calls)
+    ignoreCoinPulsesUntil = millis() + 600;
+  }
 }
 
 const int CATALOG_TOP = 58;
@@ -717,7 +728,9 @@ void startOrder() {
   orderSummaryText = "";
   orderTotalCost = 0;
   activeTransactionId = "";
-  activeChangeCents = 0;
+  activeTrNumber = "";
+  activeChangeDueCents = 0;
+  activeChangePaidCents = 0;
   currentScreen = SCREEN_SUMMARY;
   drawSummaryScreen();
 
@@ -1129,7 +1142,9 @@ void softResetMachineState() {
   isProcessing = false;
   orderInProgress = false;
   activeTransactionId = "";
-  activeChangeCents = 0;
+  activeTrNumber = "";
+  activeChangeDueCents = 0;
+  activeChangePaidCents = 0;
   selectedPaperBrand = "Budget";
   activeCatalogType = "paper";
   cartCount = 0;
@@ -1229,6 +1244,9 @@ void coinInterrupt() {
   if (now < ignoreCoinPulsesUntil) return;
 
   static unsigned long lastPulse = 0;
+  // 50ms debounce: filters electrical noise while still capturing all pulse bursts
+  // from ₱1 (1 pulse), ₱5 (5 pulses), ₱10 (10 pulses), ₱20 (20 pulses)
+  // Coin acceptors typically send pulses 50-80ms apart within a burst.
   if (now - lastPulse > 50) {
     credits++;            // Count every pulse — including the remainder of a multi-peso coin
     coinPulseReceived = true;
@@ -1313,8 +1331,8 @@ void loop() {
     CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)creditSnapshot));
     Serial.println("Credits inserted! Total: P" + String((unsigned int)creditSnapshot));
 
-    // Re-enable coin acceptor if credits dropped below the cap (e.g. after purchase/reset)
-    if (creditSnapshot < MAX_CREDITS_ALLOWED && !pendingOff && !orderInProgress && uiWifiConnected) {
+    // Re-enable coin acceptor after each credit update (no WiFi dependency)
+    if (creditSnapshot < MAX_CREDITS_ALLOWED && !pendingOff && !orderInProgress) {
       setCoinAcceptance(true);
     }
   }
