@@ -11,7 +11,7 @@ void runDiagnostics() {
   Serial.println("Serial2 (Pins 16/17) ---> Arduino Uno Paper Controller connected at 9600 baud");
 
   Serial.println("--- Pen IR sensors (active LOW = beam broken) ---");
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < BALLPEN_COUNT; i++) {
     Serial.print("  Slot "); Serial.print(i + 1); Serial.print(" (D");
     Serial.print(penIrPins[i]); Serial.print("): ");
     Serial.println(digitalRead(penIrPins[i]) == HIGH ? "OK - beam clear" : "WARNING - LOW at idle");
@@ -27,7 +27,7 @@ void printHardwareStatus() {
   Serial.print("Order active: "); Serial.println(orderInProgress ? "YES" : "NO");
   Serial.print("Indicator: ");
   Serial.println(indicatorState == INDICATOR_READY ? "READY (green)" : indicatorState == INDICATOR_ACTIVE ? "ACTIVE (blue)" : "ERROR (red)");
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < BALLPEN_COUNT; i++) {
     Serial.print("Pen IR "); Serial.print(i + 1); Serial.print(" (D");
     Serial.print(penIrPins[i]); Serial.print("): ");
     Serial.println(digitalRead(penIrPins[i]) == LOW ? "LOW / blocked" : "HIGH / clear");
@@ -40,7 +40,7 @@ void softResetMachineState() {
   Serial.println("SOFT RESET: returning machine logic to idle state.");
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   hopperManualRunning = false;
-  for (int i = 0; i < 3; i++) stopStepper(i);
+  for (int i = 0; i < BALLPEN_COUNT; i++) stopStepper(i);
 
   noInterrupts();
   credits = 0;

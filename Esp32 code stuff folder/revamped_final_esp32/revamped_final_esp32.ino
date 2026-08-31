@@ -7,7 +7,7 @@
 // ==============================================================================
 // REVAMPED ESP32 IOT GATEWAY FIRMWARE (PRODUCTION READY)
 // Communicates with Arduino Mega 2560 over Serial2 and bridges to Supabase.
-// Handles Dynamic 4-Bay Paper (L5290 Presence) and 3-Bay Ballpen Vending.
+// Handles Dynamic 2-Bay Paper (L5290 Presence) and 1-Bay Ballpen Vending.
 // ==============================================================================
 
 // --- WIFI CONFIG ---
@@ -188,7 +188,7 @@ bool getTransactionPlan(const String &transactionId, DynamicJsonDocument &respon
   return code == 200 && !deserializeJson(response, payload);
 }
 
-// Fetches live 4 Paper Bay assignments & 3 Pen Bay assignments for the Mega's dynamic catalog UI
+// Fetches live 2 Paper Bay assignments & 1 Pen Bay assignment for the Mega's dynamic catalog UI
 void syncLiveCatalogToMega() {
   if (!ensureWifi()) return;
   WiFiClientSecure client;
@@ -196,7 +196,7 @@ void syncLiveCatalogToMega() {
   HTTPClient http;
 
   // 1. Fetch Paper Compartments
-  String url = String(SUPABASE_URL) + "/rest/v1/paper_compartments?select=compartment_number,assigned_product_id,presence_status,paper_inventory(brand_name,paper_size,sheets_per_unit,cost_per_unit_cents)&order=compartment_number.asc";
+  String url = String(SUPABASE_URL) + "/rest/v1/paper_compartments?select=compartment_number,assigned_product_id,presence_status,paper_inventory(brand_name,paper_size,sheets_per_unit,cost_per_unit_cents)&compartment_number=lte.2&order=compartment_number.asc";
   if (http.begin(client, url)) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
@@ -222,7 +222,7 @@ void syncLiveCatalogToMega() {
   }
 
   // 2. Fetch Pen Compartments
-  url = String(SUPABASE_URL) + "/rest/v1/ballpen_compartments?select=compartment_number,assigned_product_id,current_piece_stock,ballpen_inventory(item_name,cost_per_unit_cents)&order=compartment_number.asc";
+  url = String(SUPABASE_URL) + "/rest/v1/ballpen_compartments?select=compartment_number,assigned_product_id,current_piece_stock,ballpen_inventory(item_name,cost_per_unit_cents)&compartment_number=lte.1&order=compartment_number.asc";
   if (http.begin(client, url)) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
@@ -377,7 +377,7 @@ void finishTransaction(const String &message) {
 void updatePaperBayPresence(const String &message) {
   // Format: BAY_EMPTY:<bay_num>
   int bayNum = message.substring(10).toInt();
-  if (bayNum < 1 || bayNum > 4) return;
+  if (bayNum < 1 || bayNum > 2) return;
   if (!ensureWifi()) return;
 
   WiFiClientSecure client;

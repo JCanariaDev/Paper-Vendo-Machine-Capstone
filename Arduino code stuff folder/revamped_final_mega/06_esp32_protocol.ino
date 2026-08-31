@@ -91,7 +91,7 @@ void executeDispensePlan(String message) {
     int actualOutput = 0;
 
     if (type == "paper") {
-      // Delegate 4-bay paper dispense to Arduino Uno
+      // Delegate paper dispense to Arduino Uno.
       actualOutput = dispensePaperFromUno(channel, expectedOutput);
     } else {
       // Dispense pens directly on Mega

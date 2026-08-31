@@ -26,7 +26,7 @@ void handleMainTouch(int x, int y) {
   }
 
   if (x >= 20 && x <= 220 && y >= 95 && y <= 150) {
-    // BUY PAPER: go directly to 4-bay catalog (no brand picker)
+    // BUY PAPER: go directly to the paper catalog.
     activeCatalogType = "paper";
     resetPendingSelections();
     currentScreen = SCREEN_CATALOG;

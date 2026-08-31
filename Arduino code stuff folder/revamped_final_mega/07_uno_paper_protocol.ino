@@ -11,7 +11,7 @@ void parsePaperBay(String msg) {
   int p5 = data.indexOf(':', p4 + 1);
   if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0) return;
 
-  int bayNum   = data.substring(0, p1).toInt();          // 1-4
+  int bayNum   = data.substring(0, p1).toInt();          // 1-PAPER_COUNT
   int prodId   = data.substring(p1 + 1, p2).toInt();
   String pres  = data.substring(p2 + 1, p3);             // HIGH or LOW
   // p3..p4 = sheets (unused for display but kept)
@@ -46,7 +46,7 @@ void parsePenBay(String msg) {
   int p4 = data.indexOf(':', p3 + 1);
   if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0) return;
 
-  int bayNum     = data.substring(0, p1).toInt();        // 1-3
+  int bayNum     = data.substring(0, p1).toInt();        // 1-BALLPEN_COUNT
   int prodId     = data.substring(p1 + 1, p2).toInt();
   int stock      = data.substring(p2 + 1, p3).toInt();
   int priceCents = data.substring(p3 + 1, p4).toInt();
@@ -75,11 +75,11 @@ void parsePenBay(String msg) {
 void handleUnoMessage(String msg) {
   msg.trim();
   if (msg.startsWith("STATUS:")) {
-    // Format: STATUS:HIGH,HIGH,LOW,HIGH
+    // Format: STATUS:HIGH,HIGH,... for the configured paper bays
     // Uno reports live L5290 sensor states; update paperCatalog presence flags
     String list = msg.substring(7);
     int start = 0;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < PAPER_COUNT; i++) {
       int comma = list.indexOf(',', start);
       String val = (comma == -1) ? list.substring(start) : list.substring(start, comma);
       paperCatalog[i].isPaperPresent = (val == "HIGH");
@@ -93,7 +93,7 @@ void handleUnoMessage(String msg) {
 }
 
 int dispensePaperFromUno(int bayNumber, int sheetCount) {
-  if (bayNumber < 1 || bayNumber > 4) return 0;
+  if (bayNumber < 1 || bayNumber > PAPER_COUNT) return 0;
   UNO_SERIAL.println("DISPENSE:" + String(bayNumber) + ":" + String(sheetCount));
 
   unsigned long startedAt = millis();

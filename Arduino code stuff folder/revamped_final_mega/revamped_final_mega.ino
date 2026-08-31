@@ -11,9 +11,9 @@
 /*
   ==============================================================================
   REVAMPED ARDUINO MEGA 2560 — MASTER CONTROLLER (OPTION A DUAL-BOARD SYSTEM)
-  - Manages ILI9341 Touch UI, SH1106 OLED, Coin Acceptor, Coin Hopper, and 3 Pens.
+  - Manages ILI9341 Touch UI, SH1106 OLED, Coin Acceptor, Coin Hopper, and 1 Pen slot.
   - Communicates with ESP32 (Cloud Gateway) via Serial1 (Pins 18/19).
-  - Communicates with Arduino Uno (Dedicated 4-Bay Paper Controller) via Serial2 (Pins 16/17).
+  - Communicates with Arduino Uno (Dedicated 2-Bay Paper Controller) via Serial2 (Pins 16/17).
   ==============================================================================
 */
 
@@ -39,16 +39,8 @@
 //  D17  RX2 (Serial2)       <- Arduino Uno TX (Pin D1) at 5V logic
 //  D18  TX1 (Serial1)       -> ESP32 RX2 (via 3.3V logic level converter)
 //  D19  RX1 (Serial1)       <- ESP32 TX2 (via 3.3V logic level converter)
-//  D22  penStepper2 IN1     28BYJ-48 pen slot 2, ULN2003 coil A
-//  D23  penStepper2 IN2     28BYJ-48 pen slot 2, ULN2003 coil B
-//  D24  penStepper2 IN3     28BYJ-48 pen slot 2, ULN2003 coil C
-//  D25  penStepper2 IN4     28BYJ-48 pen slot 2, ULN2003 coil D
-//  D26  penStepper3 IN1     28BYJ-48 pen slot 3, ULN2003 coil A
-//  D27  penStepper3 IN2     28BYJ-48 pen slot 3, ULN2003 coil B
-//  D28  penStepper3 IN3     28BYJ-48 pen slot 3, ULN2003 coil C
-//  D29  penStepper3 IN4     28BYJ-48 pen slot 3, ULN2003 coil D
-//  D30  PEN_IR_PIN2         IR sensor pen slot 2 (INPUT_PULLUP)
-//  D31  PEN_IR_PIN3         IR sensor pen slot 3 (INPUT_PULLUP)
+//  D22-D29                 Former pen slots 2-3 stepper pins (unused in 1-slot layout)
+//  D30-D31                 Former pen slots 2-3 IR pins (unused in 1-slot layout)
 //  D45  LED_RED_PIN         Red LED   — machine ERROR state
 //  D46  BUZZER_PIN          Passive buzzer (2-pin, driven by tone())
 //  D47  TOUCH_CS            XPT2046 touchscreen chip select (SPI)
@@ -116,15 +108,11 @@ const int HOPPER_RELAY_OFF = HIGH; // HIGH = Relay LED OFF -> Motor OFF
 // --- PEN STEPPERS ---
 const int stepsPerRevolution = 2048;
 Stepper penStepper1(stepsPerRevolution, 3, 11, 4, 12);
-Stepper penStepper2(stepsPerRevolution, 22, 24, 23, 25);
-Stepper penStepper3(stepsPerRevolution, 26, 28, 27, 29);
-Stepper* penSteppers[3] = { &penStepper1, &penStepper2, &penStepper3 };
-const int penStopPins[3][4] = {
-  { 3, 4, 11, 12 },
-  { 22, 23, 24, 25 },
-  { 26, 27, 28, 29 }
+Stepper* penSteppers[1] = { &penStepper1 };
+const int penStopPins[1][4] = {
+  { 3, 4, 11, 12 }
 };
-const int penIrPins[3] = { PEN_IR_PIN, PEN_IR_PIN2, PEN_IR_PIN3 };
+const int penIrPins[1] = { PEN_IR_PIN };
 
 // --- PERIPHERALS ---
 #define SCREEN_WIDTH 128
@@ -244,25 +232,21 @@ struct CatalogItem {
   bool isPaperPresent; // Synced from Uno's L5290 sensors
 };
 
-const int PAPER_COUNT = 4;
+const int PAPER_COUNT = 2;
 CatalogItem paperCatalog[PAPER_COUNT] = {
   {1, "Bay 1 Paper",  1.00, true},
-  {2, "Bay 2 Paper",  1.00, true},
-  {3, "Bay 3 Paper",  1.00, true},
-  {4, "Bay 4 Paper",  1.00, true}
+  {2, "Bay 2 Paper",  1.00, true}
 };
 
-const int BALLPEN_COUNT = 3;
+const int BALLPEN_COUNT = 1;
 CatalogItem ballpenCatalog[BALLPEN_COUNT] = {
-  {1, "Pen Slot 1", 5.00, true},
-  {2, "Pen Slot 2", 5.00, true},
-  {3, "Pen Slot 3", 5.00, true}
+  {1, "Pen Slot 1", 5.00, true}
 };
 
 // Dynamic name buffers — updated by ESP32 PAPER_BAY: / PEN_BAY: messages
 char paperCatalogNames[PAPER_COUNT][32];
 char ballpenCatalogNames[BALLPEN_COUNT][32];
-int  paperCatalogStock[BALLPEN_COUNT]; // pen stock per bay (pieces)
+int  ballpenCatalogStock[BALLPEN_COUNT]; // pen stock per bay (pieces)
 
 const int MAX_CATALOG_ROWS = 4;
 int pendingQty[MAX_CATALOG_ROWS];
@@ -340,7 +324,7 @@ void setup() {
   UNO_SERIAL.begin(9600);   // UART to Arduino Uno (Pins 16/17)
   Serial.println("--- REVAMPED SMART PAPER VENDO FIRMWARE (OPTION A) STARTING ---");
 
-  for (int i = 0; i < 3; i++) penSteppers[i]->setSpeed(10);
+  for (int i = 0; i < BALLPEN_COUNT; i++) penSteppers[i]->setSpeed(10);
 
   Wire.begin();
   Wire.setWireTimeout(25000, true);
@@ -373,8 +357,6 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(COIN_PIN), coinInterrupt, FALLING);
 
   pinMode(PEN_IR_PIN, INPUT_PULLUP);
-  pinMode(PEN_IR_PIN2, INPUT_PULLUP);
-  pinMode(PEN_IR_PIN3, INPUT_PULLUP);
 
   pinMode(CHANGE_HOPPER_MOTOR_PIN, OUTPUT);
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);

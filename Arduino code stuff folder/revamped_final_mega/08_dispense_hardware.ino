@@ -3,7 +3,7 @@
 
 bool dispenseOnePen(int channel) {
   int penIndex = channel - 1;
-  if (penIndex < 0 || penIndex > 2) return false;
+  if (penIndex < 0 || penIndex >= BALLPEN_COUNT) return false;
   Stepper* pen = penSteppers[penIndex];
   int irPin = penIrPins[penIndex];
   if (digitalRead(irPin) == LOW) {
