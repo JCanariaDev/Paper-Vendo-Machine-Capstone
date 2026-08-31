@@ -53,15 +53,15 @@ CREATE TABLE paper_inventory (
 );
 
 -- ------------------------------------------------------------------------------
--- 3. Paper Physical Compartments (Exactly 4 Hardware Bays with L5290 Sensors)
+-- 3. Paper Physical Compartments (Exactly 3 Hardware Bays with L5290 Sensors)
 -- ------------------------------------------------------------------------------
 CREATE TABLE paper_compartments (
     id SERIAL PRIMARY KEY,
-    compartment_number INTEGER UNIQUE NOT NULL CHECK (compartment_number BETWEEN 1 AND 4),
+    compartment_number INTEGER UNIQUE NOT NULL CHECK (compartment_number BETWEEN 1 AND 3),
     assigned_product_id INTEGER REFERENCES paper_inventory(id) ON DELETE SET NULL,
     presence_status TEXT NOT NULL DEFAULT 'HIGH' CHECK (presence_status IN ('HIGH', 'LOW')), -- HIGH: Paper Present, LOW: Empty
-    motor_channel INTEGER NOT NULL UNIQUE CHECK (motor_channel BETWEEN 1 AND 4),
-    sensor_channel INTEGER NOT NULL UNIQUE CHECK (sensor_channel BETWEEN 1 AND 4),
+    motor_channel INTEGER NOT NULL UNIQUE CHECK (motor_channel BETWEEN 1 AND 3),
+    sensor_channel INTEGER NOT NULL UNIQUE CHECK (sensor_channel BETWEEN 1 AND 3),
     physical_status TEXT NOT NULL DEFAULT 'Good',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -80,16 +80,16 @@ CREATE TABLE ballpen_inventory (
 );
 
 -- ------------------------------------------------------------------------------
--- 5. Ballpen Physical Compartments (Exactly 3 Hardware Dispenser Bays)
+-- 5. Ballpen Physical Compartments (Exactly 1 Hardware Dispenser Bay)
 -- ------------------------------------------------------------------------------
 CREATE TABLE ballpen_compartments (
     id SERIAL PRIMARY KEY,
-    compartment_number INTEGER UNIQUE NOT NULL CHECK (compartment_number BETWEEN 1 AND 3),
+    compartment_number INTEGER UNIQUE NOT NULL CHECK (compartment_number = 1),
     assigned_product_id INTEGER REFERENCES ballpen_inventory(id) ON DELETE SET NULL,
     current_piece_stock INTEGER NOT NULL DEFAULT 0 CHECK (current_piece_stock >= 0),
     reserved_piece_stock INTEGER NOT NULL DEFAULT 0 CHECK (reserved_piece_stock >= 0),
     max_piece_capacity INTEGER NOT NULL DEFAULT 100 CHECK (max_piece_capacity > 0),
-    dispenser_channel INTEGER NOT NULL UNIQUE CHECK (dispenser_channel BETWEEN 1 AND 3),
+    dispenser_channel INTEGER NOT NULL UNIQUE CHECK (dispenser_channel = 1),
     physical_status TEXT NOT NULL DEFAULT 'Good',
     active BOOLEAN NOT NULL DEFAULT TRUE,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -135,7 +135,7 @@ CREATE TABLE sales_transaction_lines (
     product_id INTEGER NOT NULL,
     product_name TEXT NOT NULL,
     paper_size TEXT,
-    physical_channel INTEGER NOT NULL, -- Physical bay motor channel (1-4 for paper, 1-3 for pen)
+    physical_channel INTEGER NOT NULL, -- Physical bay motor channel (1-3 for paper, 1 for pen)
     units_requested INTEGER NOT NULL CHECK (units_requested > 0),
     unit_price_cents INTEGER NOT NULL CHECK (unit_price_cents > 0),
     sheets_per_unit_snapshot INTEGER NOT NULL DEFAULT 1 CHECK (sheets_per_unit_snapshot > 0),
@@ -168,30 +168,27 @@ INSERT INTO paper_inventory (brand_name, paper_size, cost_per_unit_cents, sheets
 ('Standard', 'crosswise', 200, 3, 10, 'In compartment'),
 ('Budget', '1_whole', 100, 2, 8, 'In compartment'),
 ('Standard', '1/4', 200, 4, 12, 'In compartment'),
-('Budget', 'lengthwise', 100, 3, 7, 'In compartment'),
+('Budget', 'lengthwise', 100, 3, 7, 'In stock'),
 ('Budget', '1/4', 100, 4, 15, 'In stock'),
 ('Budget', 'crosswise', 100, 3, 15, 'In stock'),
 ('Standard', 'lengthwise', 200, 3, 10, 'In stock'),
 ('Standard', '1_whole', 200, 2, 10, 'In stock');
 
--- 4 Physical Paper Compartments
+-- 3 Physical Paper Compartments
 INSERT INTO paper_compartments (compartment_number, assigned_product_id, presence_status, motor_channel, sensor_channel) VALUES
 (1, 1, 'HIGH', 1, 1), -- Standard - Crosswise
 (2, 2, 'HIGH', 2, 2), -- Budget - 1 Whole
-(3, 3, 'HIGH', 3, 3), -- Standard - 1/4
-(4, 4, 'HIGH', 4, 4); -- Budget - Lengthwise
+(3, 3, 'HIGH', 3, 3); -- Standard - 1/4
 
 -- 3 Ballpen Products in Master Inventory
 INSERT INTO ballpen_inventory (item_name, cost_per_unit_cents, storage_stock_pieces, location_status) VALUES
 ('Black Ballpen', 500, 100, 'In compartment'),
-('Red Ballpen', 500, 100, 'In compartment'),
-('Blue Ballpen', 500, 100, 'In compartment');
+('Red Ballpen', 500, 100, 'In stock'),
+('Blue Ballpen', 500, 100, 'In stock');
 
--- 3 Physical Ballpen Compartments
+-- 1 Physical Ballpen Compartment
 INSERT INTO ballpen_compartments (compartment_number, assigned_product_id, current_piece_stock, max_piece_capacity, dispenser_channel) VALUES
-(1, 1, 50, 100, 1), -- Black
-(2, 2, 50, 100, 2), -- Red
-(3, 3, 50, 100, 3); -- Blue
+(1, 1, 50, 100, 1); -- Black Ballpen
 
 -- Coin Hopper Change
 INSERT INTO change_inventory (denomination_cents, current_coin_count, max_capacity, hopper_channel) VALUES
