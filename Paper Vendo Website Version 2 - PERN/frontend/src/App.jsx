@@ -8,6 +8,7 @@ axios.defaults.baseURL = import.meta.env.VITE_API_URL || '';
 // Import Pages
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import MachineMonitor from './pages/MachineMonitor';
 import Inventory from './pages/Inventory';
 import Transactions from './pages/Transactions';
 import Analytics from './pages/Analytics';
@@ -156,6 +157,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Dashboard />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/monitor" 
+            element={
+              <ProtectedRoute>
+                <MachineMonitor />
               </ProtectedRoute>
             } 
           />

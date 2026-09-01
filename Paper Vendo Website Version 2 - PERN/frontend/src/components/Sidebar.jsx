@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '../App';
 import { 
   LayoutDashboard, 
+  MonitorCheck,
   Boxes, 
   History, 
   TrendingUp,
@@ -18,8 +19,9 @@ export default function Sidebar({ isOpen, onClose }) {
   const { user, logout, theme, toggleTheme } = useAuth();
 
   const navItems = [
-    { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/inventory', label: 'Inventory', icon: Boxes },
+    { to: '/dashboard', label: 'Dashboard',       icon: LayoutDashboard },
+    { to: '/monitor',   label: 'Machine Monitor', icon: MonitorCheck },
+    { to: '/inventory', label: 'Inventory',        icon: Boxes },
     { to: '/transactions', label: 'Sales History', icon: History },
   ];
 
