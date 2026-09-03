@@ -68,15 +68,17 @@ void handleCatalogTouch(int x, int y) {
 
   for (int i = 0; i < count; i++) {
     int rowY = catalogRowY(i, count);
+    int rowH = catalogRowHeight(count);
     int btnSize = catalogButtonSize(count);
+    int btnY = rowY + (rowH - btnSize) / 2;
     int plusX = 232 - btnSize;
 
-    if (x >= 4 && x <= 8 + btnSize + 4 && y >= rowY && y <= rowY + btnSize + 8) {
+    if (x >= 4 && x <= 8 + btnSize + 4 && y >= btnY - 4 && y <= btnY + btnSize + 4) {
       pendingQty[i] = max(0, pendingQty[i] - 1);
       drawCatalogScreen();
       return;
     }
-    if (x >= plusX - 4 && x <= plusX + btnSize + 4 && y >= rowY && y <= rowY + btnSize + 8) {
+    if (x >= plusX - 4 && x <= plusX + btnSize + 4 && y >= btnY - 4 && y <= btnY + btnSize + 4) {
       if (!catalog[i].isPaperPresent) {
         tftUiShowError(activeCatalogType == "paper" ? "Bay is Out of Paper" : "Out of Stock");
         return;

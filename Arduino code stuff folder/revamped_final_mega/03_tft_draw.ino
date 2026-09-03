@@ -112,43 +112,45 @@ void drawCatalogScreen() {
 
   for (int i = 0; i < count; i++) {
     int rowY = catalogRowY(i, count);
+    int rowH = catalogRowHeight(count);
     int btnSize = catalogButtonSize(count);
+    int btnY = rowY + (rowH - btnSize) / 2;
     bool selected = pendingQty[i] > 0;
     bool isAvailable = catalog[i].isPaperPresent;
 
     if (selected) {
-      tft.drawRoundRect(4, rowY, 232, btnSize + 8, 8, COL_GREEN);
-      tft.drawRoundRect(5, rowY + 1, 230, btnSize + 6, 8, COL_GREEN);
+      tft.drawRoundRect(4, rowY + 2, 232, rowH - 4, 8, COL_GREEN);
+      tft.drawRoundRect(5, rowY + 3, 230, rowH - 6, 8, COL_GREEN);
     }
 
     // "-" button
-    tft.fillRoundRect(8, rowY + 4, btnSize, btnSize, 8, COL_RED);
+    tft.fillRoundRect(8, btnY, btnSize, btnSize, 8, COL_RED);
     tft.setTextColor(COL_WHITE);
-    tft.setTextSize(btnSize >= 46 ? 3 : 2);
-    printCentered("-", 8 + btnSize / 2, rowY + 4 + btnSize / 2);
+    tft.setTextSize(2);
+    printCentered("-", 8 + btnSize / 2, btnY + btnSize / 2);
 
     // "+" button
     int plusX = 232 - btnSize;
-    tft.fillRoundRect(plusX, rowY + 4, btnSize, btnSize, 8, isAvailable ? COL_GREEN : COL_GREY);
-    printCentered("+", plusX + btnSize / 2, rowY + 4 + btnSize / 2);
+    tft.fillRoundRect(plusX, btnY, btnSize, btnSize, 8, isAvailable ? COL_GREEN : COL_GREY);
+    printCentered("+", plusX + btnSize / 2, btnY + btnSize / 2);
 
     // Info Column
     tft.setTextColor(COL_WHITE);
     tft.setTextSize(1);
-    tft.setCursor(72, rowY + 6);
+    tft.setCursor(62, rowY + 10);
     tft.print(catalog[i].name);
-    tft.setCursor(72, rowY + 20);
+    tft.setCursor(62, rowY + 25);
     tft.print("P" + String(catalogDisplayPrice(i), 2));
 
     if (!isAvailable) {
       tft.setTextColor(COL_RED);
-      tft.setCursor(72, rowY + 34);
-      tft.print("[OUT OF PAPER]");
+      tft.setCursor(62, rowY + 40);
+      tft.print(activeCatalogType == "paper" ? "[OUT OF PAPER]" : "[OUT OF STOCK]");
     } else {
       char qtyBuf[16];
       sprintf(qtyBuf, "Qty: %d", pendingQty[i]);
-      tft.setTextSize(btnSize >= 46 ? 2 : 1);
-      tft.setCursor(72, rowY + (btnSize >= 46 ? 34 : 32));
+      tft.setTextSize(1);
+      tft.setCursor(62, rowY + 40);
       tft.print(qtyBuf);
     }
   }

@@ -331,7 +331,7 @@ void finishTransaction(const String &message) {
   const int second = message.indexOf(':', first + 1);
   if (second < 0) { sendError("BAD_FINISH_FORMAT"); return; }
   const String transactionId = message.substring(first + 1, second);
-  
+
   int third = message.indexOf(':', second + 1);
   String encodedResults;
   int changePaidCents = 0;
@@ -346,7 +346,7 @@ void finishTransaction(const String &message) {
   request["p_transaction_id"] = transactionId;
   request["p_change_paid_cents"] = changePaidCents;
   JsonArray results = request.createNestedArray("p_results");
-  
+
   int start = 0;
   while (start < encodedResults.length()) {
     const int end = encodedResults.indexOf(';', start);
@@ -362,7 +362,7 @@ void finishTransaction(const String &message) {
     start = end + 1;
   }
   if (!callRpc("machine_finish_transaction", request, response)) return;
-  
+
   JsonObject res = response[0];
   String trNum = res["tr_number"] | "TR-00000";
   String status = res["final_status"] | "COMPLETED";

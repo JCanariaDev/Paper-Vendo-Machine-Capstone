@@ -286,17 +286,26 @@ float orderTotalCost = 0;
 // ================= DRAWING HELPERS =================
 const int CATALOG_TOP = 58;
 const int CATALOG_BOTTOM = 268;
+const int CATALOG_MAX_ROW_HEIGHT = 70;
+const int CATALOG_MAX_BUTTON_SIZE = 44;
 
 int catalogRowHeight(int count) {
-  return (CATALOG_BOTTOM - CATALOG_TOP) / count;
+  if (count <= 0) return CATALOG_MAX_ROW_HEIGHT;
+  return min((CATALOG_BOTTOM - CATALOG_TOP) / count, CATALOG_MAX_ROW_HEIGHT);
+}
+
+int catalogRowsStartY(int count) {
+  int totalRowsHeight = catalogRowHeight(count) * count;
+  int availableHeight = CATALOG_BOTTOM - CATALOG_TOP;
+  return CATALOG_TOP + max(0, (availableHeight - totalRowsHeight) / 2);
 }
 
 int catalogRowY(int i, int count) {
-  return CATALOG_TOP + i * catalogRowHeight(count);
+  return catalogRowsStartY(count) + i * catalogRowHeight(count);
 }
 
 int catalogButtonSize(int count) {
-  return catalogRowHeight(count) - 8;
+  return max(34, min(catalogRowHeight(count) - 12, CATALOG_MAX_BUTTON_SIZE));
 }
 
 const int CART_TOP = 58;
