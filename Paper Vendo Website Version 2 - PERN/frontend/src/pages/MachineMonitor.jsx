@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import {
-  Wifi, WifiOff, RefreshCw, Clock, CreditCard, ShoppingBag,
+  Wifi, WifiOff, RefreshCw, CreditCard, ShoppingBag,
   Tag, Maximize2, CheckCircle, Banknote, PartyPopper, XCircle,
   Activity, AlertTriangle, Layers, ChevronRight
 } from 'lucide-react';
@@ -187,7 +187,9 @@ function StatusBadge({ label, color }) {
 function ActivityRow({ tx }) {
   const meta = TX_MAP[tx.status] || { label: tx.status, color: 'bg-slate-500/10 text-slate-400 border-slate-500/20' };
   const time = new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const total = tx.subtotal_cents ? `₱${(tx.subtotal_cents / 100).toFixed(2)}` : '—';
+  const total = tx.subtotal !== undefined
+    ? `₱${Number(tx.subtotal || 0).toFixed(2)}`
+    : tx.subtotal_cents ? `₱${(tx.subtotal_cents / 100).toFixed(2)}` : '—';
   return (
     <div className="flex items-center justify-between p-3.5 rounded-xl border border-slate-100 dark:border-white/[0.04] bg-slate-50/50 dark:bg-white/[0.01] text-xs gap-3">
       <div className="flex items-center gap-3 min-w-0">
@@ -260,6 +262,16 @@ export default function MachineMonitor() {
   const activeTimelineIdx = TIMELINE_STATES.findIndex((s) => s.id === stateId);
   const isOnline          = stateId !== 'offline';
   const latestTx          = transactions[0];
+  const creditInserted    = latestTx?.credit_received !== undefined
+    ? Number(latestTx.credit_received || 0).toFixed(2)
+    : ((latestTx?.credit_received_cents || 0) / 100).toFixed(2);
+  const orderTotal        = latestTx?.subtotal !== undefined
+    ? Number(latestTx.subtotal || 0).toFixed(2)
+    : ((latestTx?.subtotal_cents || 0) / 100).toFixed(2);
+  const changeDue         = latestTx?.change_due !== undefined
+    ? Number(latestTx.change_due || 0).toFixed(2)
+    : ((latestTx?.change_due_cents || 0) / 100).toFixed(2);
+  const transactionOngoing = latestTx && ['RESERVED', 'CHANGE_PAID'].includes(latestTx.status);
 
   if (loading) {
     return (
@@ -333,143 +345,144 @@ export default function MachineMonitor() {
         </div>
       </div>
 
-      {/* ── Main Grid ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* ── Horizontal Pipeline ── */}
+      <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#161F30] shadow-sm">
+        <div className="flex items-center justify-between gap-3 mb-5">
+          <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Transaction Pipeline</p>
+          <span className="text-[10px] text-slate-400 font-semibold">Compact live flow</span>
+        </div>
 
-        {/* ── LEFT COLUMN ── */}
-        <div className="lg:col-span-1 flex flex-col gap-6">
+        <div className="overflow-x-auto pb-2">
+          <div className="flex min-w-[980px] items-start">
+            {TIMELINE_STATES.map((state, idx) => {
+              const isPast   = activeTimelineIdx > idx && stateId !== 'failed' && stateId !== 'offline';
+              const isActive = stateId === state.id;
+              const isLast   = idx === TIMELINE_STATES.length - 1;
+              return (
+                <div key={state.id} className="flex flex-1 items-start">
+                  <div className="flex min-w-[92px] flex-col items-center text-center">
+                    <div className={`relative flex items-center justify-center w-10 h-10 rounded-full border-2 shrink-0 transition-all duration-500 ${
+                      isActive
+                        ? `${state.border} ${state.bgGlow} shadow-lg`
+                        : isPast
+                        ? 'border-emerald-500/50 bg-emerald-500/10'
+                        : 'border-slate-200 dark:border-white/[0.08] bg-slate-50 dark:bg-white/[0.02]'
+                    }`}>
+                      {isPast
+                        ? <CheckCircle className="w-5 h-5 text-emerald-400" />
+                        : <state.icon className={`w-5 h-5 transition-colors duration-300 ${isActive ? state.color : 'text-slate-400 dark:text-slate-600'}`} />
+                      }
+                      {isActive && <span className={`absolute inset-0 rounded-full animate-ping opacity-30 ${state.bgGlow}`} />}
+                    </div>
+                    <span className={`mt-2 text-[11px] font-bold leading-tight transition-colors duration-300 ${
+                      isActive ? state.color : isPast ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400 dark:text-slate-600'
+                    }`}>
+                      {state.label}
+                    </span>
+                    {isActive && (
+                      <span className={`mt-1 text-[9px] font-bold px-2 py-0.5 rounded-full border ${state.badgeColor}`}>
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
+                  {!isLast && (
+                    <div className={`mt-5 h-0.5 flex-1 min-w-[26px] rounded-full transition-colors duration-500 ${
+                      isPast ? 'bg-emerald-500/50' : 'bg-slate-200 dark:bg-white/[0.06]'
+                    }`} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
 
-          {/* Current State Hero Card */}
-          <div className={`relative p-6 rounded-2xl border overflow-hidden transition-all duration-500 ${activeState.border} ${activeState.bgGlow}`}>
-            <div className={`absolute -top-8 -right-8 w-32 h-32 rounded-full blur-2xl opacity-25 ${activeState.ringColor}`} />
-            <div className="relative">
-              <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4">Current Activity</p>
-              <div className={`inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4 ${activeState.bgGlow} border ${activeState.border}`}>
+      {/* ── Current Activity + Recent Log ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className={`relative p-6 rounded-2xl border overflow-hidden transition-all duration-500 ${activeState.border} ${activeState.bgGlow}`}>
+          <div className={`absolute -top-10 -right-10 w-40 h-40 rounded-full blur-2xl opacity-25 ${activeState.ringColor}`} />
+          <div className="relative">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3">Current Activity</p>
+                <h2 className={`font-display font-extrabold text-2xl ${activeState.color} leading-tight`}>
+                  {activeState.label}
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
+                  {activeState.sublabel}
+                </p>
+              </div>
+              <div className={`inline-flex items-center justify-center w-14 h-14 rounded-2xl ${activeState.bgGlow} border ${activeState.border}`}>
                 <activeState.icon className={`w-7 h-7 ${activeState.color}`} />
               </div>
-              <h2 className={`font-display font-extrabold text-xl ${activeState.color} leading-tight`}>
-                {activeState.label}
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
-                {activeState.sublabel}
-              </p>
             </div>
-            {stateId !== 'idle' && stateId !== 'offline' && (
-              <div className="mt-5 flex items-center gap-2">
-                <span className="relative flex h-2.5 w-2.5">
-                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${activeState.ringColor}`} />
-                  <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${activeState.ringColor}`} />
-                </span>
-                <span className="text-xs font-semibold text-slate-500">Live activity detected</span>
-              </div>
-            )}
-          </div>
 
-          {/* Latest Transaction Card */}
-          {latestTx && (
-            <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#161F30] shadow-sm">
-              <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4">Latest Transaction</p>
-              <div className="space-y-3 text-xs">
-                {[
-                  ['TR Number',       <span className="font-mono font-bold text-slate-800 dark:text-white">{latestTx.tr_number || '—'}</span>],
-                  ['Status',          <span className={`px-2 py-0.5 rounded-full border font-bold text-[10px] ${(TX_MAP[latestTx.status] || {}).color || ''}`}>{(TX_MAP[latestTx.status] || { label: latestTx.status }).label}</span>],
-                  ['Credit Inserted', `₱${((latestTx.credit_received_cents || 0) / 100).toFixed(2)}`],
-                  ['Order Total',     `₱${((latestTx.subtotal_cents || 0) / 100).toFixed(2)}`],
-                  ['Change Due',      `₱${((latestTx.change_due_cents || 0) / 100).toFixed(2)}`],
-                ].map(([lbl, val], i) => (
-                  <div key={i} className="flex justify-between items-center">
-                    <span className="text-slate-500">{lbl}</span>
-                    {typeof val === 'string'
-                      ? <span className="font-bold text-slate-800 dark:text-white">{val}</span>
-                      : val}
+            <div className="mt-6 rounded-2xl border border-white/10 bg-slate-950 text-white shadow-inner overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+                <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">TFT-Style Credit Display</span>
+                <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${
+                  transactionOngoing ? 'bg-emerald-400/10 text-emerald-300' : 'bg-slate-700 text-slate-300'
+                }`}>
+                  {transactionOngoing ? 'TRANSACTION LIVE' : 'NO ACTIVE ORDER'}
+                </span>
+              </div>
+              <div className="p-5">
+                <p className="text-xs font-semibold text-slate-400">Credits Inserted</p>
+                <p className="mt-1 font-display text-5xl font-black tracking-tight">
+                  ₱{transactionOngoing ? creditInserted : '0.00'}
+                </p>
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                  <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Order Total</p>
+                    <p className="mt-1 text-lg font-extrabold">₱{latestTx ? orderTotal : '0.00'}</p>
                   </div>
-                ))}
-                <div className="pt-2 border-t border-slate-100 dark:border-white/[0.04] flex justify-between items-center">
-                  <span className="text-slate-500 flex items-center gap-1"><Clock className="w-3 h-3" /> Time</span>
-                  <span className="font-semibold text-slate-600 dark:text-slate-300">
+                  <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Change Due</p>
+                    <p className="mt-1 text-lg font-extrabold">₱{latestTx ? changeDue : '0.00'}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {latestTx && (
+              <div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-white/60 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.06]">
+                  <span className="block text-slate-500 mb-1">TR Number</span>
+                  <span className="font-mono font-bold text-slate-800 dark:text-white">{latestTx.tr_number || '—'}</span>
+                </div>
+                <div className="p-3 rounded-xl bg-white/60 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.06]">
+                  <span className="block text-slate-500 mb-1">Status</span>
+                  <span className={`inline-flex px-2 py-0.5 rounded-full border font-bold text-[10px] ${(TX_MAP[latestTx.status] || {}).color || ''}`}>
+                    {(TX_MAP[latestTx.status] || { label: latestTx.status }).label}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-white/60 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.06]">
+                  <span className="block text-slate-500 mb-1">Started</span>
+                  <span className="font-bold text-slate-800 dark:text-white">
                     {new Date(latestTx.created_at).toLocaleTimeString()}
                   </span>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
-        {/* ── RIGHT COLUMN ── */}
-        <div className="lg:col-span-2 flex flex-col gap-6">
-
-          {/* Transaction Pipeline Timeline */}
-          <div className="p-6 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#161F30] shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-5">Transaction Pipeline</p>
-            <div className="space-y-1">
-              {TIMELINE_STATES.map((state, idx) => {
-                const isPast   = activeTimelineIdx > idx && stateId !== 'failed' && stateId !== 'offline';
-                const isActive = stateId === state.id;
-                const isLast   = idx === TIMELINE_STATES.length - 1;
-                return (
-                  <div key={state.id} className="flex gap-4">
-                    {/* Indicator */}
-                    <div className="flex flex-col items-center">
-                      <div className={`relative flex items-center justify-center w-8 h-8 rounded-full border-2 shrink-0 transition-all duration-500 ${
-                        isActive
-                          ? `${state.border} ${state.bgGlow} shadow-lg`
-                          : isPast
-                          ? 'border-emerald-500/50 bg-emerald-500/10'
-                          : 'border-slate-200 dark:border-white/[0.08] bg-slate-50 dark:bg-white/[0.02]'
-                      }`}>
-                        {isPast
-                          ? <CheckCircle className="w-4 h-4 text-emerald-400" />
-                          : <state.icon className={`w-4 h-4 transition-colors duration-300 ${isActive ? state.color : 'text-slate-400 dark:text-slate-600'}`} />
-                        }
-                        {isActive && <span className={`absolute inset-0 rounded-full animate-ping opacity-30 ${state.bgGlow}`} />}
-                      </div>
-                      {!isLast && (
-                        <div className={`w-0.5 flex-1 my-1 min-h-[20px] rounded-full transition-colors duration-500 ${isPast ? 'bg-emerald-500/40' : 'bg-slate-200 dark:bg-white/[0.06]'}`} />
-                      )}
-                    </div>
-                    {/* Label */}
-                    <div className={`flex-1 transition-all duration-300 ${isLast ? 'pb-0' : 'pb-4'}`}>
-                      <div className={`flex items-center gap-2 ${isActive ? 'mb-1' : ''}`}>
-                        <span className={`text-sm font-bold transition-colors duration-300 ${
-                          isActive ? state.color : isPast ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400 dark:text-slate-600'
-                        }`}>
-                          {state.label}
-                        </span>
-                        {isActive && (
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${state.badgeColor}`}>ACTIVE</span>
-                        )}
-                      </div>
-                      {isActive && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                          {state.sublabel}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+        <div className="p-6 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#161F30] shadow-sm">
+          <div className="flex items-center justify-between mb-5">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Recent Activity Log</p>
+            <span className="text-[10px] text-slate-400 font-semibold">Last 5 transactions</span>
           </div>
-
-          {/* Activity Log */}
-          <div className="p-6 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#161F30] shadow-sm">
-            <div className="flex items-center justify-between mb-5">
-              <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Recent Activity Log</p>
-              <span className="text-[10px] text-slate-400 font-semibold">Last 5 transactions</span>
-            </div>
-            <div className="space-y-2">
-              {transactions.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-slate-400">
-                  <Activity className="w-8 h-8 mb-2 opacity-40" />
-                  <span className="text-sm font-semibold">No recent transactions</span>
-                  <span className="text-xs mt-1 text-slate-500">Machine is idle</span>
-                </div>
-              ) : (
-                transactions.map((tx) => <ActivityRow key={tx.id} tx={tx} />)
-              )}
-            </div>
+          <div className="space-y-2">
+            {transactions.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                <Activity className="w-8 h-8 mb-2 opacity-40" />
+                <span className="text-sm font-semibold">No recent transactions</span>
+                <span className="text-xs mt-1 text-slate-500">Machine is idle</span>
+              </div>
+            ) : (
+              transactions.map((tx) => <ActivityRow key={tx.id} tx={tx} />)
+            )}
           </div>
-
         </div>
       </div>
 
