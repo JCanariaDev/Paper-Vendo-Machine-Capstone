@@ -176,7 +176,7 @@ export function createMachineRouter(supabase) {
     }
   });
 
-  // Reassign / Refill Paper Compartment Bay (1-3)
+  // Reassign / Refill Paper Compartment Bay (1-2)
   router.put('/paper-compartments/:compartment_number', authorizeRoles('superadmin'), async (req, res) => {
     const compartmentNumber = asInt(req.params.compartment_number);
     const { assigned_product_id, pads_refilled = 0, presence_status = 'HIGH', physical_status = 'Good' } = req.body;

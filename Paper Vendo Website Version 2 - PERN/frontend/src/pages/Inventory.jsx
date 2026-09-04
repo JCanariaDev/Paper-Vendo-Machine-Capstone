@@ -161,7 +161,7 @@ export default function Inventory() {
               Inventory & Compartments
             </h1>
             <span className="bg-primary-500/10 text-primary-600 dark:text-primary-400 text-xs font-bold px-2.5 py-1 rounded-full border border-primary-500/20">
-              Revamped 3-Bay Paper + 1-Bay Pen
+              Revamped 2-Bay Paper + 1-Bay Pen
             </span>
           </div>
           <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
@@ -207,7 +207,7 @@ export default function Inventory() {
                 Live Physical Dispenser Bays
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                3 Stepper Paper Feeder Bays (L5290 Presence Detection) + 1 Pen Dispenser Bay
+                2 Stepper Paper Feeder Bays (L5290 Presence Detection) + 1 Pen Dispenser Bay
               </p>
             </div>
           </div>
@@ -220,8 +220,8 @@ export default function Inventory() {
           </button>
         </div>
 
-        {/* 3 Paper Bays Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* 2 Paper Bays Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {paperCompartments.map((bay) => {
             const isHigh = bay.presence_status === 'HIGH';
             return (
