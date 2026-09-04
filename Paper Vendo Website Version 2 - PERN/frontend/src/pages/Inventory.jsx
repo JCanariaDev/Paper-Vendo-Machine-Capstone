@@ -589,51 +589,83 @@ export default function Inventory() {
                     💡 <strong>PAD Refill Rule:</strong> Loading PADs transfers that quantity out of Master Storage into this feeder bay.
                   </p>
                 </>
-              ) : (
-                <>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
-                        Pieces to Refill (from Storage)
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={bayFormData.pieces_refilled}
-                        onChange={(e) => setBayFormData({ ...bayFormData, pieces_refilled: e.target.value })}
-                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                        placeholder="e.g. 10"
-                      />
+              ) : (() => {
+                const isPenReassign = editingBay.bay.assigned_product_id &&
+                  bayFormData.assigned_product_id &&
+                  parseInt(bayFormData.assigned_product_id, 10) !== editingBay.bay.assigned_product_id;
+                const oldProductName = pen.find(p => p.id === editingBay.bay.assigned_product_id)?.item_name || 'previous pen';
+                const oldBayStock = editingBay.bay.current_stock || 0;
+                const baseStock = isPenReassign ? 0 : oldBayStock;
+                const maxCap = editingBay.bay.max_capacity || 100;
+                const penRefill = parseInt(bayFormData.pieces_refilled || 0, 10);
+                const resultingStock = penRefill > 0
+                  ? Math.min(baseStock + penRefill, maxCap)
+                  : (bayFormData.current_stock !== undefined ? parseInt(bayFormData.current_stock || 0, 10) : baseStock);
+                const selectedPenProduct = pen.find(p => p.id === parseInt(bayFormData.assigned_product_id, 10));
+                const availableStorage = selectedPenProduct?.storage_stock_pieces || 0;
+
+                return (
+                  <>
+                    {isPenReassign && (
+                      <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs space-y-1">
+                        <div className="font-bold flex items-center gap-1.5">
+                          <span>🔄</span>
+                          <span>Reassigning Bay to {selectedPenProduct?.item_name || 'New Pen'}</span>
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                          The current <strong>{oldBayStock} pcs</strong> of <strong>{oldProductName}</strong> in this bay will be automatically returned to storage. This bay will start fresh with only the newly refilled pieces.
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+                          Pieces to Refill (from Storage)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max={availableStorage}
+                          value={bayFormData.pieces_refilled}
+                          onChange={(e) => setBayFormData({ ...bayFormData, pieces_refilled: e.target.value })}
+                          className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                          placeholder="e.g. 10"
+                        />
+                        <span className="text-[10px] text-slate-400 mt-1 block">
+                          Available in storage: <strong>{availableStorage} pcs</strong>
+                        </span>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+                          Resulting Bay Stock
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max={maxCap}
+                          value={resultingStock}
+                          onChange={(e) => {
+                            setBayFormData({
+                              ...bayFormData,
+                              current_stock: e.target.value,
+                              pieces_refilled: 0
+                            });
+                          }}
+                          className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                        />
+                        <span className="text-[10px] text-slate-400 mt-1 block">
+                          Max bay capacity: <strong>{maxCap} pcs</strong>
+                        </span>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
-                        Resulting Bay Stock
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        value={
-                          parseInt(bayFormData.pieces_refilled || 0, 10) > 0
-                            ? Math.min((editingBay.bay.current_stock || 0) + parseInt(bayFormData.pieces_refilled || 0, 10), editingBay.bay.max_capacity || 100)
-                            : (bayFormData.current_stock || 0)
-                        }
-                        onChange={(e) => {
-                          setBayFormData({
-                            ...bayFormData,
-                            current_stock: e.target.value,
-                            pieces_refilled: 0
-                          });
-                        }}
-                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                      />
-                    </div>
-                  </div>
-                  <p className="text-[11px] text-slate-400 bg-slate-100 dark:bg-white/[0.02] p-3 rounded-xl">
-                    💡 <strong>Ballpen Refill Rule:</strong> Entering refill pieces transfers them directly from Master Storage into this dispenser bay (Bay Stock increases, Storage Stock decreases).
-                  </p>
-                </>
-              )}
+
+                    <p className="text-[11px] text-slate-400 bg-slate-100 dark:bg-white/[0.02] p-3 rounded-xl">
+                      💡 <strong>Ballpen Stock Rule:</strong> Refilling transfers pieces out of Master Storage into this dispenser bay. If reassigning to a different pen, previous bay stock is returned to storage first.
+                    </p>
+                  </>
+                );
+              })()}
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-white/[0.06]">
                 <button

@@ -249,7 +249,28 @@ export function createMachineRouter(supabase) {
         console.warn('RPC admin_reassign_pen_bay error, using direct table fallback:', rpcError.message);
         const { data: comp } = await supabase.from('ballpen_compartments').select('*').eq('compartment_number', compartmentNumber).single();
         const maxCap = max_capacity ? asInt(max_capacity) : (comp?.max_piece_capacity || 100);
-        let newStock = comp?.current_piece_stock || 0;
+        const oldProductId = comp?.assigned_product_id;
+        const oldCurrentStock = comp?.current_piece_stock || 0;
+        const isReassign = (oldProductId && productId && oldProductId !== productId);
+
+        let baseStock = oldCurrentStock;
+
+        // If reassigning to a different product, return old stock to storage
+        if (isReassign) {
+          if (oldCurrentStock > 0) {
+            const { data: oldProd } = await supabase.from('ballpen_inventory').select('storage_stock_pieces').eq('id', oldProductId).single();
+            if (oldProd) {
+              await supabase.from('ballpen_inventory').update({
+                storage_stock_pieces: oldProd.storage_stock_pieces + oldCurrentStock,
+                location_status: 'In stock',
+                updated_at: new Date().toISOString()
+              }).eq('id', oldProductId);
+            }
+          }
+          baseStock = 0;
+        }
+
+        let newStock = baseStock;
 
         if (productId && refilled > 0) {
           const { data: prod } = await supabase.from('ballpen_inventory').select('storage_stock_pieces').eq('id', productId).single();
@@ -259,7 +280,7 @@ export function createMachineRouter(supabase) {
               location_status: 'In compartment',
               updated_at: new Date().toISOString()
             }).eq('id', productId);
-            newStock = Math.min(newStock + refilled, maxCap);
+            newStock = Math.min(baseStock + refilled, maxCap);
           }
         } else if (current_stock !== undefined) {
           newStock = Math.min(asInt(current_stock), maxCap);

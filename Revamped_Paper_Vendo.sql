@@ -546,6 +546,7 @@ DECLARE
     v_current_stock INTEGER;
     v_max_capacity INTEGER;
     v_new_stock INTEGER;
+    v_is_reassign BOOLEAN;
 BEGIN
     SELECT assigned_product_id, current_piece_stock, max_piece_capacity
       INTO v_old_product_id, v_current_stock, v_max_capacity
@@ -555,16 +556,30 @@ BEGIN
      
     IF NOT FOUND THEN RAISE EXCEPTION 'Ballpen compartment % does not exist', p_compartment_number; END IF;
 
-    -- If changing assigned product, check if old product returns to 'In stock'
-    IF v_old_product_id IS NOT NULL AND v_old_product_id <> p_new_product_id THEN
+    v_is_reassign := (v_old_product_id IS NOT NULL AND v_old_product_id <> p_new_product_id);
+
+    -- 1. If REASSIGNING to a different product:
+    -- Return any pens physically in the bay back to the old product's storage stock!
+    IF v_is_reassign THEN
+        IF v_current_stock > 0 THEN
+            UPDATE ballpen_inventory
+               SET storage_stock_pieces = storage_stock_pieces + v_current_stock,
+                   updated_at = NOW()
+             WHERE id = v_old_product_id;
+        END IF;
+
+        -- If the old product is not assigned to any other compartment, update its location_status
         IF NOT EXISTS (SELECT 1 FROM ballpen_compartments WHERE assigned_product_id = v_old_product_id AND compartment_number <> p_compartment_number) THEN
             UPDATE ballpen_inventory
                SET location_status = 'In stock', updated_at = NOW()
              WHERE id = v_old_product_id;
         END IF;
+
+        -- For the newly assigned product, the bay base stock starts clean at 0
+        v_current_stock := 0;
     END IF;
 
-    -- Validate new product
+    -- 2. Handle loading stock for the newly assigned or existing product
     IF p_new_product_id IS NOT NULL THEN
         SELECT storage_stock_pieces INTO v_available_pieces
           FROM ballpen_inventory
@@ -584,6 +599,8 @@ BEGIN
                    updated_at = NOW()
              WHERE id = p_new_product_id;
              
+            -- If reassigned: 0 + p_pieces_refilled = p_pieces_refilled.
+            -- If same product refill: v_current_stock + p_pieces_refilled.
             v_new_stock := LEAST(v_current_stock + p_pieces_refilled, v_max_capacity);
         ELSE
             UPDATE ballpen_inventory
@@ -601,7 +618,7 @@ BEGIN
         v_new_stock := 0;
     END IF;
 
-    -- Update compartment state
+    -- 3. Update compartment state
     UPDATE ballpen_compartments
        SET assigned_product_id = p_new_product_id,
            current_piece_stock = v_new_stock,
