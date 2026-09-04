@@ -50,8 +50,8 @@ export default function Sidebar({ isOpen, onClose }) {
         {/* Brand Header */}
         <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-white/[0.06]">
           <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary-500 text-white font-display font-extrabold text-xl shadow-md shadow-primary-500/20">
-              V
+            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-white border border-slate-200 dark:border-white/[0.08] p-1.5 shadow-md shadow-primary-500/10">
+              <img src="/logo.png" alt="P&B V Machine Logo" className="w-full h-full object-contain" />
             </div>
             <div>
               <h1 className="font-display font-bold text-lg text-slate-800 dark:text-white leading-none">Paper Vendo</h1>

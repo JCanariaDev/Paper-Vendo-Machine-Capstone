@@ -54,9 +54,14 @@ const ProtectedRoute = ({ children }) => {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          <div>
-            <h1 className="font-display font-bold text-sm text-slate-800 dark:text-white leading-none">Paper Vendo</h1>
-            <span className="text-[9px] font-semibold tracking-wider text-primary-500 uppercase">Cloud Panel</span>
+          <div className="flex items-center gap-2.5">
+            <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-white border border-slate-200 dark:border-white/[0.08] p-1.5 shadow-sm">
+              <img src="/logo.png" alt="P&B V Machine Logo" className="w-full h-full object-contain" />
+            </div>
+            <div>
+              <h1 className="font-display font-bold text-sm text-slate-800 dark:text-white leading-none">Paper Vendo</h1>
+              <span className="text-[9px] font-semibold tracking-wider text-primary-500 uppercase">Cloud Panel</span>
+            </div>
           </div>
         </div>
       </div>

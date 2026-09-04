@@ -183,9 +183,14 @@ export default function Reports() {
       
       {/* Top Header */}
       <div>
-        <h1 className="font-display font-extrabold text-3xl md:text-4xl text-slate-800 dark:text-white leading-tight">
-          System Reports
-        </h1>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-white border border-slate-200 dark:border-white/[0.08] p-2 shadow-sm">
+            <img src="/logo.png" alt="P&B V Machine Logo" className="w-full h-full object-contain" />
+          </div>
+          <h1 className="font-display font-extrabold text-3xl md:text-4xl text-slate-800 dark:text-white leading-tight">
+            System Reports
+          </h1>
+        </div>
         <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
           Query the system audit database and export formatted spreadsheets (CSV) or printable files (PDF).
         </p>
