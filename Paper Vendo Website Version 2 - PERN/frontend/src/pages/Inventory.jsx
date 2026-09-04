@@ -66,9 +66,12 @@ export default function Inventory() {
   const openBayModal = (type, bay) => {
     setEditingBay({ type, bay });
     if (type === 'paper') {
+      const initialProdId = bay.assigned_product_id || (paper[0]?.id || '');
+      const prod = paper.find(p => p.id === initialProdId);
+      const defaultRefill = (prod && prod.stock_pads > 0) ? 1 : 0;
       setBayFormData({
-        assigned_product_id: bay.assigned_product_id || (paper[0]?.id || ''),
-        pads_refilled: 1,
+        assigned_product_id: initialProdId,
+        pads_refilled: defaultRefill,
         presence_status: bay.presence_status || 'HIGH'
       });
     } else {
@@ -534,7 +537,20 @@ export default function Inventory() {
                 </label>
                 <select
                   value={bayFormData.assigned_product_id}
-                  onChange={(e) => setBayFormData({ ...bayFormData, assigned_product_id: e.target.value })}
+                  onChange={(e) => {
+                    const newId = e.target.value;
+                    if (editingBay.type === 'paper') {
+                      const prod = paper.find(p => p.id === parseInt(newId, 10));
+                      const maxPads = prod?.stock_pads || 0;
+                      setBayFormData({
+                        ...bayFormData,
+                        assigned_product_id: newId,
+                        pads_refilled: maxPads > 0 ? 1 : 0
+                      });
+                    } else {
+                      setBayFormData({ ...bayFormData, assigned_product_id: newId });
+                    }
+                  }}
                   className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
                   required
                 >
@@ -554,42 +570,83 @@ export default function Inventory() {
                 </select>
               </div>
 
-              {editingBay.type === 'paper' ? (
-                <>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
-                        PADs to Load into Bay
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={bayFormData.pads_refilled}
-                        onChange={(e) => setBayFormData({ ...bayFormData, pads_refilled: e.target.value })}
-                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                        placeholder="e.g. 1"
-                        required
-                      />
+              {editingBay.type === 'paper' ? (() => {
+                const isPaperReassign = editingBay.bay.assigned_product_id &&
+                  bayFormData.assigned_product_id &&
+                  parseInt(bayFormData.assigned_product_id, 10) !== editingBay.bay.assigned_product_id;
+                const oldProduct = paper.find(p => p.id === editingBay.bay.assigned_product_id);
+                const oldProductName = oldProduct ? `${oldProduct.brand_name} – ${oldProduct.paper_size}` : 'previous paper';
+                const oldBayHadPaper = editingBay.bay.presence_status === 'HIGH';
+                const selectedPaperProduct = paper.find(p => p.id === parseInt(bayFormData.assigned_product_id, 10));
+                const availablePads = selectedPaperProduct?.stock_pads || 0;
+
+                return (
+                  <>
+                    {isPaperReassign && (
+                      <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs space-y-1">
+                        <div className="font-bold flex items-center gap-1.5">
+                          <span>🔄</span>
+                          <span>Reassigning Bay to {selectedPaperProduct ? `${selectedPaperProduct.brand_name} – ${selectedPaperProduct.paper_size}` : 'New Paper'}</span>
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                          {oldBayHadPaper ? (
+                            <>The active PAD of <strong>{oldProductName}</strong> in this tray will be automatically returned to storage (+1 PAD). This feeder bay will be loaded with the newly assigned specification.</>
+                          ) : (
+                            <>The previous paper tray was empty (LOW). This feeder bay will be assigned to <strong>{selectedPaperProduct ? `${selectedPaperProduct.brand_name} – ${selectedPaperProduct.paper_size}` : 'New Paper'}</strong>.</>
+                          )}
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+                          PADs to Load into Bay
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max={availablePads}
+                          value={bayFormData.pads_refilled}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setBayFormData({
+                              ...bayFormData,
+                              pads_refilled: val,
+                              presence_status: parseInt(val, 10) > 0 ? 'HIGH' : bayFormData.presence_status
+                            });
+                          }}
+                          className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                          placeholder="e.g. 1"
+                          required
+                        />
+                        <span className="text-[10px] text-slate-400 mt-1 block">
+                          Available in storage: <strong>{availablePads} PADs</strong>
+                        </span>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+                          L5290 Presence State
+                        </label>
+                        <select
+                          value={bayFormData.presence_status}
+                          onChange={(e) => setBayFormData({ ...bayFormData, presence_status: e.target.value })}
+                          className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                        >
+                          <option value="HIGH">HIGH (Paper Present / Ready)</option>
+                          <option value="LOW">LOW (Empty / Out of Paper)</option>
+                        </select>
+                        <span className="text-[10px] text-slate-400 mt-1 block">
+                          Sensor state: <strong>{bayFormData.presence_status === 'HIGH' ? 'Paper Detected' : 'Tray Empty'}</strong>
+                        </span>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
-                        L5290 Presence State
-                      </label>
-                      <select
-                        value={bayFormData.presence_status}
-                        onChange={(e) => setBayFormData({ ...bayFormData, presence_status: e.target.value })}
-                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
-                      >
-                        <option value="HIGH">HIGH (Paper Present / Ready)</option>
-                        <option value="LOW">LOW (Empty / Out of Paper)</option>
-                      </select>
-                    </div>
-                  </div>
-                  <p className="text-[11px] text-slate-400 bg-slate-100 dark:bg-white/[0.02] p-3 rounded-xl">
-                    💡 <strong>PAD Refill Rule:</strong> Loading PADs transfers that quantity out of Master Storage into this feeder bay.
-                  </p>
-                </>
-              ) : (() => {
+                    <p className="text-[11px] text-slate-400 bg-slate-100 dark:bg-white/[0.02] p-3 rounded-xl">
+                      💡 <strong>PAD Refill Rule:</strong> Paper is loaded in whole PADs. Loading PADs transfers that quantity out of Master Storage into this feeder bay. If reassigning while paper is present, 1 PAD returns to storage.
+                    </p>
+                  </>
+                );
+              })() : (() => {
                 const isPenReassign = editingBay.bay.assigned_product_id &&
                   bayFormData.assigned_product_id &&
                   parseInt(bayFormData.assigned_product_id, 10) !== editingBay.bay.assigned_product_id;

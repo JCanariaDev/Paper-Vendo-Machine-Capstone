@@ -477,23 +477,41 @@ CREATE OR REPLACE FUNCTION admin_reassign_paper_bay(
 RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
     v_old_product_id INTEGER;
+    v_old_presence TEXT;
     v_available_pads INTEGER;
+    v_is_reassign BOOLEAN;
 BEGIN
-    SELECT assigned_product_id INTO v_old_product_id
+    SELECT assigned_product_id, presence_status
+      INTO v_old_product_id, v_old_presence
       FROM paper_compartments
      WHERE compartment_number = p_compartment_number
      FOR UPDATE;
      
     IF NOT FOUND THEN RAISE EXCEPTION 'Compartment % does not exist', p_compartment_number; END IF;
 
-    -- If changing assigned product, previous product returns to 'In stock'
-    IF v_old_product_id IS NOT NULL AND v_old_product_id <> p_new_product_id THEN
-        UPDATE paper_inventory
-           SET location_status = 'In stock', updated_at = NOW()
-         WHERE id = v_old_product_id;
+    v_is_reassign := (v_old_product_id IS NOT NULL AND v_old_product_id <> p_new_product_id);
+
+    -- 1. If REASSIGNING to a different product:
+    IF v_is_reassign THEN
+        -- If the old bay still had an active PAD loaded (presence_status = 'HIGH'),
+        -- physically removing it returns that 1 PAD back to storage shelf!
+        IF v_old_presence = 'HIGH' THEN
+            UPDATE paper_inventory
+               SET stock_pads = stock_pads + 1,
+                   updated_at = NOW()
+             WHERE id = v_old_product_id;
+        END IF;
+
+        -- If the old product is not assigned to any other paper compartment, update its location_status
+        IF NOT EXISTS (SELECT 1 FROM paper_compartments WHERE assigned_product_id = v_old_product_id AND compartment_number <> p_compartment_number) THEN
+            UPDATE paper_inventory
+               SET location_status = CASE WHEN stock_pads > 0 THEN 'In stock' ELSE 'Out of stock' END,
+                   updated_at = NOW()
+             WHERE id = v_old_product_id;
+        END IF;
     END IF;
 
-    -- Validate new product
+    -- 2. Validate and process new product loading/refill:
     IF p_new_product_id IS NOT NULL THEN
         SELECT stock_pads INTO v_available_pads
           FROM paper_inventory
@@ -520,7 +538,7 @@ BEGIN
         END IF;
     END IF;
 
-    -- Update compartment state
+    -- 3. Update compartment state
     UPDATE paper_compartments
        SET assigned_product_id = p_new_product_id,
            presence_status = p_presence_status,

@@ -194,7 +194,36 @@ export function createMachineRouter(supabase) {
       });
 
       if (rpcError) {
-        // Fallback direct update if procedure is not yet created
+        console.warn('RPC admin_reassign_paper_bay error, using direct table fallback:', rpcError.message);
+        const { data: comp } = await supabase.from('paper_compartments').select('*').eq('compartment_number', compartmentNumber).single();
+        const oldProductId = comp?.assigned_product_id;
+        const oldPresence = comp?.presence_status || 'HIGH';
+        const isReassign = (oldProductId && productId && oldProductId !== productId);
+
+        // If reassigning to a different product:
+        if (isReassign) {
+          // If old bay was HIGH (had an active pad), return 1 pad to storage
+          if (oldPresence === 'HIGH') {
+            const { data: oldProd } = await supabase.from('paper_inventory').select('stock_pads').eq('id', oldProductId).single();
+            if (oldProd) {
+              await supabase.from('paper_inventory').update({
+                stock_pads: oldProd.stock_pads + 1,
+                updated_at: new Date().toISOString()
+              }).eq('id', oldProductId);
+            }
+          }
+
+          // Check if old product is assigned to any other paper bay
+          const { data: otherComp } = await supabase.from('paper_compartments').select('id').eq('assigned_product_id', oldProductId).neq('compartment_number', compartmentNumber);
+          if (!otherComp || otherComp.length === 0) {
+            const { data: oldProd } = await supabase.from('paper_inventory').select('stock_pads').eq('id', oldProductId).single();
+            await supabase.from('paper_inventory').update({
+              location_status: (oldProd?.stock_pads > 0) ? 'In stock' : 'Out of stock',
+              updated_at: new Date().toISOString()
+            }).eq('id', oldProductId);
+          }
+        }
+
         if (productId) {
           if (pads > 0) {
             const { data: prod } = await supabase.from('paper_inventory').select('stock_pads').eq('id', productId).single();
