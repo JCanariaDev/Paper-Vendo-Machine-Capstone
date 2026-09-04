@@ -68,7 +68,8 @@ export default function Inventory() {
     if (type === 'paper') {
       const initialProdId = bay.assigned_product_id || (paper[0]?.id || '');
       const prod = paper.find(p => p.id === initialProdId);
-      const defaultRefill = (prod && prod.stock_pads > 0) ? 1 : 0;
+      const isBayEmpty = bay.presence_status === 'LOW' || (bay.current_pad_stock === 0);
+      const defaultRefill = (prod && prod.stock_pads > 0) ? (isBayEmpty ? 1 : 0) : 0;
       setBayFormData({
         assigned_product_id: initialProdId,
         pads_refilled: defaultRefill,
@@ -255,6 +256,12 @@ export default function Inventory() {
                       <span>Rate:</span>
                       <span className="font-bold text-slate-700 dark:text-slate-200">
                         {bay.sheets_per_unit} sheets / ₱{bay.cost_per_unit}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Bay Stock:</span>
+                      <span className="font-bold text-slate-700 dark:text-slate-200">
+                        {bay.current_pad_stock !== undefined ? bay.current_pad_stock : (isHigh ? 1 : 0)} PAD{((bay.current_pad_stock !== undefined ? bay.current_pad_stock : (isHigh ? 1 : 0)) === 1 ? '' : 's')}
                       </span>
                     </div>
                   </div>
@@ -576,7 +583,14 @@ export default function Inventory() {
                   parseInt(bayFormData.assigned_product_id, 10) !== editingBay.bay.assigned_product_id;
                 const oldProduct = paper.find(p => p.id === editingBay.bay.assigned_product_id);
                 const oldProductName = oldProduct ? `${oldProduct.brand_name} – ${oldProduct.paper_size}` : 'previous paper';
-                const oldBayHadPaper = editingBay.bay.presence_status === 'HIGH';
+                const currentBayPads = editingBay.bay.current_pad_stock !== undefined
+                  ? editingBay.bay.current_pad_stock
+                  : (editingBay.bay.presence_status === 'HIGH' ? 1 : 0);
+                const basePads = isPaperReassign ? 0 : currentBayPads;
+                const refilledPads = parseInt(bayFormData.pads_refilled || 0, 10);
+                const resultingPads = (bayFormData.presence_status === 'LOW' && refilledPads === 0)
+                  ? 0
+                  : (basePads + refilledPads);
                 const selectedPaperProduct = paper.find(p => p.id === parseInt(bayFormData.assigned_product_id, 10));
                 const availablePads = selectedPaperProduct?.stock_pads || 0;
 
@@ -589,10 +603,10 @@ export default function Inventory() {
                           <span>Reassigning Bay to {selectedPaperProduct ? `${selectedPaperProduct.brand_name} – ${selectedPaperProduct.paper_size}` : 'New Paper'}</span>
                         </div>
                         <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
-                          {oldBayHadPaper ? (
-                            <>The active PAD of <strong>{oldProductName}</strong> in this tray will be automatically returned to storage (+1 PAD). This feeder bay will be loaded with the newly assigned specification.</>
+                          {currentBayPads > 0 ? (
+                            <>The current <strong>{currentBayPads} PAD{currentBayPads > 1 ? 's' : ''}</strong> of <strong>{oldProductName}</strong> in this bay will be automatically returned to storage (+{currentBayPads} PAD{currentBayPads > 1 ? 's' : ''}). This feeder bay will start fresh with only the newly refilled PADs.</>
                           ) : (
-                            <>The previous paper tray was empty (LOW). This feeder bay will be assigned to <strong>{selectedPaperProduct ? `${selectedPaperProduct.brand_name} – ${selectedPaperProduct.paper_size}` : 'New Paper'}</strong>.</>
+                            <>The previous paper tray was empty (0 PADs). This feeder bay will be assigned to <strong>{selectedPaperProduct ? `${selectedPaperProduct.brand_name} – ${selectedPaperProduct.paper_size}` : 'New Paper'}</strong>.</>
                           )}
                         </p>
                       </div>
@@ -641,8 +655,18 @@ export default function Inventory() {
                         </span>
                       </div>
                     </div>
+
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-white/[0.02] border border-slate-200 dark:border-white/[0.06] flex items-center justify-between text-xs">
+                      <span className="text-slate-500 dark:text-slate-400 font-medium">Resulting Bay Stock:</span>
+                      <span className="font-bold text-slate-800 dark:text-white">
+                        {isPaperReassign
+                          ? `0 + ${refilledPads} = ${resultingPads} PAD${resultingPads === 1 ? '' : 's'}`
+                          : `${currentBayPads} + ${refilledPads} = ${resultingPads} PAD${resultingPads === 1 ? '' : 's'}`}
+                      </span>
+                    </div>
+
                     <p className="text-[11px] text-slate-400 bg-slate-100 dark:bg-white/[0.02] p-3 rounded-xl">
-                      💡 <strong>PAD Refill Rule:</strong> Paper is loaded in whole PADs. Loading PADs transfers that quantity out of Master Storage into this feeder bay. If reassigning while paper is present, 1 PAD returns to storage.
+                      💡 <strong>PAD Refill Rule:</strong> Paper is loaded in whole PADs. Loading PADs transfers that quantity out of Master Storage into this feeder bay. If reassigning, the current {currentBayPads} PAD{currentBayPads === 1 ? '' : 's'} in the bay are returned to storage.
                     </p>
                   </>
                 );

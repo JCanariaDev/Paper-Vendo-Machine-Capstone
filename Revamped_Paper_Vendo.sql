@@ -59,6 +59,7 @@ CREATE TABLE paper_compartments (
     id SERIAL PRIMARY KEY,
     compartment_number INTEGER UNIQUE NOT NULL CHECK (compartment_number BETWEEN 1 AND 2),
     assigned_product_id INTEGER REFERENCES paper_inventory(id) ON DELETE SET NULL,
+    current_pad_stock INTEGER NOT NULL DEFAULT 0 CHECK (current_pad_stock >= 0),
     presence_status TEXT NOT NULL DEFAULT 'HIGH' CHECK (presence_status IN ('HIGH', 'LOW')), -- HIGH: Paper Present, LOW: Empty
     motor_channel INTEGER NOT NULL UNIQUE CHECK (motor_channel BETWEEN 1 AND 2),
     sensor_channel INTEGER NOT NULL UNIQUE CHECK (sensor_channel BETWEEN 1 AND 2),
@@ -175,9 +176,9 @@ INSERT INTO paper_inventory (brand_name, paper_size, cost_per_unit_cents, sheets
 ('Standard', '1_whole', 200, 2, 10, 'In stock');
 
 -- 2 Physical Paper Compartments
-INSERT INTO paper_compartments (compartment_number, assigned_product_id, presence_status, motor_channel, sensor_channel) VALUES
-(1, 1, 'HIGH', 1, 1), -- Standard - Crosswise
-(2, 2, 'HIGH', 2, 2); -- Budget - 1 Whole
+INSERT INTO paper_compartments (compartment_number, assigned_product_id, current_pad_stock, presence_status, motor_channel, sensor_channel) VALUES
+(1, 1, 1, 'HIGH', 1, 1), -- Standard - Crosswise
+(2, 2, 1, 'HIGH', 2, 2); -- Budget - 1 Whole
 
 -- 3 Ballpen Products in Master Inventory
 INSERT INTO ballpen_inventory (item_name, cost_per_unit_cents, storage_stock_pieces, location_status) VALUES
@@ -478,26 +479,29 @@ RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
     v_old_product_id INTEGER;
     v_old_presence TEXT;
+    v_current_pads INTEGER;
     v_available_pads INTEGER;
     v_is_reassign BOOLEAN;
+    v_new_pad_stock INTEGER;
 BEGIN
-    SELECT assigned_product_id, presence_status
-      INTO v_old_product_id, v_old_presence
+    SELECT assigned_product_id, presence_status, current_pad_stock
+      INTO v_old_product_id, v_old_presence, v_current_pads
       FROM paper_compartments
      WHERE compartment_number = p_compartment_number
      FOR UPDATE;
      
     IF NOT FOUND THEN RAISE EXCEPTION 'Compartment % does not exist', p_compartment_number; END IF;
 
+    -- Handle existing rows where current_pad_stock might be NULL
+    v_current_pads := COALESCE(v_current_pads, CASE WHEN v_old_presence = 'HIGH' THEN 1 ELSE 0 END);
     v_is_reassign := (v_old_product_id IS NOT NULL AND v_old_product_id <> p_new_product_id);
 
     -- 1. If REASSIGNING to a different product:
     IF v_is_reassign THEN
-        -- If the old bay still had an active PAD loaded (presence_status = 'HIGH'),
-        -- physically removing it returns that 1 PAD back to storage shelf!
-        IF v_old_presence = 'HIGH' THEN
+        -- Return all N pads currently in the bay back to the old product's master storage!
+        IF v_current_pads > 0 THEN
             UPDATE paper_inventory
-               SET stock_pads = stock_pads + 1,
+               SET stock_pads = stock_pads + v_current_pads,
                    updated_at = NOW()
              WHERE id = v_old_product_id;
         END IF;
@@ -538,14 +542,49 @@ BEGIN
         END IF;
     END IF;
 
-    -- 3. Update compartment state
+    -- 3. Calculate resulting bay pad stock:
+    -- If reassigned: bay base stock resets to 0, so stock is exactly p_pads_refilled.
+    -- If same product refill: adds refilled pads to existing bay pads.
+    IF v_is_reassign THEN
+        v_new_pad_stock := p_pads_refilled;
+    ELSE
+        v_new_pad_stock := v_current_pads + p_pads_refilled;
+    END IF;
+
+    -- If explicitly marked LOW and 0 pads refilled, stock is 0
+    IF p_presence_status = 'LOW' AND p_pads_refilled = 0 THEN
+        v_new_pad_stock := 0;
+    END IF;
+
+    -- 4. Update compartment state
     UPDATE paper_compartments
        SET assigned_product_id = p_new_product_id,
-           presence_status = p_presence_status,
+           current_pad_stock = v_new_pad_stock,
+           presence_status = CASE WHEN v_new_pad_stock > 0 THEN 'HIGH' ELSE p_presence_status END,
            updated_at = NOW()
      WHERE compartment_number = p_compartment_number;
 END;
 $$;
+
+-- Trigger to keep presence_status and current_pad_stock in sync
+CREATE OR REPLACE FUNCTION trg_sync_paper_compartment_presence()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.presence_status = 'LOW' AND OLD.presence_status = 'HIGH' AND NEW.current_pad_stock = OLD.current_pad_stock THEN
+        -- Sensor detected tray empty (L5290 LOW)
+        NEW.current_pad_stock := 0;
+    ELSIF NEW.current_pad_stock > 0 AND NEW.presence_status = 'LOW' THEN
+        NEW.presence_status := 'HIGH';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_paper_compartment_presence ON paper_compartments;
+CREATE TRIGGER trg_paper_compartment_presence
+BEFORE UPDATE ON paper_compartments
+FOR EACH ROW
+EXECUTE FUNCTION trg_sync_paper_compartment_presence();
 
 -- ------------------------------------------------------------------------------
 -- Reassign / Refill Ballpen Compartment

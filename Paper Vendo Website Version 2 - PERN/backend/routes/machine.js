@@ -16,6 +16,7 @@ function flattenPaperInventory(row, assignedBays = []) {
     stock_pads: asInt(row.stock_pads),
     sheets_per_unit: asInt(row.sheets_per_unit, 1),
     assigned_bay: bay ? bay.compartment_number : null,
+    current_bay_pads: bay ? asInt(bay.current_pad_stock, bay.presence_status === 'HIGH' ? 1 : 0) : 0,
     presence_status: bay ? bay.presence_status : 'N/A'
   };
 }
@@ -30,6 +31,7 @@ function flattenPaperCompartment(row) {
     paper_size: product.paper_size || '',
     sheets_per_unit: asInt(product.sheets_per_unit, 1),
     cost_per_unit: asMoney(product.cost_per_unit_cents),
+    current_pad_stock: asInt(row.current_pad_stock, row.presence_status === 'HIGH' ? 1 : 0),
     presence_status: row.presence_status || 'HIGH', // 'HIGH' (Has Paper) or 'LOW' (Empty)
     motor_channel: row.motor_channel,
     sensor_channel: row.sensor_channel,
@@ -197,17 +199,17 @@ export function createMachineRouter(supabase) {
         console.warn('RPC admin_reassign_paper_bay error, using direct table fallback:', rpcError.message);
         const { data: comp } = await supabase.from('paper_compartments').select('*').eq('compartment_number', compartmentNumber).single();
         const oldProductId = comp?.assigned_product_id;
-        const oldPresence = comp?.presence_status || 'HIGH';
+        const currentBayPads = comp?.current_pad_stock !== undefined ? asInt(comp.current_pad_stock) : (comp?.presence_status === 'HIGH' ? 1 : 0);
         const isReassign = (oldProductId && productId && oldProductId !== productId);
 
         // If reassigning to a different product:
         if (isReassign) {
-          // If old bay was HIGH (had an active pad), return 1 pad to storage
-          if (oldPresence === 'HIGH') {
+          // Return all N pads currently in the bay back to the old product's storage
+          if (currentBayPads > 0) {
             const { data: oldProd } = await supabase.from('paper_inventory').select('stock_pads').eq('id', oldProductId).single();
             if (oldProd) {
               await supabase.from('paper_inventory').update({
-                stock_pads: oldProd.stock_pads + 1,
+                stock_pads: oldProd.stock_pads + currentBayPads,
                 updated_at: new Date().toISOString()
               }).eq('id', oldProductId);
             }
@@ -222,6 +224,12 @@ export function createMachineRouter(supabase) {
               updated_at: new Date().toISOString()
             }).eq('id', oldProductId);
           }
+        }
+
+        const basePads = isReassign ? 0 : currentBayPads;
+        let newBayPads = basePads + pads;
+        if (presence_status === 'LOW' && pads === 0) {
+          newBayPads = 0;
         }
 
         if (productId) {
@@ -243,7 +251,8 @@ export function createMachineRouter(supabase) {
         }
         await supabase.from('paper_compartments').update({
           assigned_product_id: productId,
-          presence_status: presence_status,
+          current_pad_stock: newBayPads,
+          presence_status: newBayPads > 0 ? 'HIGH' : presence_status,
           physical_status,
           updated_at: new Date().toISOString()
         }).eq('compartment_number', compartmentNumber);
