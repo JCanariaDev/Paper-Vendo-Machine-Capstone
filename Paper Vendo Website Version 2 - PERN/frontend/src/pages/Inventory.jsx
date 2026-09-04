@@ -243,7 +243,7 @@ export default function Inventory() {
                       Paper Bay {bay.compartment_number}
                     </span>
                     <span className="text-[11px] font-mono text-slate-400">
-                      Motor D{32 + (bay.compartment_number - 1) * 2}
+                      Motor Ch {bay.motor_channel} / Sensor Ch {bay.sensor_channel}
                     </span>
                   </div>
 

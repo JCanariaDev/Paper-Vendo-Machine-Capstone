@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- Revamped Paper Vendo Production Database Schema
 -- Separates Master Product Inventory (Tracked in PADs for paper, Pieces for pen)
--- from Physical Compartment Management (4 Paper Bays with L5290 Presence, 3 Pen Bays)
+-- from Physical Compartment Management (2 Paper Bays with L5290 Presence, 1 Pen Bay)
 -- ==============================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;

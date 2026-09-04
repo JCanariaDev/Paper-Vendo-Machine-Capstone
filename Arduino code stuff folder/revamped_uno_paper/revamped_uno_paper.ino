@@ -1,7 +1,7 @@
 /*
   ==============================================================================
-  ARDUINO UNO — DEDICATED 4-BAY PAPER DISPENSER CONTROLLER (PRODUCTION)
-  Controls 4 NEMA17 Stepper Motors (TMC2209 drivers) + 4 L5290 Tray Sensors.
+  ARDUINO UNO — DEDICATED 2-BAY PAPER DISPENSER CONTROLLER (PRODUCTION)
+  Controls 2 NEMA17 Stepper Motors (TMC2209 drivers) + 2 L5290 Tray Sensors.
   Communicates with Arduino Mega 2560 via Hardware Serial (D0/D1) at 9600 baud.
   ==============================================================================
 
@@ -12,18 +12,14 @@
     - Pin D1 (TX)  --> Connect to Mega RX2 (Pin 17)
     - GND          <-- Connect to Mega GND (Common Ground)
 
-  4x NEMA17 + TMC2209 Paper Feeder Motors:
+  2x NEMA17 + TMC2209 Paper Feeder Motors:
     - Bay 1: STEP Pin D2,  DIR Pin D3
     - Bay 2: STEP Pin D4,  DIR Pin D5
-    - Bay 3: STEP Pin D6,  DIR Pin D7
-    - Bay 4: STEP Pin D8,  DIR Pin D9
     - Common ENABLE Pin:   Pin D10 (Active LOW)
 
-  4x L5290 Paper Tray Presence Sensors (INPUT_PULLUP: HIGH = Present, LOW = Empty):
+  2x L5290 Paper Tray Presence Sensors (INPUT_PULLUP: HIGH = Present, LOW = Empty):
     - Bay 1 Tray Sensor:   Pin D11
     - Bay 2 Tray Sensor:   Pin D12
-    - Bay 3 Tray Sensor:   Pin D13
-    - Bay 4 Tray Sensor:   Pin A0
 
   Power:
     - 5V & GND logic to TMC2209 drivers and L5290 sensors.
@@ -31,15 +27,15 @@
   ==============================================================================
 */
 
-const int MOTOR_COUNT = 4;
+const int MOTOR_COUNT = 2;
 
 // Motor Pin Assignments (TMC2209 Step/Dir Mode)
-const int STEP_PINS[MOTOR_COUNT] = { 2, 4, 6, 8 };
-const int DIR_PINS[MOTOR_COUNT]  = { 3, 5, 7, 9 };
+const int STEP_PINS[MOTOR_COUNT] = { 2, 4 };
+const int DIR_PINS[MOTOR_COUNT]  = { 3, 5 };
 const int ENABLE_PIN             = 10; // Common active LOW
 
 // L5290 Paper Tray Presence Sensors
-const int TRAY_SENSOR_PINS[MOTOR_COUNT] = { 11, 12, 13, A0 };
+const int TRAY_SENSOR_PINS[MOTOR_COUNT] = { 11, 12 };
 
 const unsigned int STEP_PULSE_DELAY_US = 900;
 const int STEPS_PER_SHEET = 400; // Calibrated steps for 1 sheet feed
@@ -64,7 +60,7 @@ bool checkTrayPresence(int bayIndex) {
   return (digitalRead(TRAY_SENSOR_PINS[bayIndex]) == HIGH);
 }
 
-// Sends live presence state for all 4 bays: STATUS:HIGH,HIGH,LOW,HIGH
+// Sends live presence state for all configured bays: STATUS:HIGH,HIGH
 void sendStatus() {
   String statusMsg = "STATUS:";
   for (int i = 0; i < MOTOR_COUNT; i++) {
