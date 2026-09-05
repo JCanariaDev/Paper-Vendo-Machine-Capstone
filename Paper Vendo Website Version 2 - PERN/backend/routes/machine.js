@@ -406,12 +406,34 @@ export function createMachineRouter(supabase) {
   router.get('/analytics', async (_req, res) => {
     try {
       const [sales, inventory] = await Promise.all([getTransactionLines(supabase), getInventory(supabase)]);
-      const completedSales = sales.filter((sale) => sale.status === 'COMPLETED');
+      const completedSales = sales.filter((sale) => 
+        ['COMPLETED', 'COMPLETED_CHANGE_OWED'].includes(sale.status) || 
+        (sale.line_status === 'DISPENSED' && sale.qty_dispensed > 0)
+      );
+
       const productBreakdownMap = new Map();
       const hourlySales = Array.from({ length: 24 }, (_, hour) => ({ hour: `${String(hour).padStart(2, '0')}:00`, transactions: 0, revenue: 0 }));
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       const dayOfWeekSales = dayNames.map((day) => ({ day, transactions: 0, revenue: 0 }));
-      const dailySalesMap = new Map();
+
+      // Anchor rolling 7-day window to latest completed transaction date or today
+      const latestDate = completedSales.length > 0 
+        ? new Date(Math.max(...completedSales.map((s) => new Date(s.transaction_date).getTime()), Date.now()))
+        : new Date();
+
+      const dayFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+      const past7Days = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(latestDate);
+        d.setDate(d.getDate() - i);
+        past7Days.push({
+          date: dayFormatter.format(d),
+          paper: 0,
+          pen: 0,
+          revenue: 0
+        });
+      }
+
       const transactionIds = new Set();
       let totalRevenue = 0;
       let paperSalesCount = 0;
@@ -420,20 +442,30 @@ export function createMachineRouter(supabase) {
       let penRevenue = 0;
 
       completedSales.forEach((sale) => {
-        const revenue = sale.amount_paid;
+        const revenue = Number(sale.amount_paid || 0);
         const date = new Date(sale.transaction_date);
         const key = `${sale.item_type}-${sale.brand_id}`;
         transactionIds.add(sale.transaction_id);
-        totalRevenue += revenue;
-        hourlySales[date.getHours()].transactions += 1;
-        hourlySales[date.getHours()].revenue += revenue;
-        dayOfWeekSales[date.getDay()].transactions += 1;
-        dayOfWeekSales[date.getDay()].revenue += revenue;
-        const dayKey = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        const daily = dailySalesMap.get(dayKey) || { date: dayKey, paper: 0, pen: 0, revenue: 0 };
-        daily[sale.item_type] += sale.qty_dispensed;
-        daily.revenue += revenue;
-        dailySalesMap.set(dayKey, daily);
+        totalRevenue = Number((totalRevenue + revenue).toFixed(2));
+
+        const hour = date.getHours();
+        if (hour >= 0 && hour < 24) {
+          hourlySales[hour].transactions += 1;
+          hourlySales[hour].revenue = Number((hourlySales[hour].revenue + revenue).toFixed(2));
+        }
+
+        const day = date.getDay();
+        if (day >= 0 && day < 7) {
+          dayOfWeekSales[day].transactions += 1;
+          dayOfWeekSales[day].revenue = Number((dayOfWeekSales[day].revenue + revenue).toFixed(2));
+        }
+
+        const saleDateStr = dayFormatter.format(date);
+        const daySlot = past7Days.find((slot) => slot.date === saleDateStr);
+        if (daySlot) {
+          daySlot[sale.item_type] += sale.qty_dispensed;
+          daySlot.revenue = Number((daySlot.revenue + revenue).toFixed(2));
+        }
 
         if (!productBreakdownMap.has(key)) {
           productBreakdownMap.set(key, {
@@ -452,9 +484,14 @@ export function createMachineRouter(supabase) {
         const product = productBreakdownMap.get(key);
         product.count += sale.qty_dispensed;
         product.units += sale.units_requested;
-        product.revenue += revenue;
-        if (sale.item_type === 'paper') { paperSalesCount += sale.qty_dispensed; paperRevenue += revenue; }
-        else { penSalesCount += sale.qty_dispensed; penRevenue += revenue; }
+        product.revenue = Number((product.revenue + revenue).toFixed(2));
+        if (sale.item_type === 'paper') { 
+          paperSalesCount += sale.qty_dispensed; 
+          paperRevenue = Number((paperRevenue + revenue).toFixed(2)); 
+        } else { 
+          penSalesCount += sale.qty_dispensed; 
+          penRevenue = Number((penRevenue + revenue).toFixed(2)); 
+        }
       });
 
       const lowStockItems = [
@@ -476,9 +513,9 @@ export function createMachineRouter(supabase) {
           lowStockItems,
           peakHourStr: peakHour.transactions ? peakHour.hour : 'N/A',
           peakDayStr: peakDay.transactions ? peakDay.day : 'N/A',
-          avgTransactionValue: transactionIds.size ? totalRevenue / transactionIds.size : 0
+          avgTransactionValue: transactionIds.size ? Number((totalRevenue / transactionIds.size).toFixed(2)) : 0
         },
-        chartData: Array.from(dailySalesMap.values()).slice(-7),
+        chartData: past7Days,
         hourlySales,
         dayOfWeekSales,
         productBreakdown: Array.from(productBreakdownMap.values())

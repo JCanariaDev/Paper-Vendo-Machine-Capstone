@@ -254,6 +254,8 @@ export default function Dashboard() {
                     dataKey="revenue" 
                     stroke="#0ea5e9" 
                     strokeWidth={2}
+                    dot={{ r: 3, fill: '#0ea5e9' }}
+                    activeDot={{ r: 6 }}
                     fillOpacity={1} 
                     fill="url(#colorRevenue)" 
                   />

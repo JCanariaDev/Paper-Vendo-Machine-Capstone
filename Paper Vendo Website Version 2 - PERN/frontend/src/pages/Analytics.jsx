@@ -47,20 +47,28 @@ const PAPER_GROUPS = [
 
 const PEN_GROUPS = [
   {
-    key: 'budgetPen',
-    title: 'Budget Ballpen',
-    matcher: 'budget',
+    key: 'blackPen',
+    title: 'Black Ballpen',
+    matcher: 'black',
     unitCost: 5,
-    dotClass: 'bg-amber-500',
-    iconClass: 'bg-amber-500/10 text-amber-500',
+    dotClass: 'bg-slate-700 dark:bg-slate-300',
+    iconClass: 'bg-slate-500/10 text-slate-700 dark:text-slate-300',
   },
   {
-    key: 'standardPen',
-    title: 'Standard Ballpen',
-    matcher: 'standard',
-    unitCost: 10,
-    dotClass: 'bg-indigo-500',
-    iconClass: 'bg-indigo-500/10 text-indigo-500',
+    key: 'bluePen',
+    title: 'Blue Ballpen',
+    matcher: 'blue',
+    unitCost: 5,
+    dotClass: 'bg-blue-500',
+    iconClass: 'bg-blue-500/10 text-blue-500',
+  },
+  {
+    key: 'redPen',
+    title: 'Red Ballpen',
+    matcher: 'red',
+    unitCost: 5,
+    dotClass: 'bg-rose-500',
+    iconClass: 'bg-rose-500/10 text-rose-500',
   },
 ];
 
@@ -134,7 +142,7 @@ const buildProductBoxes = (productBreakdown = []) => {
       return;
     }
 
-    const penGroup = PEN_GROUPS.find((group) => name.includes(group.matcher));
+    const penGroup = PEN_GROUPS.find((group) => name.includes(group.matcher)) || PEN_GROUPS[0];
     if (!penGroup) return;
 
     const bucket = penBuckets[penGroup.key];
@@ -308,7 +316,7 @@ export default function Analytics() {
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(148, 163, 184, 0.08)" />
                 <XAxis dataKey="hour" stroke="#94A3B8" fontSize={10} tickLine={false} />
-                <YAxis stroke="#94A3B8" fontSize={10} tickLine={false} />
+                <YAxis stroke="#94A3B8" fontSize={10} tickLine={false} allowDecimals={false} />
                 <Tooltip 
                   contentStyle={{ 
                     backgroundColor: 'rgba(30, 41, 59, 0.95)', 
@@ -318,7 +326,17 @@ export default function Analytics() {
                     fontSize: '12px'
                   }} 
                 />
-                <Area type="monotone" dataKey="transactions" stroke="#0EA5E9" strokeWidth={2} fillOpacity={1} fill="url(#colorHour)" name="Transactions" />
+                <Area 
+                  type="monotone" 
+                  dataKey="transactions" 
+                  stroke="#0EA5E9" 
+                  strokeWidth={2} 
+                  dot={{ r: 3, fill: '#0EA5E9' }}
+                  activeDot={{ r: 6 }}
+                  fillOpacity={1} 
+                  fill="url(#colorHour)" 
+                  name="Transactions" 
+                />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -390,7 +408,7 @@ export default function Analytics() {
             <BarChart data={dayOfWeekSales} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(148, 163, 184, 0.08)" />
               <XAxis dataKey="day" stroke="#94A3B8" fontSize={11} tickLine={false} />
-              <YAxis stroke="#94A3B8" fontSize={11} tickLine={false} />
+              <YAxis stroke="#94A3B8" fontSize={11} tickLine={false} allowDecimals={false} />
               <Tooltip 
                 contentStyle={{ 
                   backgroundColor: 'rgba(30, 41, 59, 0.95)', 
