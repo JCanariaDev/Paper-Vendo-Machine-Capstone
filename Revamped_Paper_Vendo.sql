@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- Revamped Paper Vendo Production Database Schema
 -- Separates Master Product Inventory (Tracked in PADs for paper, Pieces for pen)
--- from Physical Compartment Management (2 Paper Bays with L5290 Presence, 1 Pen Bay)
+-- from Physical Compartment Management (2 Paper Bays with database stock + exit IR, 1 Pen Bay)
 -- ==============================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -53,7 +53,7 @@ CREATE TABLE paper_inventory (
 );
 
 -- ------------------------------------------------------------------------------
--- 3. Paper Physical Compartments (Exactly 2 Hardware Bays with L5290 Sensors)
+-- 3. Paper Physical Compartments (Exactly 2 Hardware Bays with exit IR sensors)
 -- ------------------------------------------------------------------------------
 CREATE TABLE paper_compartments (
     id SERIAL PRIMARY KEY,
@@ -220,7 +220,7 @@ DECLARE
     v_channel INTEGER;
     v_name TEXT;
     v_size TEXT;
-    v_presence TEXT;
+    v_stock INTEGER;
     v_available INTEGER;
     v_subtotal INTEGER := 0;
     v_change INTEGER;
@@ -245,10 +245,10 @@ BEGIN
         END IF;
 
         IF v_type = 'paper' THEN
-            -- Check if paper product is actively assigned to an active bay and L5290 sensor is HIGH (Paper Present)
+            -- Check database pad stock. Physical exit IR sensors confirm dispensing later.
             SELECT p.cost_per_unit_cents, p.sheets_per_unit, p.brand_name || ' ' || p.paper_size, p.paper_size,
-                   c.motor_channel, c.presence_status
-              INTO v_price, v_sheets, v_name, v_size, v_channel, v_presence
+                   c.motor_channel, c.current_pad_stock
+              INTO v_price, v_sheets, v_name, v_size, v_channel, v_stock
               FROM paper_inventory p
               JOIN paper_compartments c ON c.assigned_product_id = p.id
              WHERE p.id = v_product_id AND p.active
@@ -258,7 +258,7 @@ BEGIN
                 RAISE EXCEPTION 'Paper product % is not assigned to any physical compartment', v_product_id; 
             END IF;
             
-            IF v_presence <> 'HIGH' THEN
+            IF COALESCE(v_stock, 0) <= 0 THEN
                 RAISE EXCEPTION 'Paper compartment for product % is currently empty', v_product_id;
             END IF;
 
@@ -378,6 +378,21 @@ BEGIN
             UPDATE ballpen_compartments 
                SET reserved_piece_stock = reserved_piece_stock - v_line.qty_requested, updated_at = NOW() 
              WHERE dispenser_channel = v_line.physical_channel;
+        END IF;
+
+        IF v_line.item_type = 'paper' THEN
+            UPDATE paper_compartments
+               SET current_pad_stock = GREATEST(
+                       0,
+                       current_pad_stock - CEIL(v_actual::NUMERIC / NULLIF(v_line.sheets_per_unit_snapshot, 0))::INTEGER
+                   ),
+                   presence_status = CASE
+                       WHEN current_pad_stock - CEIL(v_actual::NUMERIC / NULLIF(v_line.sheets_per_unit_snapshot, 0))::INTEGER <= 0
+                       THEN 'LOW'
+                       ELSE presence_status
+                   END,
+                   updated_at = NOW()
+             WHERE motor_channel = v_line.physical_channel;
         END IF;
     END LOOP;
     FOR v_coin IN SELECT value FROM jsonb_array_elements(v_tx.change_plan) LOOP
@@ -571,7 +586,7 @@ CREATE OR REPLACE FUNCTION trg_sync_paper_compartment_presence()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
     IF NEW.presence_status = 'LOW' AND OLD.presence_status = 'HIGH' AND NEW.current_pad_stock = OLD.current_pad_stock THEN
-        -- Sensor detected tray empty (L5290 LOW)
+        -- Legacy manual presence updates still synchronize stock to zero.
         NEW.current_pad_stock := 0;
     ELSIF NEW.current_pad_stock > 0 AND NEW.presence_status = 'LOW' THEN
         NEW.presence_status := 'HIGH';

@@ -214,7 +214,7 @@ export default function Inventory() {
                 Live Physical Dispenser Bays
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                2 Stepper Paper Feeder Bays (L5290 Presence Detection) + 1 Pen Dispenser Bay
+                2 Stepper Paper Feeder Bays (IR Exit Verification) + 1 Pen Dispenser Bay
               </p>
             </div>
           </div>
@@ -230,7 +230,10 @@ export default function Inventory() {
         {/* 2 Paper Bays Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {paperCompartments.map((bay) => {
-            const isHigh = bay.presence_status === 'HIGH';
+            const bayPadStock = bay.current_pad_stock !== undefined
+              ? bay.current_pad_stock
+              : (bay.presence_status === 'HIGH' ? 1 : 0);
+            const isHigh = bayPadStock > 0;
             return (
               <div 
                 key={bay.compartment_number}
@@ -246,7 +249,7 @@ export default function Inventory() {
                       Paper Bay {bay.compartment_number}
                     </span>
                     <span className="text-[11px] font-mono text-slate-400">
-                      Motor Ch {bay.motor_channel} / Sensor Ch {bay.sensor_channel}
+                      Motor Ch {bay.motor_channel} / Exit IR Ch {bay.sensor_channel}
                     </span>
                   </div>
 
@@ -264,22 +267,22 @@ export default function Inventory() {
                     <div className="flex justify-between">
                       <span>Bay Stock:</span>
                       <span className="font-bold text-slate-700 dark:text-slate-200">
-                        {bay.current_pad_stock !== undefined ? bay.current_pad_stock : (isHigh ? 1 : 0)} PAD{((bay.current_pad_stock !== undefined ? bay.current_pad_stock : (isHigh ? 1 : 0)) === 1 ? '' : 's')}
+                        {bayPadStock} PAD{(bayPadStock === 1 ? '' : 's')}
                       </span>
                     </div>
                   </div>
 
-                  {/* L5290 Presence Indicator */}
+                  {/* Database stock and exit-IR verification status */}
                   <div className="mt-4 pt-3 border-t border-slate-100 dark:border-white/[0.04]">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-medium text-slate-500">L5290 Sensor:</span>
+                      <span className="text-[11px] font-medium text-slate-500">Paper stock:</span>
                       <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
                         isHigh 
                           ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' 
                           : 'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 animate-pulse'
                       }`}>
                         {isHigh ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
-                        {isHigh ? 'Paper Present (HIGH)' : 'OUT OF PAPER (LOW)'}
+                        {isHigh ? `${bayPadStock} pad${bayPadStock === 1 ? '' : 's'} available` : 'OUT OF PAPER'}
                       </span>
                     </div>
                   </div>
@@ -643,18 +646,18 @@ export default function Inventory() {
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
-                          L5290 Presence State
+                          Manual Stock Availability State
                         </label>
                         <select
                           value={bayFormData.presence_status}
                           onChange={(e) => setBayFormData({ ...bayFormData, presence_status: e.target.value })}
                           className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
                         >
-                          <option value="HIGH">HIGH (Paper Present / Ready)</option>
+                          <option value="HIGH">HIGH (Stock Available / Ready)</option>
                           <option value="LOW">LOW (Empty / Out of Paper)</option>
                         </select>
                         <span className="text-[10px] text-slate-400 mt-1 block">
-                          Sensor state: <strong>{bayFormData.presence_status === 'HIGH' ? 'Paper Detected' : 'Tray Empty'}</strong>
+                          Availability state: <strong>{bayFormData.presence_status === 'HIGH' ? 'Stock available' : 'Out of paper'}</strong>
                         </span>
                       </div>
                     </div>

@@ -9,14 +9,26 @@ void parsePaperBay(String msg) {
   int p3 = data.indexOf(':', p2 + 1);
   int p4 = data.indexOf(':', p3 + 1);
   int p5 = data.indexOf(':', p4 + 1);
+  int p6 = data.indexOf(':', p5 + 1);
   if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0) return;
 
   int bayNum   = data.substring(0, p1).toInt();          // 1-PAPER_COUNT
   int prodId   = data.substring(p1 + 1, p2).toInt();
   String pres  = data.substring(p2 + 1, p3);             // HIGH or LOW
-  // p3..p4 = sheets (unused for display but kept)
-  int priceCents = data.substring(p4 + 1, p5).toInt();
-  String name  = data.substring(p5 + 1);
+  int sheetsPerPad = data.substring(p3 + 1, p4).toInt();
+  int currentPadStock;
+  int priceCents;
+  String name;
+  if (p6 >= 0) {
+    currentPadStock = data.substring(p4 + 1, p5).toInt();
+    priceCents = data.substring(p5 + 1, p6).toInt();
+    name = data.substring(p6 + 1);
+  } else {
+    // Legacy format fallback while the ESP32 is being updated.
+    currentPadStock = (pres == "HIGH") ? 1 : 0;
+    priceCents = data.substring(p4 + 1, p5).toInt();
+    name = data.substring(p5 + 1);
+  }
   name.trim();
 
   int idx = bayNum - 1;
@@ -24,14 +36,17 @@ void parsePaperBay(String msg) {
 
   paperCatalog[idx].id    = prodId;
   paperCatalog[idx].price = priceCents / 100.0;
-  paperCatalog[idx].isPaperPresent = (pres == "HIGH");
+  paperCatalog[idx].currentPadStock = max(0, currentPadStock);
+  paperCatalog[idx].sheetsPerPad = max(1, sheetsPerPad);
+  paperCatalog[idx].isPaperPresent = currentPadStock > 0;
   name.toCharArray(paperCatalogNames[idx], 32);
   paperCatalog[idx].name = paperCatalogNames[idx];
+  UNO_SERIAL.println("STOCK:" + String(bayNum) + ":" + String(paperCatalog[idx].currentPadStock) + ":" + String(paperCatalog[idx].sheetsPerPad));
 
   Serial.print("Catalog Sync Paper Bay "); Serial.print(bayNum);
   Serial.print(": "); Serial.print(name);
   Serial.print(" P"); Serial.print(priceCents / 100.0, 2);
-  Serial.print(" ["); Serial.print(pres); Serial.println("]");
+  Serial.print(" stock="); Serial.println(paperCatalog[idx].currentPadStock);
 
   if (currentScreen == SCREEN_CATALOG && activeCatalogType == "paper") {
     drawCatalogScreen();
@@ -76,13 +91,28 @@ void handleUnoMessage(String msg) {
   msg.trim();
   if (msg.startsWith("STATUS:")) {
     // Format: STATUS:HIGH,HIGH,... for the configured paper bays
-    // Uno reports live L5290 sensor states; update paperCatalog presence flags
+    // Uno reports the last synchronized software stock state.
     String list = msg.substring(7);
     int start = 0;
     for (int i = 0; i < PAPER_COUNT; i++) {
       int comma = list.indexOf(',', start);
       String val = (comma == -1) ? list.substring(start) : list.substring(start, comma);
       paperCatalog[i].isPaperPresent = (val == "HIGH");
+      if (comma == -1) break;
+      start = comma + 1;
+    }
+    if (currentScreen == SCREEN_CATALOG && activeCatalogType == "paper") {
+      drawCatalogScreen();
+    }
+  }
+  else if (msg.startsWith("LEVEL:")) {
+    // Format: LEVEL:HIGH,LOW. This is a physical low-level warning only.
+    String list = msg.substring(6);
+    int start = 0;
+    for (int i = 0; i < PAPER_COUNT; i++) {
+      int comma = list.indexOf(',', start);
+      String val = (comma == -1) ? list.substring(start) : list.substring(start, comma);
+      paperCatalog[i].paperLevelHigh = (val == "HIGH");
       if (comma == -1) break;
       start = comma + 1;
     }
@@ -105,6 +135,16 @@ int dispensePaperFromUno(int bayNumber, int sheetCount) {
         // Format: DONE:<bay>:<count>
         int second = response.indexOf(':', 5);
         int count = response.substring(second + 1).toInt();
+        const int sheetsPerPad = max(1, paperCatalog[bayNumber - 1].sheetsPerPad);
+        const int padsUsed = (count + sheetsPerPad - 1) / sheetsPerPad;
+        paperCatalog[bayNumber - 1].currentPadStock = max(
+          0,
+          paperCatalog[bayNumber - 1].currentPadStock - padsUsed
+        );
+        paperCatalog[bayNumber - 1].isPaperPresent = paperCatalog[bayNumber - 1].currentPadStock > 0;
+        if (!paperCatalog[bayNumber - 1].isPaperPresent) {
+          CLOUD_SERIAL.println("BAY_EMPTY:" + String(bayNumber));
+        }
         return count;
       }
       else if (response.startsWith("EMPTY:")) {
@@ -112,6 +152,7 @@ int dispensePaperFromUno(int bayNumber, int sheetCount) {
         int second = response.indexOf(':', 6);
         int count = (second > 0) ? response.substring(second + 1).toInt() : 0;
         paperCatalog[bayNumber - 1].isPaperPresent = false;
+        paperCatalog[bayNumber - 1].currentPadStock = 0;
         CLOUD_SERIAL.println("BAY_EMPTY:" + String(bayNumber));
         return count;
       }

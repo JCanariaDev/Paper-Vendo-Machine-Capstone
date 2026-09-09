@@ -229,18 +229,21 @@ struct CatalogItem {
   int id;
   const char* name;
   float price;
-  bool isPaperPresent; // Synced from Uno's L5290 sensors
+  bool isPaperPresent; // Synced from database pad stock
+  int currentPadStock;
+  int sheetsPerPad;
+  bool paperLevelHigh;
 };
 
 const int PAPER_COUNT = 2;
 CatalogItem paperCatalog[PAPER_COUNT] = {
-  {1, "Bay 1 Paper",  1.00, true},
-  {2, "Bay 2 Paper",  1.00, true}
+  {1, "Bay 1 Paper",  1.00, true, 1, 1, true},
+  {2, "Bay 2 Paper",  1.00, true, 1, 1, true}
 };
 
 const int BALLPEN_COUNT = 1;
 CatalogItem ballpenCatalog[BALLPEN_COUNT] = {
-  {1, "Pen Slot 1", 5.00, true}
+  {1, "Pen Slot 1", 5.00, true, 0, 1, true}
 };
 
 // Dynamic name buffers — updated by ESP32 PAPER_BAY: / PEN_BAY: messages
@@ -320,9 +323,9 @@ int cartRowY(int i) {
   return CART_TOP + i * cartRowHeight();
 }
 
-// ================= UNO SERIAL MESSAGES (L5290 PRESENCE & STATUS) =================
+// ================= UNO SERIAL MESSAGES (PAPER EXIT IR + STOCK STATUS) =================
 // ================= CATALOG SYNC FROM ESP32 =================
-// Handles: PAPER_BAY:<bay>:<prod_id>:<presence>:<sheets>:<price_cents>:<name>
+// Handles: PAPER_BAY:<bay>:<prod_id>:<legacy_presence>:<sheets_per_pad>:<pad_stock>:<price_cents>:<name>
 // Handles: PEN_BAY:<bay>:<prod_id>:<stock>:<price_cents>:<name>
 // Sends dispense command to Arduino Uno and waits for sensor confirmation
 // ================= DIAGNOSTICS =================

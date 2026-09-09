@@ -1,7 +1,7 @@
 /*
   ==============================================================================
   ARDUINO UNO — DEDICATED 2-BAY PAPER DISPENSER CONTROLLER (PRODUCTION)
-  Controls 2 NEMA17 Stepper Motors (TMC2209 drivers) + 2 L5290 Tray Sensors.
+  Controls 2 NEMA17 Stepper Motors (TMC2209 drivers) + 2 paper-exit IR sensors.
   Communicates with Arduino Mega 2560 via Hardware Serial (D0/D1) at 9600 baud.
   ==============================================================================
 
@@ -17,12 +17,16 @@
     - Bay 2: STEP Pin D4,  DIR Pin D5
     - Common ENABLE Pin:   Pin D10 (Active LOW)
 
-  2x L5290 Paper Tray Presence Sensors (INPUT_PULLUP: HIGH = Present, LOW = Empty):
-    - Bay 1 Tray Sensor:   Pin D11
-    - Bay 2 Tray Sensor:   Pin D12
+  2x Paper Exit IR Sensors (INPUT_PULLUP: HIGH = beam clear, LOW = paper passing):
+    - Bay 1 Exit Sensor:   Pin D11
+    - Bay 2 Exit Sensor:   Pin D12
+
+  2x Paper Level IR Sensors (INPUT_PULLUP: LOW = level above sensor):
+    - Bay 1 Level Sensor:  Pin D6
+    - Bay 2 Level Sensor:  Pin D7
 
   Power:
-    - 5V & GND logic to TMC2209 drivers and L5290 sensors.
+    - 5V & GND logic to TMC2209 drivers and IR sensors.
     - VMOT (12V) external motor supply to TMC2209 motor power rails.
   ==============================================================================
 */
@@ -34,11 +38,21 @@ const int STEP_PINS[MOTOR_COUNT] = { 2, 4 };
 const int DIR_PINS[MOTOR_COUNT]  = { 3, 5 };
 const int ENABLE_PIN             = 10; // Common active LOW
 
-// L5290 Paper Tray Presence Sensors
-const int TRAY_SENSOR_PINS[MOTOR_COUNT] = { 11, 12 };
+// One IR sensor is installed at the paper exit of each bay.
+// The sensor confirms that a sheet actually crossed the outlet.
+const int PAPER_EXIT_SENSOR_PINS[MOTOR_COUNT] = { 11, 12 };
+const int PAPER_EXIT_BLOCKED_LEVEL = LOW;
+const int PAPER_LEVEL_SENSOR_PINS[MOTOR_COUNT] = { 6, 7 };
+const int PAPER_LEVEL_HIGH_LEVEL = LOW;
+const unsigned long PAPER_EXIT_TIMEOUT_MS = 2500;
+const unsigned long PAPER_EXIT_CLEAR_TIMEOUT_MS = 1000;
 
 const unsigned int STEP_PULSE_DELAY_US = 900;
 const int STEPS_PER_SHEET = 400; // Calibrated steps for 1 sheet feed
+int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
+int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
+
+void sendStatus();
 
 void enableDrivers() {
   digitalWrite(ENABLE_PIN, LOW); // Active LOW
@@ -55,22 +69,67 @@ void pulseStep(int motorIdx) {
   delayMicroseconds(STEP_PULSE_DELAY_US);
 }
 
-bool checkTrayPresence(int bayIndex) {
+bool paperBayHasStock(int bayIndex) {
   if (bayIndex < 0 || bayIndex >= MOTOR_COUNT) return false;
-  return (digitalRead(TRAY_SENSOR_PINS[bayIndex]) == HIGH);
+  return paperPadStock[bayIndex] != 0;
 }
 
-// Sends live presence state for all configured bays: STATUS:HIGH,HIGH
+bool paperLevelIsHigh(int bayIndex) {
+  if (bayIndex < 0 || bayIndex >= MOTOR_COUNT) return false;
+  return digitalRead(PAPER_LEVEL_SENSOR_PINS[bayIndex]) == PAPER_LEVEL_HIGH_LEVEL;
+}
+
+bool waitForPaperExit(int bayIndex) {
+  if (bayIndex < 0 || bayIndex >= MOTOR_COUNT) return false;
+
+  const int sensorPin = PAPER_EXIT_SENSOR_PINS[bayIndex];
+  const unsigned long startedAt = millis();
+
+  // Do not count a sheet until the outlet is clear at the start.
+  while (digitalRead(sensorPin) == PAPER_EXIT_BLOCKED_LEVEL) {
+    if (millis() - startedAt >= PAPER_EXIT_CLEAR_TIMEOUT_MS) return false;
+  }
+
+  const unsigned long blockedWaitStartedAt = millis();
+  while (digitalRead(sensorPin) != PAPER_EXIT_BLOCKED_LEVEL) {
+    if (millis() - blockedWaitStartedAt >= PAPER_EXIT_TIMEOUT_MS) return false;
+  }
+
+  // Require the sheet to clear the beam before continuing.
+  const unsigned long clearWaitStartedAt = millis();
+  while (digitalRead(sensorPin) == PAPER_EXIT_BLOCKED_LEVEL) {
+    if (millis() - clearWaitStartedAt >= PAPER_EXIT_CLEAR_TIMEOUT_MS) return false;
+  }
+  return true;
+}
+
+// Sends software stock state for all configured bays: STATUS:HIGH,HIGH.
+// Sends the physical level warning separately so LOW level is not mistaken for empty.
 void sendStatus() {
   String statusMsg = "STATUS:";
   for (int i = 0; i < MOTOR_COUNT; i++) {
     if (i > 0) statusMsg += ",";
-    statusMsg += checkTrayPresence(i) ? "HIGH" : "LOW";
+    statusMsg += paperBayHasStock(i) ? "HIGH" : "LOW";
   }
   Serial.println(statusMsg);
+
+  String levelMsg = "LEVEL:";
+  for (int i = 0; i < MOTOR_COUNT; i++) {
+    if (i > 0) levelMsg += ",";
+    levelMsg += paperLevelIsHigh(i) ? "HIGH" : "LOW";
+  }
+  Serial.println(levelMsg);
 }
 
-// Dispenses sheet-by-sheet with continuous L5290 presence verification
+void syncPaperStock(int bayNum, int padStock, int unitSheets) {
+  const int idx = bayNum - 1;
+  if (idx < 0 || idx >= MOTOR_COUNT) return;
+  paperPadStock[idx] = max(0, padStock);
+  sheetsPerPad[idx] = max(1, unitSheets);
+  sendStatus();
+}
+
+// Dispenses sheet-by-sheet and confirms each sheet at the exit IR sensor.
 void dispensePaper(int bayNum, int requestedSheets) {
   int idx = bayNum - 1;
   if (idx < 0 || idx >= MOTOR_COUNT) {
@@ -78,8 +137,8 @@ void dispensePaper(int bayNum, int requestedSheets) {
     return;
   }
 
-  // 1. Pre-check L5290 Sensor
-  if (!checkTrayPresence(idx)) {
+  // 1. Pre-check the software stock synchronized from the database.
+  if (!paperBayHasStock(idx)) {
     Serial.println("EMPTY:" + String(bayNum));
     return;
   }
@@ -89,30 +148,29 @@ void dispensePaper(int bayNum, int requestedSheets) {
 
   int sheetsDispensed = 0;
   for (int s = 0; s < requestedSheets; s++) {
-    // Check L5290 before each sheet
-    if (!checkTrayPresence(idx)) {
-      disableDrivers();
-      Serial.println("EMPTY:" + String(bayNum) + ":" + String(sheetsDispensed));
-      return;
-    }
-
     // Step motor to feed 1 sheet
     for (int step = 0; step < STEPS_PER_SHEET; step++) {
-      // Continuous check during rotation
-      if (!checkTrayPresence(idx)) {
-        disableDrivers();
-        Serial.println("EMPTY:" + String(bayNum) + ":" + String(sheetsDispensed));
-        return;
-      }
       pulseStep(idx);
     }
 
+    if (!waitForPaperExit(idx)) {
+      disableDrivers();
+      Serial.println("EMPTY:" + String(bayNum) + ":" + String(sheetsDispensed));
+      sendStatus();
+      return;
+    }
+
     sheetsDispensed++;
-    delay(200); // Inter-sheet stabilization gap
+    delay(100); // Inter-sheet stabilization gap
   }
 
   disableDrivers();
+  if (paperPadStock[idx] > 0) {
+    const int padsUsed = (sheetsDispensed + sheetsPerPad[idx] - 1) / sheetsPerPad[idx];
+    paperPadStock[idx] = max(0, paperPadStock[idx] - padsUsed);
+  }
   Serial.println("DONE:" + String(bayNum) + ":" + String(sheetsDispensed));
+  sendStatus();
 }
 
 void jogMotor(int bayNum, long steps) {
@@ -142,6 +200,18 @@ void handleCommand(String cmd) {
       dispensePaper(bay, count);
     }
   }
+  else if (cmd.startsWith("STOCK:")) {
+    // Format: STOCK:<bay_num>:<pad_stock>:<sheets_per_pad>
+    int first = cmd.indexOf(':');
+    int second = cmd.indexOf(':', first + 1);
+    int third = cmd.indexOf(':', second + 1);
+    if (first > 0 && second > first && third > second) {
+      int bay = cmd.substring(first + 1, second).toInt();
+      int pads = cmd.substring(second + 1, third).toInt();
+      int sheets = cmd.substring(third + 1).toInt();
+      syncPaperStock(bay, pads, sheets);
+    }
+  }
   else if (cmd == "STATUS?") {
     sendStatus();
   }
@@ -166,7 +236,8 @@ void setup() {
   for (int i = 0; i < MOTOR_COUNT; i++) {
     pinMode(STEP_PINS[i], OUTPUT);
     pinMode(DIR_PINS[i], OUTPUT);
-    pinMode(TRAY_SENSOR_PINS[i], INPUT_PULLUP);
+    pinMode(PAPER_EXIT_SENSOR_PINS[i], INPUT_PULLUP);
+    pinMode(PAPER_LEVEL_SENSOR_PINS[i], INPUT_PULLUP);
     digitalWrite(STEP_PINS[i], LOW);
     digitalWrite(DIR_PINS[i], LOW);
   }

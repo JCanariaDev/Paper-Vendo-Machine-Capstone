@@ -152,6 +152,11 @@ void drawCatalogScreen() {
       tft.setTextSize(1);
       tft.setCursor(62, rowY + 40);
       tft.print(qtyBuf);
+      if (activeCatalogType == "paper") {
+        tft.setCursor(125, rowY + 40);
+        tft.setTextColor(catalog[i].paperLevelHigh ? COL_GREEN : COL_ORANGE);
+        tft.print(catalog[i].paperLevelHigh ? "Level: HIGH" : "Level: LOW");
+      }
     }
   }
 

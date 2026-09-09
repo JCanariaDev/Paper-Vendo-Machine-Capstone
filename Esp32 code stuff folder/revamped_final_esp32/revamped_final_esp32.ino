@@ -7,7 +7,7 @@
 // ==============================================================================
 // REVAMPED ESP32 IOT GATEWAY FIRMWARE (PRODUCTION READY)
 // Communicates with Arduino Mega 2560 over Serial2 and bridges to Supabase.
-// Handles Dynamic 2-Bay Paper (L5290 Presence) and 1-Bay Ballpen Vending.
+// Handles Dynamic 2-Bay Paper (database stock + exit confirmation) and 1-Bay Ballpen Vending.
 // ==============================================================================
 
 // --- WIFI CONFIG ---
@@ -196,7 +196,7 @@ void syncLiveCatalogToMega() {
   HTTPClient http;
 
   // 1. Fetch Paper Compartments
-  String url = String(SUPABASE_URL) + "/rest/v1/paper_compartments?select=compartment_number,assigned_product_id,presence_status,paper_inventory(brand_name,paper_size,sheets_per_unit,cost_per_unit_cents)&compartment_number=lte.2&order=compartment_number.asc";
+  String url = String(SUPABASE_URL) + "/rest/v1/paper_compartments?select=compartment_number,assigned_product_id,presence_status,current_pad_stock,paper_inventory(brand_name,paper_size,sheets_per_unit,cost_per_unit_cents)&compartment_number=lte.2&order=compartment_number.asc";
   if (http.begin(client, url)) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
@@ -208,13 +208,14 @@ void syncLiveCatalogToMega() {
         int bayNum = bay["compartment_number"];
         int prodId = bay["assigned_product_id"] | 0;
         String presence = bay["presence_status"].as<String>();
+        int padStock = bay["current_pad_stock"] | 0;
         JsonObject inv = bay["paper_inventory"];
         String brand = inv["brand_name"].as<String>();
         String size = inv["paper_size"].as<String>();
         int sheets = inv["sheets_per_unit"] | 1;
         int price = inv["cost_per_unit_cents"] | 100;
-        // Format: PAPER_BAY:<bay_num>:<prod_id>:<presence>:<sheets>:<price_cents>:<name>
-        MEGA_SERIAL.println("PAPER_BAY:" + String(bayNum) + ":" + String(prodId) + ":" + presence + ":" + String(sheets) + ":" + String(price) + ":" + brand + " " + size);
+        // Format: PAPER_BAY:<bay>:<product>:<legacy_presence>:<sheets_per_pad>:<pad_stock>:<price_cents>:<name>
+        MEGA_SERIAL.println("PAPER_BAY:" + String(bayNum) + ":" + String(prodId) + ":" + presence + ":" + String(sheets) + ":" + String(padStock) + ":" + String(price) + ":" + brand + " " + size);
         delay(30);
       }
     }
@@ -373,7 +374,7 @@ void finishTransaction(const String &message) {
   MEGA_SERIAL.println("FINISHED:" + transactionId + ":" + trNum + ":" + status + ":" + String(dueCents) + ":" + String(paidCents));
 }
 
-// Update Bay Presence in Supabase if L5290 detects empty during operation
+// Mark a bay empty when the Mega reports that its exit-verified stock is exhausted.
 void updatePaperBayPresence(const String &message) {
   // Format: BAY_EMPTY:<bay_num>
   int bayNum = message.substring(10).toInt();
@@ -388,7 +389,7 @@ void updatePaperBayPresence(const String &message) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
     http.addHeader("Content-Type", "application/json");
-    String body = "{\"presence_status\":\"LOW\", \"updated_at\":\"now()\"}";
+    String body = "{\"presence_status\":\"LOW\", \"current_pad_stock\":0, \"updated_at\":\"now()\"}";
     http.PATCH(body);
     http.end();
   }
