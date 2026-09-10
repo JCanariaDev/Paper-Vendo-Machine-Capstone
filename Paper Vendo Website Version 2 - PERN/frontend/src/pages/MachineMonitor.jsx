@@ -482,32 +482,32 @@ export default function MachineMonitor() {
               </div>
             </div>
 
-            <div className="mt-4 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white/60 dark:bg-white/[0.03] overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-white/[0.08]">
+            <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 text-white shadow-inner overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-white/[0.02]">
                 <div className="flex items-center gap-2">
-                  <ShoppingCart className="w-4 h-4 text-primary-500" />
-                  <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Selected Cart Items</span>
+                  <ShoppingCart className="w-4 h-4 text-primary-300" />
+                  <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Selected Cart Items</span>
                 </div>
                 {transactionOngoing && (
-                  <span className="text-[10px] font-bold text-emerald-500">LIVE CART</span>
+                  <span className="text-[10px] font-bold text-emerald-300">LIVE CART</span>
                 )}
               </div>
               {transactionOngoing && latestTx.items?.length > 0 ? (
-                <div className="divide-y divide-slate-200 dark:divide-white/[0.06]">
+                <div className="divide-y divide-white/[0.08]">
                   {latestTx.items.map((item) => (
                     <div key={item.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
                       <div className="min-w-0">
-                        <p className="font-bold text-slate-800 dark:text-white truncate">{item.name}</p>
-                        <p className="text-[11px] text-slate-500 capitalize">{item.type}</p>
+                        <p className="font-bold text-white truncate">{item.name}</p>
+                        <p className="text-[11px] text-slate-400 capitalize">{item.type}</p>
                       </div>
-                      <span className="shrink-0 text-xs font-bold text-slate-600 dark:text-slate-300">
+                      <span className="shrink-0 text-xs font-bold text-primary-200">
                         ×{item.quantity}
                       </span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="px-4 py-4 text-xs text-slate-500 dark:text-slate-400">
+                <p className="px-4 py-4 text-xs text-slate-400">
                   No active cart. Items will appear here after a purchase is confirmed.
                 </p>
               )}
