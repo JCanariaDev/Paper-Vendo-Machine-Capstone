@@ -3,7 +3,7 @@ import axios from 'axios';
 import {
   Wifi, WifiOff, RefreshCw, CreditCard, ShoppingBag,
   Tag, Maximize2, CheckCircle, Banknote, PartyPopper, XCircle,
-  Activity, AlertTriangle, Layers, ChevronRight
+  Activity, AlertTriangle, Layers, ChevronRight, LoaderCircle, ShoppingCart
 } from 'lucide-react';
 
 // ─── Machine State Definitions ────────────────────────────────────────────────
@@ -144,8 +144,8 @@ function inferMachineState(machineStatus, latestTx) {
   if (!isOnline) return 'offline';
   if (!latestTx) return 'idle';
 
-  const { status, created_at } = latestTx;
-  const ageSeconds = (Date.now() - new Date(created_at).getTime()) / 1000;
+  const { status, created_at, transaction_date } = latestTx;
+  const ageSeconds = (Date.now() - new Date(created_at || transaction_date).getTime()) / 1000;
 
   if (
     ['COMPLETED', 'COMPLETED_CHANGE_OWED', 'CANCELLED', 'FAILED_DISPENSE', 'FAILED_CHANGE'].includes(status)
@@ -173,6 +173,37 @@ const TX_MAP = {
   FAILED_DISPENSE:       { label: 'Failed — Dispense', color: 'bg-red-500/10 text-red-400 border-red-500/20' },
   FAILED_CHANGE:         { label: 'Failed — Change',   color: 'bg-orange-500/10 text-orange-400 border-orange-500/20' },
 };
+
+// The API returns one row per purchased product.  Group the rows back into a
+// transaction so the monitor can show the customer's complete current cart.
+function groupTransactionLines(lines) {
+  const grouped = new Map();
+
+  lines.forEach((line) => {
+    const transactionId = line.transaction_id || line.id;
+    if (!grouped.has(transactionId)) {
+      grouped.set(transactionId, {
+        ...line,
+        id: transactionId,
+        created_at: line.transaction_date || line.created_at,
+        items: [],
+      });
+    }
+
+    grouped.get(transactionId).items.push({
+      id: line.id,
+      name: line.product_name || (line.item_type === 'paper' ? 'Paper' : 'Ballpen'),
+      type: line.item_type,
+      quantity: Number(line.units_requested ?? line.qty_requested ?? 0),
+      dispensed: Number(line.qty_dispensed ?? 0),
+      lineStatus: line.line_status,
+    });
+  });
+
+  return [...grouped.values()].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+}
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 function StatusBadge({ label, color }) {
@@ -223,10 +254,11 @@ export default function MachineMonitor() {
     try {
       const [statusRes, txRes] = await Promise.all([
         axios.get('/api/machine/status'),
-        axios.get('/api/machine/transactions?limit=5'),
+        // Fetch enough lines to keep a multi-item active cart together.
+        axios.get('/api/machine/transactions?limit=100'),
       ]);
       const statuses = statusRes.data || [];
-      const txList   = txRes.data    || [];
+      const txList   = groupTransactionLines(txRes.data || []);
       setMachineStatus(statuses);
       setTransactions(txList);
       setStateId(inferMachineState(statuses, txList[0] || null));
@@ -272,6 +304,7 @@ export default function MachineMonitor() {
     ? Number(latestTx.change_due || 0).toFixed(2)
     : ((latestTx?.change_due_cents || 0) / 100).toFixed(2);
   const transactionOngoing = latestTx && ['RESERVED', 'CHANGE_PAID'].includes(latestTx.status);
+  const isDispensing = transactionOngoing && ['dispensing_items', 'dispensing_change'].includes(stateId);
 
   if (loading) {
     return (
@@ -424,7 +457,7 @@ export default function MachineMonitor() {
 
             <div className="mt-6 rounded-2xl border border-white/10 bg-slate-950 text-white shadow-inner overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-                <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">TFT-Style Credit Display</span>
+                <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Live-view</span>
                 <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${
                   transactionOngoing ? 'bg-emerald-400/10 text-emerald-300' : 'bg-slate-700 text-slate-300'
                 }`}>
@@ -448,6 +481,49 @@ export default function MachineMonitor() {
                 </div>
               </div>
             </div>
+
+            <div className="mt-4 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white/60 dark:bg-white/[0.03] overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-white/[0.08]">
+                <div className="flex items-center gap-2">
+                  <ShoppingCart className="w-4 h-4 text-primary-500" />
+                  <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Selected Cart Items</span>
+                </div>
+                {transactionOngoing && (
+                  <span className="text-[10px] font-bold text-emerald-500">LIVE CART</span>
+                )}
+              </div>
+              {transactionOngoing && latestTx.items?.length > 0 ? (
+                <div className="divide-y divide-slate-200 dark:divide-white/[0.06]">
+                  {latestTx.items.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                      <div className="min-w-0">
+                        <p className="font-bold text-slate-800 dark:text-white truncate">{item.name}</p>
+                        <p className="text-[11px] text-slate-500 capitalize">{item.type}</p>
+                      </div>
+                      <span className="shrink-0 text-xs font-bold text-slate-600 dark:text-slate-300">
+                        ×{item.quantity}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="px-4 py-4 text-xs text-slate-500 dark:text-slate-400">
+                  No active cart. Items will appear here after a purchase is confirmed.
+                </p>
+              )}
+            </div>
+
+            {isDispensing && (
+              <div className="mt-4 flex items-center gap-3 rounded-2xl border border-orange-500/25 bg-orange-500/10 px-4 py-3 text-orange-700 dark:text-orange-300">
+                <LoaderCircle className="w-5 h-5 animate-spin shrink-0" />
+                <div>
+                  <p className="text-sm font-bold">Dispensing in progress</p>
+                  <p className="text-xs opacity-80 mt-0.5">
+                    {stateId === 'dispensing_change' ? 'Releasing change through the hopper.' : 'Dispensing the selected cart items.'}
+                  </p>
+                </div>
+              </div>
+            )}
 
             {latestTx && (
               <div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
