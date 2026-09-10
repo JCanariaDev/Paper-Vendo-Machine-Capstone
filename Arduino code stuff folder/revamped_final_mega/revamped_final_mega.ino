@@ -68,7 +68,7 @@ const int COIN_INHIBIT_PIN = 6; // Pin D6: Drives Coin Acceptor Relay
 // Pin D6 LOW  -> Relay LED ON  -> 12V CUT (Coin Acceptor Powered OFF / Rejects Coins)
 int coinRelayOnLevel  = HIGH;   // HIGH = Power ON
 int coinRelayOffLevel = LOW;    // LOW  = Power OFF (Cut at >= 30 credits)
-const uint16_t MAX_CREDITS_ALLOWED = 30; // Maximum allowed credits (PHP 30 cap)
+const uint16_t MAX_CREDITS_ALLOWED = 25; // Maximum allowed credits (PHP 30 cap)
 volatile unsigned long ignoreCoinPulsesUntil = 0; // Anti-glitch surge filter on relay switching
 volatile bool coinAcceptorEnabled = true;         // Software gate for coin pulses
 // Option A: Delayed relay cutoff to capture all pulses from last inserted coin
