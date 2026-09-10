@@ -9,7 +9,6 @@ export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [role, setRole] = useState('staff'); // default to 'staff'
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -22,7 +21,6 @@ export default function Login() {
     setUsername('');
     setPassword('');
     setConfirmPassword('');
-    setRole('staff');
   };
 
   const handleSubmit = async (e) => {
@@ -47,7 +45,7 @@ export default function Login() {
     try {
       if (isRegister) {
         // Register API call
-        const response = await axios.post('/api/auth/register', { username, password, role });
+        const response = await axios.post('/api/auth/register', { username, password });
         setSuccess(response.data.message || 'Registration successful! You can now log in.');
         // Reset forms and toggle to login mode after 2 seconds
         setTimeout(() => {
@@ -179,21 +177,6 @@ export default function Login() {
                 />
               </div>
             </div>
-
-            {/* Role Dropdown - Displayed ONLY in Register mode */}
-            {isRegister && (
-              <div className="space-y-1.5 animate-[fadeIn_0.2s_ease-out]">
-                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">System Role</label>
-                <select
-                  value={role}
-                  onChange={(e) => setRole(e.target.value)}
-                  className="w-full h-12 px-3.5 rounded-xl text-sm bg-slate-50/70 border border-slate-200 text-slate-700 focus:bg-white focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 outline-none transition-all duration-200"
-                >
-                  <option value="staff">Staff (View inventory & statistics)</option>
-                  <option value="superadmin">Superadmin (Full settings control)</option>
-                </select>
-              </div>
-            )}
 
             {/* Password Input */}
             <div className="space-y-1.5">

@@ -13,6 +13,7 @@ import Inventory from './pages/Inventory';
 import Transactions from './pages/Transactions';
 import Analytics from './pages/Analytics';
 import Reports from './pages/Reports';
+import MachineConfiguration from './pages/MachineConfiguration';
 
 // Import Sidebar Layout
 import Sidebar from './components/Sidebar';
@@ -208,6 +209,16 @@ export default function App() {
                 </AdminRoute>
               </ProtectedRoute>
             } 
+          />
+          <Route
+            path="/machine-configuration"
+            element={
+              <ProtectedRoute>
+                <AdminRoute>
+                  <MachineConfiguration />
+                </AdminRoute>
+              </ProtectedRoute>
+            }
           />
 
           {/* Root Wildcard Redirection */}

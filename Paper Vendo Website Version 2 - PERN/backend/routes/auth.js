@@ -69,11 +69,11 @@ export function createAuthRouter(supabase) {
       return res.status(400).json({ message: 'Username and password are required.' });
     }
 
-    // Role validation
-    const allowedRoles = ['superadmin', 'staff'];
-    const userRole = role || 'staff';
-    if (!allowedRoles.includes(userRole)) {
-      return res.status(400).json({ message: 'Invalid role. Must be either superadmin or staff.' });
+    // Public sign-up must not be able to mint privileged accounts.  A seeded
+    // superadmin manages protected functions such as network configuration.
+    const userRole = 'staff';
+    if (role && role !== 'staff') {
+      return res.status(403).json({ message: 'Superadmin accounts must be created by an administrator.' });
     }
 
     try {

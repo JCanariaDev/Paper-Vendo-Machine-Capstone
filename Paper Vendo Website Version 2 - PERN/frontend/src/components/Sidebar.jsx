@@ -12,7 +12,8 @@ import {
   Sun, 
   Moon, 
   User,
-  X
+  X,
+  Settings
 } from 'lucide-react';
 
 export default function Sidebar({ isOpen, onClose }) {
@@ -28,7 +29,8 @@ export default function Sidebar({ isOpen, onClose }) {
   if (user?.role === 'superadmin') {
     navItems.push(
       { to: '/analytics', label: 'Advance Analytics', icon: TrendingUp },
-      { to: '/reports', label: 'Reports', icon: FileSpreadsheet }
+      { to: '/reports', label: 'Reports', icon: FileSpreadsheet },
+      { to: '/machine-configuration', label: 'Machine Configuration', icon: Settings }
     );
   }
 

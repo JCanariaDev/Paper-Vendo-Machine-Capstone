@@ -31,6 +31,11 @@ if (!supabaseUrl || !supabaseKey) {
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
+// Sensitive configuration data uses a separate service-role client. The normal
+// API/firmware key must never be able to read stored network credentials.
+const networkConfigSupabase = process.env.SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY)
+  : null;
 console.log('>>> Connected securely to Supabase Database Client');
 
 // Health Check Endpoints (Supports Render default and custom checks)
@@ -40,7 +45,7 @@ app.get(['/', '/health', '/api/health'], (req, res) => {
 
 // Setup Routers
 app.use('/api/auth', createAuthRouter(supabase));
-app.use('/api/machine', createMachineRouter(supabase));
+app.use('/api/machine', createMachineRouter(supabase, networkConfigSupabase));
 
 // Global Error Handler
 app.use((err, req, res, next) => {

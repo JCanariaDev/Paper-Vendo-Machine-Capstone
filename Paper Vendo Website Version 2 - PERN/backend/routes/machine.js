@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 
 const asInt = (value, fallback = 0) => {
@@ -7,6 +8,23 @@ const asInt = (value, fallback = 0) => {
 };
 
 const asMoney = (cents) => asInt(cents) / 100;
+
+function encryptNetworkPassword(password) {
+  const key = Buffer.from(process.env.NETWORK_CONFIG_ENCRYPTION_KEY || '', 'base64');
+  if (key.length !== 32) {
+    throw new Error('NETWORK_CONFIG_ENCRYPTION_KEY must be a base64-encoded 32-byte key.');
+  }
+
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(password, 'utf8'), cipher.final()]);
+
+  return {
+    password_ciphertext: encrypted.toString('base64'),
+    password_iv: iv.toString('base64'),
+    password_auth_tag: cipher.getAuthTag().toString('base64')
+  };
+}
 
 function flattenPaperInventory(row, assignedBays = []) {
   const bay = assignedBays.find((b) => b.assigned_product_id === row.id);
@@ -138,7 +156,7 @@ async function getTransactionLines(supabase) {
     .sort((a, b) => new Date(b.transaction_date) - new Date(a.transaction_date));
 }
 
-export function createMachineRouter(supabase) {
+export function createMachineRouter(supabase, networkConfigSupabase) {
   const router = express.Router();
   router.use(authenticateToken);
 
@@ -175,6 +193,71 @@ export function createMachineRouter(supabase) {
     } catch (err) {
       console.error('Error fetching transactions:', err);
       return res.status(500).json({ message: 'Failed to retrieve sales transactions.' });
+    }
+  });
+
+  // Wi-Fi credentials are staged here for a future device-configuration flow.
+  // The password is encrypted before it reaches Supabase and is never returned.
+  router.get('/network-config', authorizeRoles('superadmin'), async (_req, res) => {
+    if (!networkConfigSupabase) {
+      return res.status(503).json({ message: 'Network configuration is not enabled on the server yet.' });
+    }
+    try {
+      const { data, error } = await networkConfigSupabase
+        .from('machine_network_config')
+        .select('ssid, status, configured_at, updated_at')
+        .eq('id', 1)
+        .maybeSingle();
+
+      if (error) throw error;
+      return res.status(200).json({ configured: Boolean(data), config: data || null });
+    } catch (err) {
+      console.error('Error fetching network configuration:', err);
+      return res.status(500).json({ message: 'Failed to retrieve network configuration.' });
+    }
+  });
+
+  router.put('/network-config', authorizeRoles('superadmin'), async (req, res) => {
+    const ssid = typeof req.body.ssid === 'string' ? req.body.ssid.trim() : '';
+    const password = typeof req.body.password === 'string' ? req.body.password : '';
+
+    if (!ssid || ssid.length > 32) {
+      return res.status(400).json({ message: 'SSID must contain between 1 and 32 characters.' });
+    }
+    if (password.length < 8 || password.length > 63) {
+      return res.status(400).json({ message: 'Wi-Fi password must contain between 8 and 63 characters.' });
+    }
+    if (!networkConfigSupabase) {
+      return res.status(503).json({ message: 'Network configuration is not enabled on the server yet.' });
+    }
+
+    try {
+      const encrypted = encryptNetworkPassword(password);
+      const { data, error } = await networkConfigSupabase
+        .from('machine_network_config')
+        .upsert([{
+          id: 1,
+          ssid,
+          ...encrypted,
+          status: 'PENDING_DEVICE_APPLY',
+          configured_by: req.user.id,
+          configured_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }], { onConflict: 'id' })
+        .select('ssid, status, configured_at, updated_at')
+        .single();
+
+      if (error) throw error;
+      return res.status(200).json({
+        message: 'Network configuration staged. It will not apply until ESP32 remote configuration support is installed.',
+        config: data
+      });
+    } catch (err) {
+      console.error('Error staging network configuration:', err.message);
+      if (err.message.includes('NETWORK_CONFIG_ENCRYPTION_KEY')) {
+        return res.status(503).json({ message: 'Network configuration is not enabled on the server yet.' });
+      }
+      return res.status(500).json({ message: 'Failed to save network configuration.' });
     }
   });
 

@@ -705,3 +705,23 @@ GRANT EXECUTE ON FUNCTION machine_cancel_reserved_transaction(UUID, TEXT) TO ano
 GRANT EXECUTE ON FUNCTION machine_finish_transaction(UUID, JSONB, INTEGER) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) TO anon, authenticated;
+
+-- ------------------------------------------------------------------------------
+-- Staged Wi-Fi Configuration
+-- Passwords are AES-256-GCM encrypted by the backend before being written here.
+-- The ESP32 does not consume this table until remote configuration firmware is added.
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS machine_network_config (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    ssid TEXT NOT NULL CHECK (char_length(ssid) BETWEEN 1 AND 32),
+    password_ciphertext TEXT NOT NULL,
+    password_iv TEXT NOT NULL,
+    password_auth_tag TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING_DEVICE_APPLY'
+      CHECK (status IN ('PENDING_DEVICE_APPLY', 'APPLIED', 'ROLLED_BACK', 'FAILED')),
+    configured_by INTEGER REFERENCES admins(id),
+    configured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+REVOKE ALL ON TABLE machine_network_config FROM anon, authenticated;
