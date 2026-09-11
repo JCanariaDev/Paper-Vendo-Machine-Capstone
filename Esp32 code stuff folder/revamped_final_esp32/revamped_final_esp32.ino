@@ -3,6 +3,7 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <Esp.h>
+#include <Preferences.h>
 
 // ==============================================================================
 // REVAMPED ESP32 IOT GATEWAY FIRMWARE (PRODUCTION READY)
@@ -11,11 +12,15 @@
 // ==============================================================================
 
 // --- WIFI CONFIG ---
-// These are bootstrap credentials used until the first remote configuration
-// is downloaded. Replace the two device-config values with your deployed API
-// URL and the same token configured as ESP32_DEVICE_CONFIG_TOKEN on the server.
-String wifiSsid = "ashid";
-String wifiPassword = "paltankolang";
+// Bootstrap credentials are used only when no working credentials have been
+// saved in ESP32 flash yet. Replace these with the initial machine network.
+const char* BOOTSTRAP_WIFI_SSID = "ashid";
+const char* BOOTSTRAP_WIFI_PASSWORD = "paltankolang";
+String wifiSsid;
+String wifiPassword;
+String previousWifiSsid;
+String previousWifiPassword;
+Preferences wifiPreferences;
 const char* NETWORK_CONFIG_URL = "https://YOUR-BACKEND-URL/api/machine/network-config/device";
 const char* NETWORK_CONFIG_TOKEN = "REPLACE_WITH_ESP32_DEVICE_CONFIG_TOKEN";
 String lastNetworkConfigVersion = "";
@@ -49,6 +54,11 @@ void updateStatusKey(const String &key, const String &value);
 void softResetRuntime();
 bool fetchAndApplyRemoteNetworkConfig();
 bool acknowledgeRemoteNetworkConfig(const String &version);
+void loadSavedWifiCredentials();
+void saveWifiCredentials(const String &ssid, const String &password,
+                         const String &previousSsid, const String &previousPassword,
+                         const String &version);
+bool connectUsingSavedFallbacks();
 
 void sendError(const String &message) {
   MEGA_SERIAL.println("ERR:" + message);
@@ -122,6 +132,62 @@ bool printNearbyWifiNetworks() {
   return targetFound;
 }
 
+void loadSavedWifiCredentials() {
+  wifiPreferences.begin("wifi-config", false);
+  wifiSsid = wifiPreferences.getString("ssid", BOOTSTRAP_WIFI_SSID);
+  wifiPassword = wifiPreferences.getString("password", BOOTSTRAP_WIFI_PASSWORD);
+  previousWifiSsid = wifiPreferences.getString("prev_ssid", "");
+  previousWifiPassword = wifiPreferences.getString("prev_password", "");
+  lastNetworkConfigVersion = wifiPreferences.getString("version", "");
+
+  Serial.print("WiFi credential source: ");
+  Serial.println(wifiPreferences.isKey("ssid") ? "ESP32 flash" : "bootstrap firmware");
+}
+
+void saveWifiCredentials(const String &ssid, const String &password,
+                         const String &previousSsid, const String &previousPassword,
+                         const String &version) {
+  wifiPreferences.putString("ssid", ssid);
+  wifiPreferences.putString("password", password);
+  wifiPreferences.putString("prev_ssid", previousSsid);
+  wifiPreferences.putString("prev_password", previousPassword);
+  wifiPreferences.putString("version", version);
+}
+
+bool connectUsingSavedFallbacks() {
+  const String activeSsid = wifiSsid;
+  const String activePassword = wifiPassword;
+
+  if (connectToWifi(15000)) return true;
+
+  if (previousWifiSsid.length() > 0 &&
+      (previousWifiSsid != activeSsid || previousWifiPassword != activePassword)) {
+    Serial.println("Saved WiFi failed. Trying previous known-good credentials...");
+    wifiSsid = previousWifiSsid;
+    wifiPassword = previousWifiPassword;
+    if (connectToWifi(15000)) {
+      saveWifiCredentials(wifiSsid, wifiPassword, activeSsid, activePassword, "");
+      lastNetworkConfigVersion = "";
+      return true;
+    }
+  }
+
+  if (activeSsid != BOOTSTRAP_WIFI_SSID || activePassword != BOOTSTRAP_WIFI_PASSWORD) {
+    Serial.println("Saved WiFi fallback failed. Trying bootstrap credentials...");
+    wifiSsid = BOOTSTRAP_WIFI_SSID;
+    wifiPassword = BOOTSTRAP_WIFI_PASSWORD;
+    if (connectToWifi(15000)) {
+      saveWifiCredentials(wifiSsid, wifiPassword, activeSsid, activePassword, "");
+      lastNetworkConfigVersion = "";
+      return true;
+    }
+  }
+
+  wifiSsid = activeSsid;
+  wifiPassword = activePassword;
+  return false;
+}
+
 bool acknowledgeRemoteNetworkConfig(const String &version) {
   if (version.length() == 0 || String(NETWORK_CONFIG_URL).startsWith("https://YOUR-BACKEND")) {
     return false;
@@ -186,6 +252,7 @@ bool fetchAndApplyRemoteNetworkConfig() {
 
   if (candidateSsid == wifiSsid && candidatePassword == wifiPassword) {
     lastNetworkConfigVersion = version;
+    saveWifiCredentials(wifiSsid, wifiPassword, previousWifiSsid, previousWifiPassword, version);
     acknowledgeRemoteNetworkConfig(version);
     Serial.println("Remote WiFi config already matches the active credentials.");
     return true;
@@ -199,7 +266,10 @@ bool fetchAndApplyRemoteNetworkConfig() {
   Serial.print("Applying remote WiFi configuration for SSID: ");
   Serial.println(wifiSsid);
   if (connectToWifi(15000)) {
+    previousWifiSsid = previousSsid;
+    previousWifiPassword = previousPassword;
     lastNetworkConfigVersion = version;
+    saveWifiCredentials(wifiSsid, wifiPassword, previousWifiSsid, previousWifiPassword, version);
     acknowledgeRemoteNetworkConfig(version);
     Serial.println("Remote WiFi configuration applied successfully.");
     return true;
@@ -534,7 +604,8 @@ void setup() {
 
   MEGA_SERIAL.begin(9600, SERIAL_8N1, MEGA_RX_PIN, MEGA_TX_PIN);
 
-  wifiConnected = connectToWifi(15000);
+  loadSavedWifiCredentials();
+  wifiConnected = connectUsingSavedFallbacks();
   sendWifiStatus();
   if (wifiConnected) {
     fetchAndApplyRemoteNetworkConfig();
