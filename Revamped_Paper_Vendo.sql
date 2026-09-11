@@ -725,3 +725,4 @@ CREATE TABLE IF NOT EXISTS machine_network_config (
 );
 
 REVOKE ALL ON TABLE machine_network_config FROM anon, authenticated;
+GRANT ALL ON TABLE machine_network_config TO service_role;
