@@ -38,6 +38,8 @@ const int MEGA_TX_PIN = 17;
 bool wifiConnected = false;
 unsigned long lastHeartbeatAt = 0;
 const unsigned long HEARTBEAT_INTERVAL_MS = 5000; // WIFI: status ping to Mega
+unsigned long lastOnlineHeartbeatAt = 0;
+const unsigned long ONLINE_HEARTBEAT_INTERVAL_MS = 5000; // Supabase heartbeat
 
 unsigned long lastStatusUpdate = 0;
 const unsigned long statusInterval = 60000; // machine_status table update
@@ -51,6 +53,7 @@ bool connectToWifi(unsigned long timeoutMs);
 bool printNearbyWifiNetworks();
 void updateMachineStatus();
 void updateStatusKey(const String &key, const String &value);
+bool sendOnlineHeartbeat();
 void softResetRuntime();
 bool fetchAndApplyRemoteNetworkConfig();
 bool acknowledgeRemoteNetworkConfig(const String &version);
@@ -304,6 +307,34 @@ void updateStatusKey(const String &key, const String &value) {
     http.PATCH(body);
     http.end();
   }
+}
+
+bool sendOnlineHeartbeat() {
+  if (!ensureWifi()) return false;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  const String url = String(SUPABASE_URL) + "/rest/v1/machine_online_status?id=eq.1";
+  if (!http.begin(client, url)) {
+    Serial.println("Online heartbeat request could not start.");
+    return false;
+  }
+
+  http.addHeader("apikey", SUPABASE_ANON_KEY);
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Prefer", "return=minimal");
+
+  // The Supabase trigger updates last_heartbeat and updated_at with server time.
+  const int code = http.PATCH("{\"status\":\"Online\"}");
+  http.end();
+
+  if (code < 200 || code >= 300) {
+    Serial.printf("Online heartbeat failed: HTTP %d\n", code);
+    return false;
+  }
+  return true;
 }
 
 bool callRpc(const char* functionName, JsonDocument &request, DynamicJsonDocument &response) {
@@ -592,6 +623,7 @@ void softResetRuntime() {
   wifiConnected = connectToWifi(10000);
   sendWifiStatus();
   if (wifiConnected) {
+    sendOnlineHeartbeat();
     updateMachineStatus();
     syncLiveCatalogToMega();
   }
@@ -609,6 +641,7 @@ void setup() {
   sendWifiStatus();
   if (wifiConnected) {
     fetchAndApplyRemoteNetworkConfig();
+    sendOnlineHeartbeat();
     updateMachineStatus();
     syncLiveCatalogToMega();
   }
@@ -624,6 +657,11 @@ void loop() {
   if (millis() - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatAt = millis();
     sendWifiStatus();
+  }
+
+  if (wifiConnected && millis() - lastOnlineHeartbeatAt >= ONLINE_HEARTBEAT_INTERVAL_MS) {
+    lastOnlineHeartbeatAt = millis();
+    sendOnlineHeartbeat();
   }
 
   if (wifiConnected && millis() - lastStatusUpdate > statusInterval) {
@@ -647,6 +685,7 @@ void loop() {
       } else if (millis() - disconnectedSince > WIFI_STUCK_THRESHOLD) {
         wifiConnected = connectToWifi(10000);
         sendWifiStatus();
+        if (wifiConnected) sendOnlineHeartbeat();
         disconnectedSince = 0;
       }
     } else {
