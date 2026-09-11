@@ -22,7 +22,7 @@ String previousWifiSsid;
 String previousWifiPassword;
 Preferences wifiPreferences;
 const char* NETWORK_CONFIG_URL = "https://paper-vendo-backend.onrender.com/api/machine/network-config/device";
-const char* NETWORK_CONFIG_TOKEN = "Pv2C03l9X3ilSi9b3SkFhi9fc6mFz2Co3GbmGh1gWX4";
+const char* NETWORK_CONFIG_TOKEN = "Pv2C03l9X3ilSi9b3SkFhi9fc6mFz2Co3GbmGh1gWX 4=";
 String lastNetworkConfigVersion = "";
 unsigned long lastNetworkConfigCheck = 0;
 const unsigned long NETWORK_CONFIG_CHECK_INTERVAL = 30000;
