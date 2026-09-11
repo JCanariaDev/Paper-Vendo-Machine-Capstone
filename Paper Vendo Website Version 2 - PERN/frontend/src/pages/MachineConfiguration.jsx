@@ -68,7 +68,7 @@ export default function MachineConfiguration() {
         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
         <div className="text-sm leading-relaxed">
           <p className="font-bold">Staging only — not yet sent to the machine</p>
-          <p className="mt-1 opacity-90">The current ESP32 firmware uses Wi-Fi credentials compiled into its code. Saving here securely prepares a pending configuration; firmware support is still needed to apply it and verify a safe rollback.</p>
+          <p className="mt-1 opacity-90">Credentials are encrypted on the server. The ESP32 checks for a new configuration and applies it with a rollback safeguard if the new network cannot be reached.</p>
         </div>
       </div>
 

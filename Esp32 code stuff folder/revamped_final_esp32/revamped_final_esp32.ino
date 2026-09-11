@@ -11,8 +11,16 @@
 // ==============================================================================
 
 // --- WIFI CONFIG ---
-const char* WIFI_SSID = "ashid";
-const char* WIFI_PASSWORD = "paltankolang";
+// These are bootstrap credentials used until the first remote configuration
+// is downloaded. Replace the two device-config values with your deployed API
+// URL and the same token configured as ESP32_DEVICE_CONFIG_TOKEN on the server.
+String wifiSsid = "ashid";
+String wifiPassword = "paltankolang";
+const char* NETWORK_CONFIG_URL = "https://YOUR-BACKEND-URL/api/machine/network-config/device";
+const char* NETWORK_CONFIG_TOKEN = "REPLACE_WITH_ESP32_DEVICE_CONFIG_TOKEN";
+String lastNetworkConfigVersion = "";
+unsigned long lastNetworkConfigCheck = 0;
+const unsigned long NETWORK_CONFIG_CHECK_INTERVAL = 30000;
 
 // --- SUPABASE CONFIG ---
 const char* SUPABASE_URL = "https://jowpzdynbdeznuvohrpx.supabase.co";
@@ -39,6 +47,8 @@ bool printNearbyWifiNetworks();
 void updateMachineStatus();
 void updateStatusKey(const String &key, const String &value);
 void softResetRuntime();
+bool fetchAndApplyRemoteNetworkConfig();
+bool acknowledgeRemoteNetworkConfig(const String &version);
 
 void sendError(const String &message) {
   MEGA_SERIAL.println("ERR:" + message);
@@ -79,7 +89,7 @@ bool connectToWifi(unsigned long timeoutMs) {
   MEGA_SERIAL.println(targetFound ? "WIFISTATE:CONNECTING" : "WIFISTATE:NOTFOUND");
 
   Serial.println("Starting WiFi connection...");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
   unsigned long wifiStart = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < timeoutMs) {
     delay(500);
@@ -106,10 +116,100 @@ bool printNearbyWifiNetworks() {
 
   bool targetFound = false;
   for (int i = 0; i < networkCount; i++) {
-    if (WiFi.SSID(i) == WIFI_SSID) targetFound = true;
+    if (WiFi.SSID(i) == wifiSsid) targetFound = true;
   }
   WiFi.scanDelete();
   return targetFound;
+}
+
+bool acknowledgeRemoteNetworkConfig(const String &version) {
+  if (version.length() == 0 || String(NETWORK_CONFIG_URL).startsWith("https://YOUR-BACKEND")) {
+    return false;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  if (!http.begin(client, String(NETWORK_CONFIG_URL) + "/ack")) return false;
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Device-Token", NETWORK_CONFIG_TOKEN);
+  DynamicJsonDocument request(256);
+  request["version"] = version;
+  String body;
+  serializeJson(request, body);
+  const int code = http.POST(body);
+  http.end();
+  return code >= 200 && code < 300;
+}
+
+bool fetchAndApplyRemoteNetworkConfig() {
+  if (!ensureWifi()) return false;
+  if (String(NETWORK_CONFIG_URL).startsWith("https://YOUR-BACKEND") ||
+      String(NETWORK_CONFIG_TOKEN) == "REPLACE_WITH_ESP32_DEVICE_CONFIG_TOKEN") {
+    return false;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  if (!http.begin(client, NETWORK_CONFIG_URL)) {
+    Serial.println("Remote WiFi config request could not start.");
+    return false;
+  }
+  http.addHeader("X-Device-Token", NETWORK_CONFIG_TOKEN);
+  const int code = http.GET();
+  const String payload = http.getString();
+  http.end();
+
+  if (code == 404) return false; // No staged configuration yet.
+  if (code < 200 || code >= 300) {
+    Serial.printf("Remote WiFi config request failed: %d\n", code);
+    return false;
+  }
+
+  DynamicJsonDocument response(1536);
+  if (deserializeJson(response, payload)) {
+    Serial.println("Remote WiFi config response was invalid.");
+    return false;
+  }
+
+  JsonObject config = response["config"];
+  if (config.isNull()) return false;
+  const String version = config["updated_at"].as<String>();
+  const String candidateSsid = config["ssid"].as<String>();
+  const String candidatePassword = config["password"].as<String>();
+  if (version.length() == 0 || candidateSsid.length() == 0 || candidatePassword.length() < 8) {
+    Serial.println("Remote WiFi config was incomplete.");
+    return false;
+  }
+  if (version == lastNetworkConfigVersion) return true;
+
+  if (candidateSsid == wifiSsid && candidatePassword == wifiPassword) {
+    lastNetworkConfigVersion = version;
+    acknowledgeRemoteNetworkConfig(version);
+    Serial.println("Remote WiFi config already matches the active credentials.");
+    return true;
+  }
+
+  const String previousSsid = wifiSsid;
+  const String previousPassword = wifiPassword;
+  wifiSsid = candidateSsid;
+  wifiPassword = candidatePassword;
+
+  Serial.print("Applying remote WiFi configuration for SSID: ");
+  Serial.println(wifiSsid);
+  if (connectToWifi(15000)) {
+    lastNetworkConfigVersion = version;
+    acknowledgeRemoteNetworkConfig(version);
+    Serial.println("Remote WiFi configuration applied successfully.");
+    return true;
+  }
+
+  Serial.println("Remote WiFi configuration failed. Restoring previous credentials.");
+  wifiSsid = previousSsid;
+  wifiPassword = previousPassword;
+  connectToWifi(15000);
+  return false;
 }
 
 void updateMachineStatus() {
@@ -437,6 +537,7 @@ void setup() {
   wifiConnected = connectToWifi(15000);
   sendWifiStatus();
   if (wifiConnected) {
+    fetchAndApplyRemoteNetworkConfig();
     updateMachineStatus();
     syncLiveCatalogToMega();
   }
@@ -466,6 +567,7 @@ void loop() {
     if (nowConnected != wifiConnected) {
       wifiConnected = nowConnected;
       sendWifiStatus();
+      if (wifiConnected) fetchAndApplyRemoteNetworkConfig();
     }
 
     if (!nowConnected) {
@@ -479,5 +581,10 @@ void loop() {
     } else {
       disconnectedSince = 0;
     }
+  }
+
+  if (wifiConnected && millis() - lastNetworkConfigCheck >= NETWORK_CONFIG_CHECK_INTERVAL) {
+    lastNetworkConfigCheck = millis();
+    fetchAndApplyRemoteNetworkConfig();
   }
 }

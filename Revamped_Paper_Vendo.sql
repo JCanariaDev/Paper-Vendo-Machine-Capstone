@@ -709,7 +709,7 @@ GRANT EXECUTE ON FUNCTION admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTE
 -- ------------------------------------------------------------------------------
 -- Staged Wi-Fi Configuration
 -- Passwords are AES-256-GCM encrypted by the backend before being written here.
--- The ESP32 does not consume this table until remote configuration firmware is added.
+-- The backend device endpoint decrypts this row only for the ESP32 device token.
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS machine_network_config (
     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
