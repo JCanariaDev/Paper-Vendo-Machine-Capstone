@@ -54,8 +54,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchData();
-    // Auto-poll status every 15 seconds
-    const interval = setInterval(fetchData, 15000);
+    // Auto-poll status every 5 seconds for rapid offline detection
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -69,7 +69,9 @@ export default function Dashboard() {
     return item ? item.status_value : 'Unknown';
   };
 
-  const isOnline = getStatusValue('is_running') === 'Online' || getStatusValue('is_running') === 'Connected';
+  const isRunningItem = status.find(s => s.status_key === 'is_running');
+  const isOnline = isRunningItem?.status_value === 'Online' || isRunningItem?.status_value === 'Connected';
+  const lastHeartbeat = isRunningItem?.last_heartbeat;
 
   if (loading) {
     return (
@@ -139,7 +141,7 @@ export default function Dashboard() {
             <div className="flex items-center gap-2">
               <Radio className="w-4 h-4 opacity-70" />
               <span className="text-xs font-semibold">
-                Updated: {new Date().toLocaleTimeString()}
+                {lastHeartbeat ? `Heartbeat: ${new Date(lastHeartbeat).toLocaleTimeString()}` : `Updated: ${new Date().toLocaleTimeString()}`}
               </span>
             </div>
           </div>

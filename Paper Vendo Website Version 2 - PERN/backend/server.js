@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { createAuthRouter } from './routes/auth.js';
 import { createMachineRouter } from './routes/machine.js';
+import { startMachineWatchdog } from './services/watchdog.js';
 
 // Load environmental variables
 dotenv.config();
@@ -37,6 +38,7 @@ const networkConfigSupabase = process.env.SUPABASE_SERVICE_ROLE_KEY
   ? createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY)
   : null;
 console.log('>>> Connected securely to Supabase Database Client');
+startMachineWatchdog(supabase);
 
 // Health Check Endpoints (Supports Render default and custom checks)
 app.get(['/', '/health', '/api/health'], (req, res) => {

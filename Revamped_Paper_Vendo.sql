@@ -14,6 +14,7 @@ DROP TABLE IF EXISTS paper_inventory CASCADE;
 DROP TABLE IF EXISTS ballpen_compartments CASCADE;
 DROP TABLE IF EXISTS ballpen_inventory CASCADE;
 DROP TABLE IF EXISTS machine_status CASCADE;
+DROP TABLE IF EXISTS machine_online_status CASCADE;
 DROP TABLE IF EXISTS admins CASCADE;
 
 -- Drop all existing RPC functions so signature changes are applied cleanly
@@ -154,6 +155,13 @@ CREATE TABLE machine_status (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE machine_online_status (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    status TEXT NOT NULL DEFAULT 'Offline' CHECK (status IN ('Online', 'Offline')),
+    last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX idx_revamped_tx_created ON sales_transactions(created_at DESC);
 CREATE INDEX idx_revamped_tx_lines ON sales_transaction_lines(item_type, product_id);
 
@@ -196,9 +204,36 @@ INSERT INTO change_inventory (denomination_cents, current_coin_count, max_capaci
 
 -- Machine Health Status
 INSERT INTO machine_status (status_key, status_value) VALUES
-('is_running', 'Offline'),
 ('wifi_signal', 'Unknown'),
 ('last_transaction_status', 'None');
+
+-- Machine Online / Heartbeat Status (Single Row)
+INSERT INTO machine_online_status (id, status, last_heartbeat)
+VALUES (1, 'Offline', NOW())
+ON CONFLICT (id) DO UPDATE
+SET status = EXCLUDED.status,
+    last_heartbeat = EXCLUDED.last_heartbeat,
+    updated_at = NOW();
+
+-- Auto-bump last_heartbeat & updated_at on any status update
+CREATE OR REPLACE FUNCTION update_machine_online_heartbeat()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    IF NEW.last_heartbeat = OLD.last_heartbeat OR NEW.last_heartbeat IS NULL THEN
+        NEW.last_heartbeat = NOW();
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_machine_online_status_heartbeat ON machine_online_status;
+CREATE TRIGGER trg_machine_online_status_heartbeat
+BEFORE UPDATE ON machine_online_status
+FOR EACH ROW
+EXECUTE FUNCTION update_machine_online_heartbeat();
+
+GRANT ALL ON TABLE machine_online_status TO anon, authenticated, service_role;
 
 -- ------------------------------------------------------------------------------
 -- Stored Procedures: Reservation, Change, Completion & Bay Management

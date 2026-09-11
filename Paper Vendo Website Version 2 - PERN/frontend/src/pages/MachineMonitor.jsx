@@ -293,6 +293,8 @@ export default function MachineMonitor() {
   const activeState       = STATES.find((s) => s.id === stateId) || STATES.find((s) => s.id === 'idle');
   const activeTimelineIdx = TIMELINE_STATES.findIndex((s) => s.id === stateId);
   const isOnline          = stateId !== 'offline';
+  const isRunningRow      = machineStatus.find((s) => s.status_key === 'is_running');
+  const lastHeartbeat     = isRunningRow?.last_heartbeat;
   const latestTx          = transactions[0];
   const creditInserted    = latestTx?.credit_received !== undefined
     ? Number(latestTx.credit_received || 0).toFixed(2)
@@ -374,8 +376,8 @@ export default function MachineMonitor() {
               </h3>
               <p className="text-xs opacity-70 mt-0.5 text-slate-600 dark:text-slate-400">
                 {isOnline
-                  ? 'ESP32 gateway is communicating with Supabase.'
-                  : 'Hardware disconnected. Check ESP32 power and WiFi.'}
+                  ? (lastHeartbeat ? `ESP32 gateway communicating with Supabase. Heartbeat: ${new Date(lastHeartbeat).toLocaleTimeString()}` : 'ESP32 gateway is communicating with Supabase.')
+                  : 'Hardware disconnected. Check ESP32 power, Wi-Fi, and heartbeat signal.'}
               </p>
             </div>
           </div>

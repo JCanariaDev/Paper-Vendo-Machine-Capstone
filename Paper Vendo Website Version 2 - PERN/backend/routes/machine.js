@@ -253,13 +253,111 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     }
   });
 
+  // Heartbeat endpoint for ESP32 (in case device pings backend directly)
+  router.post('/heartbeat', async (_req, res) => {
+    try {
+      const nowIso = new Date().toISOString();
+      const { data, error } = await supabase
+        .from('machine_online_status')
+        .update({
+          status: 'Online',
+          last_heartbeat: nowIso,
+          updated_at: nowIso
+        })
+        .eq('id', 1)
+        .select('*')
+        .maybeSingle();
+
+      if (error) throw error;
+      return res.status(200).json({ status: 'Online', heartbeat: nowIso, data });
+    } catch (err) {
+      console.error('Error handling device heartbeat:', err.message);
+      return res.status(500).json({ message: 'Failed to record device heartbeat.' });
+    }
+  });
+
   router.use(authenticateToken);
+
+  router.get('/online-status', async (_req, res) => {
+    try {
+      const timeoutSeconds = Number.parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS || '10', 10);
+      const timeoutMs = (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? timeoutSeconds : 10) * 1000;
+
+      const { data, error } = await supabase
+        .from('machine_online_status')
+        .select('*')
+        .eq('id', 1)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      let isOnline = false;
+      let elapsedMs = null;
+      if (data) {
+        elapsedMs = Date.now() - new Date(data.last_heartbeat).getTime();
+        isOnline = data.status === 'Online' && elapsedMs <= timeoutMs;
+      }
+
+      return res.status(200).json({
+        status: isOnline ? 'Online' : 'Offline',
+        is_online: isOnline,
+        last_heartbeat: data?.last_heartbeat || null,
+        elapsed_seconds: elapsedMs !== null ? Math.round(elapsedMs / 1000) : null,
+        timeout_seconds: timeoutSeconds
+      });
+    } catch (err) {
+      console.error('Error fetching online status:', err);
+      return res.status(500).json({ message: 'Failed to retrieve machine online status.' });
+    }
+  });
 
   router.get('/status', async (_req, res) => {
     try {
-      const { data, error } = await supabase.from('machine_status').select('*');
-      if (error) throw error;
-      return res.status(200).json(data);
+      const timeoutSeconds = Number.parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS || '10', 10);
+      const timeoutMs = (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? timeoutSeconds : 10) * 1000;
+
+      const [statusResult, onlineResult] = await Promise.all([
+        supabase.from('machine_status').select('*'),
+        supabase.from('machine_online_status').select('*').eq('id', 1).maybeSingle()
+      ]);
+
+      if (statusResult.error) throw statusResult.error;
+
+      let onlineData = onlineResult.data;
+      let effectiveStatus = 'Offline';
+      let lastHeartbeat = null;
+
+      if (onlineData) {
+        lastHeartbeat = onlineData.last_heartbeat;
+        const elapsed = Date.now() - new Date(onlineData.last_heartbeat).getTime();
+        const isFresh = elapsed <= timeoutMs;
+
+        if (onlineData.status === 'Online' && isFresh) {
+          effectiveStatus = 'Online';
+        } else if (onlineData.status === 'Online' && !isFresh) {
+          // If DB still says Online but heartbeat expired, eagerly correct DB
+          effectiveStatus = 'Offline';
+          supabase
+            .from('machine_online_status')
+            .update({ status: 'Offline', updated_at: new Date().toISOString() })
+            .eq('id', 1)
+            .then(() => {});
+        } else {
+          effectiveStatus = 'Offline';
+        }
+      }
+
+      // Combine machine_status rows + is_running row for complete backward compatibility
+      const combined = (statusResult.data || []).filter((item) => item.status_key !== 'is_running');
+      combined.unshift({
+        id: onlineData?.id || 0,
+        status_key: 'is_running',
+        status_value: effectiveStatus,
+        last_heartbeat: lastHeartbeat,
+        updated_at: onlineData?.updated_at || new Date().toISOString()
+      });
+
+      return res.status(200).json(combined);
     } catch (err) {
       console.error('Error fetching status:', err);
       return res.status(500).json({ message: 'Failed to retrieve machine status.' });
