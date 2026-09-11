@@ -3,6 +3,7 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <Esp.h>
+#include <Preferences.h>
 
 // ==============================================================================
 // REVAMPED ESP32 IOT GATEWAY FIRMWARE (PRODUCTION READY)
@@ -11,8 +12,20 @@
 // ==============================================================================
 
 // --- WIFI CONFIG ---
-const char* WIFI_SSID = "ashid";
-const char* WIFI_PASSWORD = "paltankolang";
+// Bootstrap credentials are used only when no working credentials have been
+// saved in ESP32 flash yet. Replace these with the initial machine network.
+const char* BOOTSTRAP_WIFI_SSID = "ashid";
+const char* BOOTSTRAP_WIFI_PASSWORD = "paltankolang";
+String wifiSsid;
+String wifiPassword;
+String previousWifiSsid;
+String previousWifiPassword;
+Preferences wifiPreferences;
+const char* NETWORK_CONFIG_URL = "https://paper-vendo-backend.onrender.com/api/machine/network-config/device";
+const char* NETWORK_CONFIG_TOKEN = "Pv2C03l9X3ilSi9b3SkFhi9fc6mFz2Co3GbmGh1gWX4";
+String lastNetworkConfigVersion = "";
+unsigned long lastNetworkConfigCheck = 0;
+const unsigned long NETWORK_CONFIG_CHECK_INTERVAL = 30000;
 
 // --- SUPABASE CONFIG ---
 const char* SUPABASE_URL = "https://jowpzdynbdeznuvohrpx.supabase.co";
@@ -39,6 +52,13 @@ bool printNearbyWifiNetworks();
 void updateMachineStatus();
 void updateStatusKey(const String &key, const String &value);
 void softResetRuntime();
+bool fetchAndApplyRemoteNetworkConfig();
+bool acknowledgeRemoteNetworkConfig(const String &version);
+void loadSavedWifiCredentials();
+void saveWifiCredentials(const String &ssid, const String &password,
+                         const String &previousSsid, const String &previousPassword,
+                         const String &version);
+bool connectUsingSavedFallbacks();
 
 void sendError(const String &message) {
   MEGA_SERIAL.println("ERR:" + message);
@@ -79,7 +99,7 @@ bool connectToWifi(unsigned long timeoutMs) {
   MEGA_SERIAL.println(targetFound ? "WIFISTATE:CONNECTING" : "WIFISTATE:NOTFOUND");
 
   Serial.println("Starting WiFi connection...");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
   unsigned long wifiStart = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < timeoutMs) {
     delay(500);
@@ -106,10 +126,160 @@ bool printNearbyWifiNetworks() {
 
   bool targetFound = false;
   for (int i = 0; i < networkCount; i++) {
-    if (WiFi.SSID(i) == WIFI_SSID) targetFound = true;
+    if (WiFi.SSID(i) == wifiSsid) targetFound = true;
   }
   WiFi.scanDelete();
   return targetFound;
+}
+
+void loadSavedWifiCredentials() {
+  wifiPreferences.begin("wifi-config", false);
+  wifiSsid = wifiPreferences.getString("ssid", BOOTSTRAP_WIFI_SSID);
+  wifiPassword = wifiPreferences.getString("password", BOOTSTRAP_WIFI_PASSWORD);
+  previousWifiSsid = wifiPreferences.getString("prev_ssid", "");
+  previousWifiPassword = wifiPreferences.getString("prev_password", "");
+  lastNetworkConfigVersion = wifiPreferences.getString("version", "");
+
+  Serial.print("WiFi credential source: ");
+  Serial.println(wifiPreferences.isKey("ssid") ? "ESP32 flash" : "bootstrap firmware");
+}
+
+void saveWifiCredentials(const String &ssid, const String &password,
+                         const String &previousSsid, const String &previousPassword,
+                         const String &version) {
+  wifiPreferences.putString("ssid", ssid);
+  wifiPreferences.putString("password", password);
+  wifiPreferences.putString("prev_ssid", previousSsid);
+  wifiPreferences.putString("prev_password", previousPassword);
+  wifiPreferences.putString("version", version);
+}
+
+bool connectUsingSavedFallbacks() {
+  const String activeSsid = wifiSsid;
+  const String activePassword = wifiPassword;
+
+  if (connectToWifi(15000)) return true;
+
+  if (previousWifiSsid.length() > 0 &&
+      (previousWifiSsid != activeSsid || previousWifiPassword != activePassword)) {
+    Serial.println("Saved WiFi failed. Trying previous known-good credentials...");
+    wifiSsid = previousWifiSsid;
+    wifiPassword = previousWifiPassword;
+    if (connectToWifi(15000)) {
+      saveWifiCredentials(wifiSsid, wifiPassword, activeSsid, activePassword, "");
+      lastNetworkConfigVersion = "";
+      return true;
+    }
+  }
+
+  if (activeSsid != BOOTSTRAP_WIFI_SSID || activePassword != BOOTSTRAP_WIFI_PASSWORD) {
+    Serial.println("Saved WiFi fallback failed. Trying bootstrap credentials...");
+    wifiSsid = BOOTSTRAP_WIFI_SSID;
+    wifiPassword = BOOTSTRAP_WIFI_PASSWORD;
+    if (connectToWifi(15000)) {
+      saveWifiCredentials(wifiSsid, wifiPassword, activeSsid, activePassword, "");
+      lastNetworkConfigVersion = "";
+      return true;
+    }
+  }
+
+  wifiSsid = activeSsid;
+  wifiPassword = activePassword;
+  return false;
+}
+
+bool acknowledgeRemoteNetworkConfig(const String &version) {
+  if (version.length() == 0 || String(NETWORK_CONFIG_URL).startsWith("https://YOUR-BACKEND")) {
+    return false;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  if (!http.begin(client, String(NETWORK_CONFIG_URL) + "/ack")) return false;
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Device-Token", NETWORK_CONFIG_TOKEN);
+  DynamicJsonDocument request(256);
+  request["version"] = version;
+  String body;
+  serializeJson(request, body);
+  const int code = http.POST(body);
+  http.end();
+  return code >= 200 && code < 300;
+}
+
+bool fetchAndApplyRemoteNetworkConfig() {
+  if (!ensureWifi()) return false;
+  if (String(NETWORK_CONFIG_URL).startsWith("https://YOUR-BACKEND") ||
+      String(NETWORK_CONFIG_TOKEN) == "REPLACE_WITH_ESP32_DEVICE_CONFIG_TOKEN") {
+    return false;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  if (!http.begin(client, NETWORK_CONFIG_URL)) {
+    Serial.println("Remote WiFi config request could not start.");
+    return false;
+  }
+  http.addHeader("X-Device-Token", NETWORK_CONFIG_TOKEN);
+  const int code = http.GET();
+  const String payload = http.getString();
+  http.end();
+
+  if (code == 404) return false; // No staged configuration yet.
+  if (code < 200 || code >= 300) {
+    Serial.printf("Remote WiFi config request failed: %d\n", code);
+    return false;
+  }
+
+  DynamicJsonDocument response(1536);
+  if (deserializeJson(response, payload)) {
+    Serial.println("Remote WiFi config response was invalid.");
+    return false;
+  }
+
+  JsonObject config = response["config"];
+  if (config.isNull()) return false;
+  const String version = config["updated_at"].as<String>();
+  const String candidateSsid = config["ssid"].as<String>();
+  const String candidatePassword = config["password"].as<String>();
+  if (version.length() == 0 || candidateSsid.length() == 0 || candidatePassword.length() < 8) {
+    Serial.println("Remote WiFi config was incomplete.");
+    return false;
+  }
+  if (version == lastNetworkConfigVersion) return true;
+
+  if (candidateSsid == wifiSsid && candidatePassword == wifiPassword) {
+    lastNetworkConfigVersion = version;
+    saveWifiCredentials(wifiSsid, wifiPassword, previousWifiSsid, previousWifiPassword, version);
+    acknowledgeRemoteNetworkConfig(version);
+    Serial.println("Remote WiFi config already matches the active credentials.");
+    return true;
+  }
+
+  const String previousSsid = wifiSsid;
+  const String previousPassword = wifiPassword;
+  wifiSsid = candidateSsid;
+  wifiPassword = candidatePassword;
+
+  Serial.print("Applying remote WiFi configuration for SSID: ");
+  Serial.println(wifiSsid);
+  if (connectToWifi(15000)) {
+    previousWifiSsid = previousSsid;
+    previousWifiPassword = previousPassword;
+    lastNetworkConfigVersion = version;
+    saveWifiCredentials(wifiSsid, wifiPassword, previousWifiSsid, previousWifiPassword, version);
+    acknowledgeRemoteNetworkConfig(version);
+    Serial.println("Remote WiFi configuration applied successfully.");
+    return true;
+  }
+
+  Serial.println("Remote WiFi configuration failed. Restoring previous credentials.");
+  wifiSsid = previousSsid;
+  wifiPassword = previousPassword;
+  connectToWifi(15000);
+  return false;
 }
 
 void updateMachineStatus() {
@@ -434,9 +604,11 @@ void setup() {
 
   MEGA_SERIAL.begin(9600, SERIAL_8N1, MEGA_RX_PIN, MEGA_TX_PIN);
 
-  wifiConnected = connectToWifi(15000);
+  loadSavedWifiCredentials();
+  wifiConnected = connectUsingSavedFallbacks();
   sendWifiStatus();
   if (wifiConnected) {
+    fetchAndApplyRemoteNetworkConfig();
     updateMachineStatus();
     syncLiveCatalogToMega();
   }
@@ -466,6 +638,7 @@ void loop() {
     if (nowConnected != wifiConnected) {
       wifiConnected = nowConnected;
       sendWifiStatus();
+      if (wifiConnected) fetchAndApplyRemoteNetworkConfig();
     }
 
     if (!nowConnected) {
@@ -479,5 +652,10 @@ void loop() {
     } else {
       disconnectedSince = 0;
     }
+  }
+
+  if (wifiConnected && millis() - lastNetworkConfigCheck >= NETWORK_CONFIG_CHECK_INTERVAL) {
+    lastNetworkConfigCheck = millis();
+    fetchAndApplyRemoteNetworkConfig();
   }
 }

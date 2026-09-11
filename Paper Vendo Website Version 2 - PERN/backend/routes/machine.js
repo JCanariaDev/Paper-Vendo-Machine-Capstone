@@ -26,6 +26,36 @@ function encryptNetworkPassword(password) {
   };
 }
 
+function decryptNetworkPassword(row) {
+  const key = Buffer.from(process.env.NETWORK_CONFIG_ENCRYPTION_KEY || '', 'base64');
+  if (key.length !== 32) {
+    throw new Error('NETWORK_CONFIG_ENCRYPTION_KEY must be a base64-encoded 32-byte key.');
+  }
+
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    key,
+    Buffer.from(row.password_iv, 'base64')
+  );
+  decipher.setAuthTag(Buffer.from(row.password_auth_tag, 'base64'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(row.password_ciphertext, 'base64')),
+    decipher.final()
+  ]).toString('utf8');
+}
+
+function deviceTokenMatches(req) {
+  const expected = process.env.ESP32_DEVICE_CONFIG_TOKEN || '';
+  const received = typeof req.headers['x-device-token'] === 'string'
+    ? req.headers['x-device-token']
+    : '';
+  if (!expected || !received) return false;
+  const expectedBuffer = Buffer.from(expected);
+  const receivedBuffer = Buffer.from(received);
+  return expectedBuffer.length === receivedBuffer.length
+    && crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
+}
+
 function flattenPaperInventory(row, assignedBays = []) {
   const bay = assignedBays.find((b) => b.assigned_product_id === row.id);
   return {
@@ -158,6 +188,71 @@ async function getTransactionLines(supabase) {
 
 export function createMachineRouter(supabase, networkConfigSupabase) {
   const router = express.Router();
+
+  // Device-only route. It must be registered before the dashboard JWT guard.
+  // The ESP32 receives only the active credentials and never the ciphertext.
+  router.get('/network-config/device', async (req, res) => {
+    if (!deviceTokenMatches(req)) {
+      return res.status(401).json({ message: 'Invalid device credentials.' });
+    }
+    if (!networkConfigSupabase) {
+      return res.status(503).json({ message: 'Network configuration is not enabled on the server.' });
+    }
+
+    try {
+      const { data, error } = await networkConfigSupabase
+        .from('machine_network_config')
+        .select('ssid, password_ciphertext, password_iv, password_auth_tag, status, updated_at')
+        .eq('id', 1)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!data) return res.status(404).json({ configured: false });
+
+      return res.status(200).json({
+        configured: true,
+        config: {
+          ssid: data.ssid,
+          password: decryptNetworkPassword(data),
+          status: data.status,
+          updated_at: data.updated_at
+        }
+      });
+    } catch (err) {
+      console.error('Error delivering device network configuration:', err.message);
+      return res.status(500).json({ message: 'Failed to retrieve device network configuration.' });
+    }
+  });
+
+  router.post('/network-config/device/ack', async (req, res) => {
+    if (!deviceTokenMatches(req)) {
+      return res.status(401).json({ message: 'Invalid device credentials.' });
+    }
+    if (!networkConfigSupabase) {
+      return res.status(503).json({ message: 'Network configuration is not enabled on the server.' });
+    }
+
+    const version = typeof req.body?.version === 'string' ? req.body.version : '';
+    if (!version) return res.status(400).json({ message: 'Configuration version is required.' });
+
+    try {
+      const { data, error } = await networkConfigSupabase
+        .from('machine_network_config')
+        .update({ status: 'APPLIED' })
+        .eq('id', 1)
+        .eq('updated_at', version)
+        .select('ssid, status, configured_at, updated_at')
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!data) return res.status(409).json({ message: 'Configuration version is no longer current.' });
+      return res.status(200).json({ applied: true, config: data });
+    } catch (err) {
+      console.error('Error acknowledging device network configuration:', err.message);
+      return res.status(500).json({ message: 'Failed to acknowledge device network configuration.' });
+    }
+  });
+
   router.use(authenticateToken);
 
   router.get('/status', async (_req, res) => {
@@ -249,7 +344,7 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
 
       if (error) throw error;
       return res.status(200).json({
-        message: 'Network configuration staged. It will not apply until ESP32 remote configuration support is installed.',
+        message: 'Network configuration staged. The ESP32 will apply it during its next configuration check.',
         config: data
       });
     } catch (err) {

@@ -67,8 +67,8 @@ export default function MachineConfiguration() {
       <div className="flex gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-800 dark:text-amber-200">
         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
         <div className="text-sm leading-relaxed">
-          <p className="font-bold">Staging only — not yet sent to the machine</p>
-          <p className="mt-1 opacity-90">The current ESP32 firmware uses Wi-Fi credentials compiled into its code. Saving here securely prepares a pending configuration; firmware support is still needed to apply it and verify a safe rollback.</p>
+          <p className="font-bold">Remote configuration with rollback protection</p>
+          <p className="mt-1 opacity-90">Credentials are encrypted on the server. The ESP32 checks for a new configuration and applies it with a rollback safeguard if the new network cannot be reached.</p>
         </div>
       </div>
 
@@ -110,7 +110,12 @@ export default function MachineConfiguration() {
         {config ? (
           <dl className="mt-4 grid grid-cols-1 gap-4 text-sm sm:grid-cols-3">
             <div><dt className="text-xs font-bold uppercase tracking-wider text-slate-400">SSID</dt><dd className="mt-1 font-bold text-slate-800 dark:text-white">{config.ssid}</dd></div>
-            <div><dt className="text-xs font-bold uppercase tracking-wider text-slate-400">Status</dt><dd className="mt-1 font-bold text-amber-600 dark:text-amber-300">Pending device apply</dd></div>
+            <div>
+              <dt className="text-xs font-bold uppercase tracking-wider text-slate-400">Status</dt>
+              <dd className={`mt-1 font-bold ${config.status === 'APPLIED' ? 'text-emerald-600 dark:text-emerald-300' : 'text-amber-600 dark:text-amber-300'}`}>
+                {config.status === 'APPLIED' ? 'Applied on device' : 'Waiting for device apply'}
+              </dd>
+            </div>
             <div><dt className="text-xs font-bold uppercase tracking-wider text-slate-400">Last staged</dt><dd className="mt-1 font-semibold text-slate-700 dark:text-slate-300">{new Date(config.updated_at || config.configured_at).toLocaleString()}</dd></div>
           </dl>
         ) : <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">No network configuration has been staged.</p>}
