@@ -130,9 +130,22 @@ const STATES = [
     ringColor: 'bg-red-400',
     badgeColor: 'bg-red-500/10 text-red-400 border-red-500/20',
   },
+  {
+    id: 'stale',
+    label: 'Transaction Needs Attention',
+    sublabel: 'The machine has not reported completion for this transaction.',
+    icon: AlertTriangle,
+    color: 'text-amber-400',
+    bgGlow: 'bg-amber-500/10',
+    border: 'border-amber-500/30',
+    ringColor: 'bg-amber-400',
+    badgeColor: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+    hidden: true,
+  },
 ];
 
 const TIMELINE_STATES = STATES.filter((s) => !s.hidden);
+const STALE_TRANSACTION_TIMEOUT_SECONDS = 120;
 
 // ─── State Inference ──────────────────────────────────────────────────────────
 function inferMachineState(machineStatus, latestTx) {
@@ -153,8 +166,11 @@ function inferMachineState(machineStatus, latestTx) {
     if (ageSeconds > 30) return 'idle';
     return status === 'COMPLETED' || status === 'COMPLETED_CHANGE_OWED' ? 'done' : 'failed';
   }
-  if (status === 'CHANGE_PAID') return 'dispensing_change';
+  if (status === 'CHANGE_PAID') {
+    return ageSeconds > STALE_TRANSACTION_TIMEOUT_SECONDS ? 'stale' : 'dispensing_change';
+  }
   if (status === 'RESERVED') {
+    if (ageSeconds > STALE_TRANSACTION_TIMEOUT_SECONDS) return 'stale';
     if (ageSeconds < 10) return 'inserting_coins';
     if (ageSeconds < 25) return 'choosing_item';
     if (ageSeconds < 40) return 'confirming';
@@ -305,8 +321,13 @@ export default function MachineMonitor() {
   const changeDue         = latestTx?.change_due !== undefined
     ? Number(latestTx.change_due || 0).toFixed(2)
     : ((latestTx?.change_due_cents || 0) / 100).toFixed(2);
-  const transactionOngoing = latestTx && ['RESERVED', 'CHANGE_PAID'].includes(latestTx.status);
+  const transactionOngoing = latestTx &&
+    ['RESERVED', 'CHANGE_PAID'].includes(latestTx.status) &&
+    stateId !== 'stale';
   const isDispensing = transactionOngoing && ['dispensing_items', 'dispensing_change'].includes(stateId);
+  const transactionStatusMeta = stateId === 'stale'
+    ? { label: 'Needs Attention', color: 'bg-amber-500/10 text-amber-400 border-amber-500/20' }
+    : (TX_MAP[latestTx?.status] || { label: latestTx?.status || 'Unknown', color: '' });
 
   if (loading) {
     return (
@@ -535,8 +556,8 @@ export default function MachineMonitor() {
                 </div>
                 <div className="p-3 rounded-xl bg-white/60 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.06]">
                   <span className="block text-slate-500 mb-1">Status</span>
-                  <span className={`inline-flex px-2 py-0.5 rounded-full border font-bold text-[10px] ${(TX_MAP[latestTx.status] || {}).color || ''}`}>
-                    {(TX_MAP[latestTx.status] || { label: latestTx.status }).label}
+                  <span className={`inline-flex px-2 py-0.5 rounded-full border font-bold text-[10px] ${transactionStatusMeta.color}`}>
+                    {transactionStatusMeta.label}
                   </span>
                 </div>
                 <div className="p-3 rounded-xl bg-white/60 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.06]">

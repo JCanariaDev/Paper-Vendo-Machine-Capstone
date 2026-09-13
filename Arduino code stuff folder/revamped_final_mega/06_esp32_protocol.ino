@@ -25,6 +25,9 @@ void startOrder() {
 }
 
 void executeDispensePlan(String message) {
+  const unsigned long DISPENSE_PLAN_TIMEOUT_MS = 90000;
+  const unsigned long planStartedAt = millis();
+
   // Format: PLAN:<tx_id>:<tr_number>:<subtotal_cents>:<change_due_cents>:<encodedPlan>
   int p1 = message.indexOf(':');
   int p2 = message.indexOf(':', p1 + 1);
@@ -78,6 +81,11 @@ void executeDispensePlan(String message) {
   String results = "";
   int start = 0;
   while (start < encodedPlan.length()) {
+    if (millis() - planStartedAt >= DISPENSE_PLAN_TIMEOUT_MS) {
+      Serial.println("Dispense plan timeout; submitting partial results.");
+      break;
+    }
+
     int end = encodedPlan.indexOf(';', start);
     String line = end < 0 ? encodedPlan.substring(start) : encodedPlan.substring(start, end);
     int c1 = line.indexOf(',');
@@ -109,7 +117,10 @@ void executeDispensePlan(String message) {
   }
 
   // -- STEP 2: NON-BLOCKING COIN HOPPER CHANGE ATTEMPT --
-  if (activeChangeDueCents > 0) {
+  if (millis() - planStartedAt >= DISPENSE_PLAN_TIMEOUT_MS) {
+    Serial.println("Skipping change release after dispense plan timeout.");
+    activeChangePaidCents = 0;
+  } else if (activeChangeDueCents > 0) {
     tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
     tft.setTextSize(2);
     tft.setTextColor(COL_WHITE);

@@ -41,6 +41,17 @@ const unsigned long HEARTBEAT_INTERVAL_MS = 5000; // WIFI: status ping to Mega
 unsigned long lastOnlineHeartbeatAt = 0;
 const unsigned long ONLINE_HEARTBEAT_INTERVAL_MS = 5000; // Supabase heartbeat
 
+// A finish request must survive a temporary Wi-Fi/API failure.  Keep the
+// payload in RAM and retry it from loop() instead of leaving the Mega waiting.
+bool pendingFinish = false;
+String pendingFinishTransactionId;
+String pendingFinishResults;
+int pendingFinishChangePaidCents = 0;
+unsigned long nextFinishRetryAt = 0;
+uint8_t finishRetryCount = 0;
+const unsigned long FINISH_RETRY_INTERVAL_MS = 3000;
+const uint8_t MAX_FINISH_RETRIES = 20;
+
 unsigned long lastStatusUpdate = 0;
 const unsigned long statusInterval = 60000; // machine_status table update
 
@@ -57,6 +68,14 @@ bool sendOnlineHeartbeat();
 void softResetRuntime();
 bool fetchAndApplyRemoteNetworkConfig();
 bool acknowledgeRemoteNetworkConfig(const String &version);
+bool submitFinishTransaction(const String &transactionId,
+                             const String &encodedResults,
+                             int changePaidCents,
+                             String &trNumber,
+                             String &status,
+                             int &dueCents,
+                             int &paidCents);
+void processPendingFinish();
 void loadSavedWifiCredentials();
 void saveWifiCredentials(const String &ssid, const String &password,
                          const String &previousSsid, const String &previousPassword,
@@ -527,6 +546,89 @@ void cancelReservation(const String &message) {
   callRpc("machine_cancel_reserved_transaction", request, response);
 }
 
+bool submitFinishTransaction(const String &transactionId,
+                             const String &encodedResults,
+                             int changePaidCents,
+                             String &trNumber,
+                             String &status,
+                             int &dueCents,
+                             int &paidCents) {
+  DynamicJsonDocument request(2048), response(1024);
+  request["p_transaction_id"] = transactionId;
+  request["p_change_paid_cents"] = changePaidCents;
+  JsonArray results = request.createNestedArray("p_results");
+
+  int start = 0;
+  while (start < encodedResults.length()) {
+    const int end = encodedResults.indexOf(';', start);
+    const String encoded = end < 0 ? encodedResults.substring(start) : encodedResults.substring(start, end);
+    const int one = encoded.indexOf(',');
+    const int two = encoded.indexOf(',', one + 1);
+    if (one <= 0 || two <= one + 1) return false;
+
+    JsonObject result = results.add<JsonObject>();
+    result["item_type"] = encoded.substring(0, one);
+    result["product_id"] = encoded.substring(one + 1, two).toInt();
+    result["qty_dispensed"] = encoded.substring(two + 1).toInt();
+    if (end < 0) break;
+    start = end + 1;
+  }
+
+  if (!callRpc("machine_finish_transaction", request, response)) return false;
+
+  JsonObject res = response[0];
+  if (res.isNull()) return false;
+  trNumber = res["tr_number"] | "TR-00000";
+  status = res["final_status"] | "COMPLETED";
+  dueCents = res["change_due_cents"] | 0;
+  paidCents = res["change_paid_cents"] | 0;
+  return true;
+}
+
+void processPendingFinish() {
+  if (!pendingFinish || millis() < nextFinishRetryAt) return;
+
+  finishRetryCount++;
+  if (!ensureWifi()) {
+    nextFinishRetryAt = millis() + FINISH_RETRY_INTERVAL_MS;
+    return;
+  }
+
+  String trNumber;
+  String status;
+  int dueCents = 0;
+  int paidCents = 0;
+
+  Serial.printf("Submitting transaction completion (attempt %u/%u)\n",
+                finishRetryCount, MAX_FINISH_RETRIES);
+  if (submitFinishTransaction(pendingFinishTransactionId,
+                              pendingFinishResults,
+                              pendingFinishChangePaidCents,
+                              trNumber,
+                              status,
+                              dueCents,
+                              paidCents)) {
+    MEGA_SERIAL.println("FINISHED:" + pendingFinishTransactionId + ":" +
+                       trNumber + ":" + status + ":" +
+                       String(dueCents) + ":" + String(paidCents));
+    pendingFinish = false;
+    finishRetryCount = 0;
+    nextFinishRetryAt = 0;
+    return;
+  }
+
+  if (finishRetryCount == 1) sendError("FINISH_PENDING");
+  if (finishRetryCount >= MAX_FINISH_RETRIES) {
+    sendError("FINISH_RETRY_FAILED");
+    pendingFinish = false;
+    finishRetryCount = 0;
+    nextFinishRetryAt = 0;
+    return;
+  }
+
+  nextFinishRetryAt = millis() + FINISH_RETRY_INTERVAL_MS;
+}
+
 void finishTransaction(const String &message) {
   // Format from Mega: FINISH:<tx_id>:<encodedResults>:<change_paid_cents>
   const int first = message.indexOf(':');
@@ -544,35 +646,13 @@ void finishTransaction(const String &message) {
     encodedResults = message.substring(second + 1);
   }
 
-  DynamicJsonDocument request(2048), response(1024);
-  request["p_transaction_id"] = transactionId;
-  request["p_change_paid_cents"] = changePaidCents;
-  JsonArray results = request.createNestedArray("p_results");
-
-  int start = 0;
-  while (start < encodedResults.length()) {
-    const int end = encodedResults.indexOf(';', start);
-    const String encoded = end < 0 ? encodedResults.substring(start) : encodedResults.substring(start, end);
-    const int one = encoded.indexOf(',');
-    const int two = encoded.indexOf(',', one + 1);
-    if (one <= 0 || two <= one + 1) { sendError("BAD_RESULT_LINE"); return; }
-    JsonObject result = results.add<JsonObject>();
-    result["item_type"] = encoded.substring(0, one);
-    result["product_id"] = encoded.substring(one + 1, two).toInt();
-    result["qty_dispensed"] = encoded.substring(two + 1).toInt();
-    if (end < 0) break;
-    start = end + 1;
-  }
-  if (!callRpc("machine_finish_transaction", request, response)) return;
-
-  JsonObject res = response[0];
-  String trNum = res["tr_number"] | "TR-00000";
-  String status = res["final_status"] | "COMPLETED";
-  int dueCents = res["change_due_cents"] | 0;
-  int paidCents = res["change_paid_cents"] | 0;
-
-  // Format: FINISHED:<tx_id>:<tr_number>:<status>:<change_due>:<change_paid>
-  MEGA_SERIAL.println("FINISHED:" + transactionId + ":" + trNum + ":" + status + ":" + String(dueCents) + ":" + String(paidCents));
+  pendingFinish = true;
+  pendingFinishTransactionId = transactionId;
+  pendingFinishResults = encodedResults;
+  pendingFinishChangePaidCents = changePaidCents;
+  finishRetryCount = 0;
+  nextFinishRetryAt = 0;
+  processPendingFinish();
 }
 
 // Mark a bay empty when the Mega reports that its exit-verified stock is exhausted.
@@ -653,6 +733,8 @@ void loop() {
   }
 
   ensureWifi();
+
+  processPendingFinish();
 
   if (millis() - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatAt = millis();
