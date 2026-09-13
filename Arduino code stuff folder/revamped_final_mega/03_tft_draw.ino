@@ -308,19 +308,12 @@ void redrawCurrentScreen() {
 }
 
 void drawStatusScreen(String headline, String message) {
-  display.clearDisplay();
-  display.setTextColor(SH110X_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.print("Smart Vendo V3");
-
-  display.setTextSize(2);
-  display.setCursor(0, 18);
-  display.print(headline);
-
-  display.setTextSize(1);
-  display.setCursor(0, 48);
-  display.print(message);
-  display.display();
+  tft.fillScreen(COL_BLACK);
+  drawTftStatusBar();
+  tft.setTextColor(COL_WHITE);
+  tft.setTextSize(2);
+  printCentered(headline, tft.width() / 2, 115);
+  tft.setTextSize(1);
+  printCentered(message, tft.width() / 2, 155);
 }
 

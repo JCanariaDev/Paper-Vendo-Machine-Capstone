@@ -5,7 +5,7 @@ void runDiagnostics() {
   Serial.println();
   Serial.println("========== DIAGNOSTICS (OPTION A) ==========");
   Serial.print("Uptime: "); Serial.print(millis() / 1000); Serial.println("s");
-  Serial.print("OLED (SH1106)............ "); Serial.println(diagOledOk ? "OK" : "FAIL");
+  Serial.print("TFT (ILI9341)............ "); Serial.println(diagTftOk ? "OK" : "FAIL");
   Serial.print("Touchscreen (XPT2046)..... "); Serial.println(diagTouchOk ? "OK" : "FAIL");
   Serial.print("Coin acceptor pin (D2).... "); Serial.println("INPUT_PULLUP + interrupt INT0 configured");
   Serial.println("Serial2 (Pins 16/17) ---> Arduino Uno Paper Controller connected at 9600 baud");

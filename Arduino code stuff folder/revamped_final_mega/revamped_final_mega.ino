@@ -1,6 +1,4 @@
-﻿#include <Wire.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SH110X.h>
 #include <Servo.h>
 #include <Stepper.h>
 #include <SPI.h>
@@ -11,7 +9,7 @@
 /*
   ==============================================================================
   REVAMPED ARDUINO MEGA 2560 — MASTER CONTROLLER (OPTION A DUAL-BOARD SYSTEM)
-  - Manages ILI9341 Touch UI, SH1106 OLED, Coin Acceptor, Coin Hopper, and 1 Pen slot.
+  - Manages ILI9341 Touch UI, Coin Acceptor, Coin Hopper, and 1 Pen slot.
   - Communicates with ESP32 (Cloud Gateway) via Serial1 (Pins 18/19).
   - Communicates with Arduino Uno (Dedicated 2-Bay Paper Controller) via Serial2 (Pins 16/17).
   ==============================================================================
@@ -55,9 +53,6 @@
 //  A8   HW_RESET_BTN_PIN    Hardware-reset push button (INPUT_PULLUP)
 //  A9   SW_RESET_BTN_PIN    Software-reset push button (INPUT_PULLUP)
 //
-// -- I²C BUS (Wire) -------------------------------------------
-//  D20  SDA    SH1106G OLED 128×64 (address 0x3C)
-//  D21  SCL    SH1106G OLED 128×64
 // =============================================================
 
 // --- PINS (existing) ---
@@ -115,15 +110,9 @@ const int penStopPins[1][4] = {
 const int penIrPins[1] = { PEN_IR_PIN };
 
 // --- PERIPHERALS ---
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET -1
-#define SCREEN_ADDRESS 0x3C
-
 #define CLOUD_SERIAL Serial1 // ESP32 Gateway (Pins 18/19)
 #define UNO_SERIAL   Serial2 // Uno Paper Controller (Pins 16/17)
 
-Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 Servo servoChange, servoPen;
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
@@ -160,7 +149,6 @@ int activeChangePaidCents = 0;       // Total change physically released by hopp
 String selectedPaperBrand = "Budget";
 
 // --- DIAGNOSTICS STATE ---
-bool diagOledOk = false;
 bool diagTftOk = false;
 bool diagTouchOk = false;
 bool hopperManualRunning = false;
@@ -338,21 +326,8 @@ void setup() {
 
   for (int i = 0; i < BALLPEN_COUNT; i++) penSteppers[i]->setSpeed(10);
 
-  Wire.begin();
-  Wire.setWireTimeout(25000, true);
-
-  if (!display.begin(SCREEN_ADDRESS, true)) {
-    Serial.println("OLED SH1106 allocation failed");
-    while (true);
-  }
-  diagOledOk = true;
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SH110X_WHITE);
-  display.setCursor(0, 0); display.print("Smart Vendo V3");
-  display.display();
-
   tftUiBegin();
+  diagTftOk = true;
 
   pinMode(LED_GREEN_PIN, OUTPUT);
   pinMode(LED_BLUE_PIN, OUTPUT);
