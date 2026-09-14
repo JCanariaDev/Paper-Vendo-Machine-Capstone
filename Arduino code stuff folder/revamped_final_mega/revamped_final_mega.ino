@@ -137,6 +137,7 @@ volatile bool coinPulseReceived = false;
 bool isProcessing = false;
 String activeTransactionId = "";
 String activeTrNumber = "";          // Human-readable TR Record Number (e.g. "TR-00001")
+String activeTransactionStatus = ""; // Final backend result shown on the receipt screen
 int activeChangeDueCents = 0;        // Total change owed to user
 int activeChangePaidCents = 0;       // Total change physically released by hopper
 String selectedPaperBrand = "Budget";

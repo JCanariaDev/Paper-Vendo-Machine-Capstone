@@ -16,6 +16,7 @@ void tftUiSetCredits() {
   if ((currentScreen == SCREEN_IDLE || currentScreen == SCREEN_RECEIPT) && hasCredits) {
     activeTrNumber = "";
     activeTransactionId = "";
+    activeTransactionStatus = "";
     activeChangeDueCents = 0;
     activeChangePaidCents = 0;
     currentScreen = SCREEN_MAIN;

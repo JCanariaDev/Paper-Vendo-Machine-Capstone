@@ -51,6 +51,7 @@ void softResetMachineState() {
   orderInProgress = false;
   activeTransactionId = "";
   activeTrNumber = "";
+  activeTransactionStatus = "";
   activeChangeDueCents = 0;
   activeChangePaidCents = 0;
   selectedPaperBrand = "Budget";

@@ -11,6 +11,7 @@ void startOrder() {
   orderTotalCost = 0;
   activeTransactionId = "";
   activeTrNumber = "";
+  activeTransactionStatus = "";
   activeChangeDueCents = 0;
   activeChangePaidCents = 0;
   currentScreen = SCREEN_SUMMARY;
@@ -152,11 +153,13 @@ void finishUiAfterTransaction(String message) {
   int p5 = message.indexOf(':', p4 + 1);
 
   String trNum = activeTrNumber;
+  String transactionStatus = "COMPLETED";
   int dueCents = activeChangeDueCents;
   int paidCents = activeChangePaidCents;
 
   if (p2 > 0) {
     if (p3 > 0) trNum = message.substring(p2 + 1, p3);
+    if (p4 > 0) transactionStatus = message.substring(p3 + 1, p4);
     if (p5 > 0) {
       dueCents = message.substring(p4 + 1, p5).toInt();
       paidCents = message.substring(p5 + 1).toInt();
@@ -171,6 +174,7 @@ void finishUiAfterTransaction(String message) {
   refreshMachineAvailability(true);
 
   activeTrNumber = trNum;
+  activeTransactionStatus = transactionStatus;
   activeChangeDueCents = dueCents;
   activeChangePaidCents = paidCents;
 

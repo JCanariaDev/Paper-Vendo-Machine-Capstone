@@ -5,6 +5,7 @@ void handleReceiptTouch(int x, int y) {
   if (x >= 20 && x <= 220 && y >= 240 && y <= 295) {
     activeTrNumber = "";
     activeTransactionId = "";
+    activeTransactionStatus = "";
     activeChangeDueCents = 0;
     activeChangePaidCents = 0;
     currentScreen = SCREEN_IDLE;

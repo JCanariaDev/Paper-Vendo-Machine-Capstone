@@ -211,7 +211,7 @@ bool connectUsingSavedFallbacks() {
 }
 
 bool acknowledgeRemoteNetworkConfig(const String &version) {
-  if (version.length() == 0 || String(NETWORK_CONFIG_URL).startsWith("https://paper-vendo-backend.onrender.com/api/machine/network-config/device")) {
+  if (version.length() == 0) {
     return false;
   }
 
@@ -219,6 +219,7 @@ bool acknowledgeRemoteNetworkConfig(const String &version) {
   client.setInsecure();
   HTTPClient http;
   if (!http.begin(client, String(NETWORK_CONFIG_URL) + "/ack")) return false;
+  http.setTimeout(10000);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", NETWORK_CONFIG_TOKEN);
   DynamicJsonDocument request(256);
@@ -226,16 +227,17 @@ bool acknowledgeRemoteNetworkConfig(const String &version) {
   String body;
   serializeJson(request, body);
   const int code = http.POST(body);
+  const String response = http.getString();
+  Serial.printf("WiFi config acknowledgment response: %d\n", code);
+  if (code < 200 || code >= 300) {
+    Serial.println(response);
+  }
   http.end();
   return code >= 200 && code < 300;
 }
 
 bool fetchAndApplyRemoteNetworkConfig() {
   if (!ensureWifi()) return false;
-  if (String(NETWORK_CONFIG_URL).startsWith("https://paper-vendo-backend.onrender.com/api/machine/network-config/device") ||
-      String(NETWORK_CONFIG_TOKEN) == "Pv2C03l9X3ilSi9b3SkFhi9fc6mFz2Co3GbmGh1gWX4=") {
-    return false;
-  }
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -244,6 +246,7 @@ bool fetchAndApplyRemoteNetworkConfig() {
     Serial.println("Remote WiFi config request could not start.");
     return false;
   }
+  http.setTimeout(10000);
   http.addHeader("X-Device-Token", NETWORK_CONFIG_TOKEN);
   const int code = http.GET();
   const String payload = http.getString();
@@ -273,11 +276,16 @@ bool fetchAndApplyRemoteNetworkConfig() {
   if (version == lastNetworkConfigVersion) return true;
 
   if (candidateSsid == wifiSsid && candidatePassword == wifiPassword) {
-    lastNetworkConfigVersion = version;
-    saveWifiCredentials(wifiSsid, wifiPassword, previousWifiSsid, previousWifiPassword, version);
-    acknowledgeRemoteNetworkConfig(version);
-    Serial.println("Remote WiFi config already matches the active credentials.");
-    return true;
+    // Do not mark the version as applied until the backend confirms it.
+    // This makes an interrupted acknowledgment retry on the next poll.
+    if (acknowledgeRemoteNetworkConfig(version)) {
+      lastNetworkConfigVersion = version;
+      saveWifiCredentials(wifiSsid, wifiPassword, previousWifiSsid, previousWifiPassword, version);
+      Serial.println("Remote WiFi config already matches the active credentials.");
+      return true;
+    }
+    Serial.println("Remote WiFi config matches locally, but backend acknowledgment failed.");
+    return false;
   }
 
   const String previousSsid = wifiSsid;
@@ -290,11 +298,17 @@ bool fetchAndApplyRemoteNetworkConfig() {
   if (connectToWifi(15000)) {
     previousWifiSsid = previousSsid;
     previousWifiPassword = previousPassword;
-    lastNetworkConfigVersion = version;
-    saveWifiCredentials(wifiSsid, wifiPassword, previousWifiSsid, previousWifiPassword, version);
-    acknowledgeRemoteNetworkConfig(version);
-    Serial.println("Remote WiFi configuration applied successfully.");
-    return true;
+    // Persist the working credentials immediately, but leave the version blank
+    // until the backend acknowledges the exact configuration revision.
+    saveWifiCredentials(wifiSsid, wifiPassword, previousWifiSsid, previousWifiPassword, "");
+    if (acknowledgeRemoteNetworkConfig(version)) {
+      lastNetworkConfigVersion = version;
+      saveWifiCredentials(wifiSsid, wifiPassword, previousWifiSsid, previousWifiPassword, version);
+      Serial.println("Remote WiFi configuration applied and acknowledged successfully.");
+      return true;
+    }
+    Serial.println("Remote WiFi connected, but backend acknowledgment failed. Will retry.");
+    return false;
   }
 
   Serial.println("Remote WiFi configuration failed. Restoring previous credentials.");
@@ -316,16 +330,29 @@ void updateStatusKey(const String &key, const String &value) {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/machine_status?status_key=eq." + key;
+  // Upsert lets the gateway publish new runtime keys without a manual SQL seed.
+  String url = String(SUPABASE_URL) + "/rest/v1/machine_status?on_conflict=status_key";
 
   if (http.begin(client, url)) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
     http.addHeader("Content-Type", "application/json");
-    String body = "{\"status_value\":\"" + value + "\", \"updated_at\":\"now()\"}";
-    http.PATCH(body);
+    http.addHeader("Prefer", "resolution=merge-duplicates,return=minimal");
+    String body = "{\"status_key\":\"" + key + "\",\"status_value\":\"" + value + "\",\"updated_at\":\"now()\"}";
+    int code = http.POST(body);
+    if (code < 200 || code >= 300) {
+      Serial.printf("Status update failed for %s: %d\n", key.c_str(), code);
+    }
     http.end();
   }
+}
+
+void handleCreditUpdate(String message) {
+  int separator = message.indexOf(':');
+  if (separator < 0) return;
+  int credits = message.substring(separator + 1).toInt();
+  if (credits < 0) return;
+  updateStatusKey("current_credits", String(credits));
 }
 
 bool sendOnlineHeartbeat() {
@@ -678,7 +705,8 @@ void updatePaperBayPresence(const String &message) {
 
 void handleMegaMessage(String message) {
   message.trim();
-  if (message.startsWith("RESERVE:")) reserveCart(message);
+  if (message.startsWith("CREDIT:")) handleCreditUpdate(message);
+  else if (message.startsWith("RESERVE:")) reserveCart(message);
   else if (message.startsWith("CHANGE_OK:")) changePaid(message);
   else if (message.startsWith("CHANGE_FAIL:")) cancelReservation(message);
   else if (message.startsWith("FINISH:")) finishTransaction(message);

@@ -148,14 +148,14 @@ const TIMELINE_STATES = STATES.filter((s) => !s.hidden);
 const STALE_TRANSACTION_TIMEOUT_SECONDS = 120;
 
 // ─── State Inference ──────────────────────────────────────────────────────────
-function inferMachineState(machineStatus, latestTx) {
+function inferMachineState(machineStatus, latestTx, currentCredits = 0) {
   const isRunning = machineStatus.find((s) => s.status_key === 'is_running');
   const isOnline =
     isRunning?.status_value === 'Online' ||
     isRunning?.status_value === 'Connected';
 
   if (!isOnline) return 'offline';
-  if (!latestTx) return 'idle';
+  if (!latestTx) return currentCredits > 0 ? 'inserting_coins' : 'idle';
 
   const { status, created_at, transaction_date } = latestTx;
   const ageSeconds = (Date.now() - new Date(created_at || transaction_date).getTime()) / 1000;
@@ -275,9 +275,12 @@ export default function MachineMonitor() {
       ]);
       const statuses = statusRes.data || [];
       const txList   = groupTransactionLines(txRes.data || []);
+      const currentCredits = Number(
+        statuses.find((s) => s.status_key === 'current_credits')?.status_value || 0
+      );
       setMachineStatus(statuses);
       setTransactions(txList);
-      setStateId(inferMachineState(statuses, txList[0] || null));
+      setStateId(inferMachineState(statuses, txList[0] || null, currentCredits));
       setLastFetched(new Date());
       setError(null);
     } catch (err) {
@@ -312,6 +315,10 @@ export default function MachineMonitor() {
   const isRunningRow      = machineStatus.find((s) => s.status_key === 'is_running');
   const lastHeartbeat     = isRunningRow?.last_heartbeat;
   const latestTx          = transactions[0];
+  const currentCredits    = Number(
+    machineStatus.find((s) => s.status_key === 'current_credits')?.status_value || 0
+  );
+  const liveCreditInserted = currentCredits.toFixed(2);
   const creditInserted    = latestTx?.credit_received !== undefined
     ? Number(latestTx.credit_received || 0).toFixed(2)
     : ((latestTx?.credit_received_cents || 0) / 100).toFixed(2);
@@ -321,9 +328,9 @@ export default function MachineMonitor() {
   const changeDue         = latestTx?.change_due !== undefined
     ? Number(latestTx.change_due || 0).toFixed(2)
     : ((latestTx?.change_due_cents || 0) / 100).toFixed(2);
-  const transactionOngoing = latestTx &&
+  const transactionOngoing = currentCredits > 0 || (latestTx &&
     ['RESERVED', 'CHANGE_PAID'].includes(latestTx.status) &&
-    stateId !== 'stale';
+    stateId !== 'stale');
   const isDispensing = transactionOngoing && ['dispensing_items', 'dispensing_change'].includes(stateId);
   const transactionStatusMeta = stateId === 'stale'
     ? { label: 'Needs Attention', color: 'bg-amber-500/10 text-amber-400 border-amber-500/20' }
@@ -490,7 +497,7 @@ export default function MachineMonitor() {
               <div className="p-5">
                 <p className="text-xs font-semibold text-slate-400">Credits Inserted</p>
                 <p className="mt-1 font-display text-5xl font-black tracking-tight">
-                  ₱{transactionOngoing ? creditInserted : '0.00'}
+                  ₱{currentCredits > 0 ? liveCreditInserted : (transactionOngoing ? creditInserted : '0.00')}
                 </p>
                 <div className="mt-5 grid grid-cols-2 gap-3">
                   <div className="rounded-xl bg-white/5 border border-white/10 p-3">

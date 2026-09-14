@@ -37,10 +37,12 @@ void setCoinAcceptance(bool allowed) {
   if (credits >= MAX_CREDITS_ALLOWED) {
     allowed = false;
   }
-  coinAcceptorEnabled = allowed;
-  ignoreCoinPulsesUntil = millis() + 600;  
   int targetLevel = allowed ? coinRelayOnLevel : coinRelayOffLevel;
+  coinAcceptorEnabled = allowed;
+  bool relayChanged = digitalRead(COIN_INHIBIT_PIN) != targetLevel;
   digitalWrite(COIN_INHIBIT_PIN, targetLevel);
+  // Do not restart the settling delay after every counted pulse in a coin burst.
+  if (relayChanged) ignoreCoinPulsesUntil = millis() + 600;
 }
 
 void coinInterrupt() {

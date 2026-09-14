@@ -30,9 +30,12 @@ void drawTftStatusBar() {
 
   String creditText = "Credits: P" + String((unsigned int)credits);
   int16_t x1, y1; uint16_t w, h;
+  // Keep the credit balance prominent now that the OLED is no longer used.
+  // Size 2 fits inside the 26-pixel status bar and remains right-aligned.
+  tft.setTextSize(2);
   tft.getTextBounds(creditText.c_str(), 0, 0, &x1, &y1, &w, &h);
   tft.setTextColor(COL_WHITE);
-  tft.setCursor(tft.width() - w - 6, 8);
+  tft.setCursor(tft.width() - w - 4, 4);
   tft.print(creditText);
 }
 
@@ -261,7 +264,19 @@ void drawReceiptScreen() {
   drawTftStatusBar();
 
   tft.setTextSize(2);
-  if (activeChangeDueCents == 0) {
+  bool dispenseFailed = activeTransactionStatus == "FAILED_DISPENSE" ||
+                        activeTransactionStatus == "FAILED_CHANGE" ||
+                        activeTransactionStatus == "CANCELLED";
+
+  if (dispenseFailed) {
+    tft.setTextColor(COL_RED);
+    printCentered("Dispense failed", tft.width() / 2, 85);
+    tft.setTextColor(COL_WHITE);
+    tft.setTextSize(1);
+    printCentered(activeTransactionStatus, tft.width() / 2, 125);
+    printCentered("Please contact an administrator.", tft.width() / 2, 150);
+  }
+  else if (activeChangeDueCents == 0) {
     // Scenario 1: Exact payment
     tft.setTextColor(COL_WHITE);
     printCentered("Take your items!", tft.width() / 2, 85);
