@@ -1,29 +1,57 @@
-﻿// DISPENSE HARDWARE
-// Split from revamped_final_mega.ino for readability.
+// DISPENSE HARDWARE
+// Paper is delegated to Paper Uno; ballpens are delegated to Ballpen Uno.
 
-bool dispenseOnePen(int channel) {
-  int penIndex = channel - 1;
-  if (penIndex < 0 || penIndex >= BALLPEN_COUNT) return false;
-  Stepper* pen = penSteppers[penIndex];
-  int irPin = penIrPins[penIndex];
-  if (digitalRead(irPin) == LOW) {
-    Serial.println("PEN ABORT: IR is LOW before dispense; chute blocked.");
-    return false;
-  }
-  pen->step(1024);
-  unsigned long startedAt = millis();
-  bool detected = false;
-  while (millis() - startedAt < PEN_SENSOR_TIMEOUT_MS) {
-    if (digitalRead(irPin) == LOW) { detected = true; break; }
-  }
-  delay(300);
-  pen->step(-1024);
-  stopStepper(penIndex);
-  return detected;
+const unsigned long BALLPEN_DISPENSE_TIMEOUT_MS = 15000;
+
+void handleBallpenMessage(String msg) {
+  msg.trim();
+  if (msg.length() == 0) return;
+  Serial.print("Ballpen Uno: ");
+  Serial.println(msg);
 }
 
-void stopStepper(int penIndex) {
-  for (int p = 0; p < 4; p++) digitalWrite(penStopPins[penIndex][p], LOW);
+int dispensePenFromUno(int channel, int quantity) {
+  if (channel < 1 || channel > BALLPEN_COUNT || quantity <= 0) return 0;
+
+  // Format: DISPENSE:<channel>:<quantity>
+  BALLPEN_SERIAL.println("DISPENSE:" + String(channel) + ":" + String(quantity));
+
+  const unsigned long startedAt = millis();
+  while (millis() - startedAt < BALLPEN_DISPENSE_TIMEOUT_MS) {
+    if (!BALLPEN_SERIAL.available()) {
+      delay(2);
+      continue;
+    }
+
+    String response = BALLPEN_SERIAL.readStringUntil('\n');
+    response.trim();
+
+    if (response.startsWith("BALLPEN_DONE:")) {
+      // Format: BALLPEN_DONE:<channel>:<count>
+      int first = response.indexOf(':');
+      int second = response.indexOf(':', first + 1);
+      if (first < 0 || second < 0) return 0;
+      return response.substring(second + 1).toInt();
+    }
+
+    if (response.startsWith("BALLPEN_FAIL:")) {
+      Serial.print("Ballpen dispense failed: ");
+      Serial.println(response);
+      // Format: BALLPEN_FAIL:<channel>:<count>:<reason>
+      int first = response.indexOf(':');
+      int second = response.indexOf(':', first + 1);
+      int third = response.indexOf(':', second + 1);
+      if (first < 0 || second < 0) return 0;
+      return third < 0 ? response.substring(second + 1).toInt()
+                       : response.substring(second + 1, third).toInt();
+    }
+
+    handleBallpenMessage(response);
+  }
+
+  BALLPEN_SERIAL.println("STOP");
+  Serial.println("Ballpen Uno dispense timeout; STOP sent.");
+  return 0;
 }
 
 int releaseVerifiedChange(int changeCents) {
@@ -45,6 +73,5 @@ int releaseVerifiedChange(int changeCents) {
     previousBlocked = blocked;
   }
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
-  return countedCoins * 100; // Returns exact amount released
+  return countedCoins * 100;
 }
-

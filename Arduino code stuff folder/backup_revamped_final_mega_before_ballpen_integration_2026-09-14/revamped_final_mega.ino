@@ -1,4 +1,5 @@
 #include <Adafruit_GFX.h>
+#include <Stepper.h>
 #include <SPI.h>
 #include <Adafruit_ILI9341.h>
 #include <XPT2046_Touchscreen.h>
@@ -7,8 +8,7 @@
 /*
   ==============================================================================
   REVAMPED ARDUINO MEGA 2560 — MASTER CONTROLLER (OPTION A DUAL-BOARD SYSTEM)
-  - Manages ILI9341 Touch UI, Coin Acceptor, and Coin Hopper.
-  - Delegates paper to the Paper Uno and ballpens to the Ballpen Uno.
+  - Manages ILI9341 Touch UI, Coin Acceptor, Coin Hopper, and 1 Pen slot.
   - Communicates with ESP32 (Cloud Gateway) via Serial1 (Pins 18/19).
   - Communicates with Arduino Uno (Dedicated 2-Bay Paper Controller) via Serial2 (Pins 16/17).
   ==============================================================================
@@ -20,15 +20,24 @@
 //
 // -- DIGITAL I/O ----------------------------------------------
 //  D2   COIN_PIN            Coin acceptor pulse input (INPUT_PULLUP, INT0)
+//  D3   penStepper1 IN1     28BYJ-48 pen slot 1, ULN2003 coil A
+//  D4   penStepper1 IN2     28BYJ-48 pen slot 1, ULN2003 coil B
 //  D6   COIN_INHIBIT_PIN    Coin acceptor INHIBIT line (OUTPUT, active HIGH)
-//  D14  BALLPEN_SERIAL TX3  -> Ballpen Uno RX (D0)
-//  D15  BALLPEN_SERIAL RX3  <- Ballpen Uno TX (D1)
+//  D7   PEN_IR_PIN          IR sensor pen slot 1 (INPUT_PULLUP, LOW = beam broken)
+//  D8   LED_GREEN_PIN       Green LED — machine READY / AVAILABLE
+//  D11  penStepper1 IN3     28BYJ-48 pen slot 1, ULN2003 coil C
+//  D12  penStepper1 IN4     28BYJ-48 pen slot 1, ULN2003 coil D
+//  D13  LED_BLUE_PIN        Blue LED  — machine IDLE / IN USE (busy)
+//  D14  CHANGE_HOPPER_MOTOR_PIN  Relay IN controlling coin hopper motor
+//  D15  CHANGE_HOPPER_SENSOR_PIN Coin hopper exit IR sensor (INPUT_PULLUP)
 //  D16  TX2 (Serial2)       -> Arduino Uno RX (Pin D0) at 5V logic
 //  D17  RX2 (Serial2)       <- Arduino Uno TX (Pin D1) at 5V logic
 //  D18  TX1 (Serial1)       -> ESP32 RX2 (via 3.3V logic level converter)
 //  D19  RX1 (Serial1)       <- ESP32 TX2 (via 3.3V logic level converter)
-//  D22  CHANGE_HOPPER_MOTOR_PIN  Relay IN controlling coin hopper motor
-//  D23  CHANGE_HOPPER_SENSOR_PIN Coin hopper exit IR sensor (INPUT_PULLUP)
+//  D22-D29                 Former pen slots 2-3 stepper pins (unused in 1-slot layout)
+//  D30-D31                 Former pen slots 2-3 IR pins (unused in 1-slot layout)
+//  D45  LED_RED_PIN         Red LED   — machine ERROR state
+//  D46  BUZZER_PIN          Passive buzzer (2-pin, driven by tone())
 //  D47  TOUCH_CS            XPT2046 touchscreen chip select (SPI)
 //  D48  TFT_DC              ILI9341 TFT data/command
 //  D49  TFT_RST             ILI9341 TFT reset
@@ -59,11 +68,19 @@ volatile bool pendingCoinAcceptorOff = false;     // Relay cut is queued, waitin
 volatile unsigned long lastCoinBurstTime = 0;     // Timestamp of most recent valid coin pulse
 const unsigned long COIN_BURST_SILENCE_MS = 350;  // Wait 350ms of silence before physically cutting relay
 
+const int LED_GREEN_PIN = 8;
+const int LED_BLUE_PIN = 13;
+const int LED_RED_PIN = 45;
+const int BUZZER_PIN = 46;
+
 const int HW_RESET_BTN_PIN = A8;
 const int SW_RESET_BTN_PIN = A9;
+const int PEN_IR_PIN = 7;
+const int PEN_IR_PIN2 = 30;
+const int PEN_IR_PIN3 = 31;
 
-const int CHANGE_HOPPER_MOTOR_PIN  = 22;
-const int CHANGE_HOPPER_SENSOR_PIN = 23;
+const int CHANGE_HOPPER_MOTOR_PIN  = 14;
+const int CHANGE_HOPPER_SENSOR_PIN = 15;
 const unsigned long CHANGE_COIN_TIMEOUT_MS  = 5000;
 const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
@@ -78,10 +95,18 @@ const int HOPPER_RELAY_OFF = HIGH; // HIGH = Relay LED OFF -> Motor OFF
 #define TFT_RST  49
 #define TOUCH_CS 47
 
+// --- PEN STEPPERS ---
+const int stepsPerRevolution = 2048;
+Stepper penStepper1(stepsPerRevolution, 3, 11, 4, 12);
+Stepper* penSteppers[1] = { &penStepper1 };
+const int penStopPins[1][4] = {
+  { 3, 4, 11, 12 }
+};
+const int penIrPins[1] = { PEN_IR_PIN };
+
 // --- PERIPHERALS ---
 #define CLOUD_SERIAL Serial1 // ESP32 Gateway (Pins 18/19)
 #define UNO_SERIAL   Serial2 // Uno Paper Controller (Pins 16/17)
-#define BALLPEN_SERIAL Serial3 // Ballpen Uno (Pins 14/15)
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
 XPT2046_Touchscreen ts(TOUCH_CS);
@@ -157,8 +182,8 @@ void updateLCD();
 void showError(String m);
 void drawStatusScreen(String headline, String message);
 void refreshMachineAvailability(bool sound = false);
-int dispensePenFromUno(int channel, int quantity);
-void handleBallpenMessage(String msg);
+void stopStepper(int penIndex);
+bool dispenseOnePen(int channel);
 int dispensePaperFromUno(int bayNumber, int sheetCount);
 int releaseVerifiedChange(int changeCents);
 void handleCloudCommand(String msg);
@@ -291,12 +316,17 @@ void setup() {
   Serial.begin(115200);
   CLOUD_SERIAL.begin(9600); // UART to ESP32 (Pins 18/19)
   UNO_SERIAL.begin(9600);   // UART to Arduino Uno (Pins 16/17)
-  BALLPEN_SERIAL.begin(9600); // UART to Ballpen Uno (Pins 14/15)
   Serial.println("--- REVAMPED SMART PAPER VENDO FIRMWARE (OPTION A) STARTING ---");
+
+  for (int i = 0; i < BALLPEN_COUNT; i++) penSteppers[i]->setSpeed(10);
 
   tftUiBegin();
   diagTftOk = true;
 
+  pinMode(LED_GREEN_PIN, OUTPUT);
+  pinMode(LED_BLUE_PIN, OUTPUT);
+  pinMode(LED_RED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
   setMachineIndicator(INDICATOR_ACTIVE, true);
 
   pinMode(HW_RESET_BTN_PIN, INPUT_PULLUP);
@@ -306,6 +336,8 @@ void setup() {
   pinMode(COIN_INHIBIT_PIN, OUTPUT);
   setCoinAcceptance(true);
   attachInterrupt(digitalPinToInterrupt(COIN_PIN), coinInterrupt, FALLING);
+
+  pinMode(PEN_IR_PIN, INPUT_PULLUP);
 
   pinMode(CHANGE_HOPPER_MOTOR_PIN, OUTPUT);
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
@@ -318,7 +350,6 @@ void setup() {
   delay(500);
   CLOUD_SERIAL.println("GET_CATALOG");
   UNO_SERIAL.println("STATUS?");
-  BALLPEN_SERIAL.println("STATUS?");
   runDiagnostics();
 }
 
@@ -331,7 +362,7 @@ void loop() {
     Serial.println("HW RESET BUTTON (A8): triggering watchdog reboot...");
     Serial.flush();
     setMachineIndicator(INDICATOR_ERROR, false);
-    BALLPEN_SERIAL.println("BEEP:500:200");
+    tone(BUZZER_PIN, 500, 200);
     delay(200);
     noInterrupts();
     wdt_enable(WDTO_15MS);
@@ -407,11 +438,6 @@ void loop() {
     String msg = UNO_SERIAL.readStringUntil('\n');
     msg.trim();
     handleUnoMessage(msg);
-  }
-
-  if (BALLPEN_SERIAL.available()) {
-    String msg = BALLPEN_SERIAL.readStringUntil('\n');
-    handleBallpenMessage(msg);
   }
 
   if (Serial.available()) {

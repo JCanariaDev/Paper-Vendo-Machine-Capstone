@@ -3,22 +3,22 @@
 
 void setMachineIndicator(IndicatorState state, bool sound) {
   indicatorState = state;
-  const char* stateName = state == INDICATOR_READY ? "READY" :
-                          state == INDICATOR_ACTIVE ? "ACTIVE" : "ERROR";
-  BALLPEN_SERIAL.println(String("INDICATOR:") + stateName);
+  digitalWrite(LED_GREEN_PIN, state == INDICATOR_READY  ? HIGH : LOW);
+  digitalWrite(LED_BLUE_PIN,  state == INDICATOR_ACTIVE ? HIGH : LOW);
+  digitalWrite(LED_RED_PIN,   state == INDICATOR_ERROR  ? HIGH : LOW);
 
   if (!sound) return;
   switch (state) {
     case INDICATOR_READY:
-      BALLPEN_SERIAL.println("BEEP:1800:80");
+      tone(BUZZER_PIN, 1800, 80);
       delay(140);
-      BALLPEN_SERIAL.println("BEEP:1800:80");
+      tone(BUZZER_PIN, 1800, 80);
       break;
     case INDICATOR_ACTIVE:
-      BALLPEN_SERIAL.println("BEEP:1100:120");
+      tone(BUZZER_PIN, 1100, 120);
       break;
     case INDICATOR_ERROR:
-      BALLPEN_SERIAL.println("BEEP:350:500");
+      tone(BUZZER_PIN, 350, 500);
       break;
   }
 }

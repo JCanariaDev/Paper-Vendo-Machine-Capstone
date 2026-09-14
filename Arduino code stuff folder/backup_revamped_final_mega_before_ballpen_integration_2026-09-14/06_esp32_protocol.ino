@@ -103,8 +103,12 @@ void executeDispensePlan(String message) {
       // Delegate paper dispense to Arduino Uno.
       actualOutput = dispensePaperFromUno(channel, expectedOutput);
     } else {
-      // Delegate ballpen dispense to the dedicated Ballpen Uno.
-      actualOutput = dispensePenFromUno(channel, expectedOutput);
+      // Dispense pens directly on Mega
+      for (int item = 0; item < expectedOutput; item++) {
+        bool released = dispenseOnePen(channel);
+        if (!released) break;
+        actualOutput++;
+      }
     }
 
     if (results.length()) results += ';';
@@ -174,7 +178,7 @@ void finishUiAfterTransaction(String message) {
   activeChangeDueCents = dueCents;
   activeChangePaidCents = paidCents;
 
-  BALLPEN_SERIAL.println("BEEP:1000:300");
+  tone(BUZZER_PIN, 1000, 300);
 
   // Switch to non-blocking Receipt Screen with CONFIRM button
   currentScreen = SCREEN_RECEIPT;

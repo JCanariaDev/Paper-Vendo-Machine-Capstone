@@ -1,32 +1,23 @@
 #include <Stepper.h>
 
 /*
-  UNO BALLPEN CONTROLLER TEST
+  ARDUINO UNO - BALLPEN CONTROLLER
+  Receives dispense commands from the Mega over D0/D1.
 
-  UART communication:
-    Uno D0 / RX <- Mega D14 / TX3
-    Uno D1 / TX -> Mega D15 / RX3
-    Uno GND     <-> Mega GND
-    9600 baud
+  UART:
+    Uno D0/RX <- Mega D14/TX3
+    Uno D1/TX -> Mega D15/RX3
 
-  Ballpen hardware on this Uno:
-    ULN2003 IN1 -> D3
-    ULN2003 IN2 -> D4
-    ULN2003 IN3 -> D11
-    ULN2003 IN4 -> D12
+  Hardware:
+    ULN2003 IN1/IN2/IN3/IN4 -> D3/D4/D11/D12
     Ballpen IR OUT -> D7 (active LOW)
-    Green LED -> D8
-    Red LED   -> D9
-    Blue LED  -> D13
-    Passive buzzer -> D10
-
-  The motor must use a suitable external 5V supply through the ULN2003.
-  Connect the external-supply GND to the Uno GND.
+    Green LED -> D8, red LED -> D9, buzzer -> D10, blue LED -> D13
 */
 
 const int STEPS_PER_REVOLUTION = 2048;
 const int HALF_TURN_STEPS = STEPS_PER_REVOLUTION / 2;
 const int MOTOR_SPEED_RPM = 10;
+const int SENSOR_WAIT_MS = 3000;
 
 const int STEPPER_IN1_PIN = 3;
 const int STEPPER_IN2_PIN = 4;
@@ -38,8 +29,6 @@ const int LED_RED_PIN = 9;
 const int BUZZER_PIN = 10;
 const int LED_BLUE_PIN = 13;
 
-const unsigned long SENSOR_WAIT_MS = 3000;
-
 Stepper ballpenStepper(
   STEPS_PER_REVOLUTION,
   STEPPER_IN1_PIN,
@@ -49,7 +38,7 @@ Stepper ballpenStepper(
 );
 
 bool stopRequested = false;
-bool testRunning = false;
+bool dispensing = false;
 
 bool sensorDetected() {
   return digitalRead(BALLPEN_IR_PIN) == LOW;
@@ -62,85 +51,124 @@ void disableMotor() {
   digitalWrite(STEPPER_IN4_PIN, LOW);
 }
 
-void setRunningIndicators(bool running) {
-  digitalWrite(LED_GREEN_PIN, running ? LOW : HIGH);
-  digitalWrite(LED_BLUE_PIN, running ? HIGH : LOW);
-  digitalWrite(LED_RED_PIN, LOW);
+void setIndicator(const String &state) {
+  digitalWrite(LED_GREEN_PIN, state == "READY" ? HIGH : LOW);
+  digitalWrite(LED_BLUE_PIN, state == "ACTIVE" ? HIGH : LOW);
+  digitalWrite(LED_RED_PIN, state == "ERROR" ? HIGH : LOW);
 }
 
-void handleCommand(const String &command) {
-  if (command == "BALLPEN_STOP") {
-    stopRequested = true;
-    disableMotor();
-    setRunningIndicators(false);
-    noTone(BUZZER_PIN);
-    Serial.println(F("BALLPEN_STOPPED"));
-  }
+void stopBallpen() {
+  stopRequested = true;
+  disableMotor();
+  noTone(BUZZER_PIN);
+  setIndicator("READY");
 }
 
-bool checkForStopCommand() {
+bool readStopCommand() {
   while (Serial.available() > 0) {
     String command = Serial.readStringUntil('\n');
     command.trim();
-    handleCommand(command);
+    if (command == "STOP" || command == "BALLPEN_STOP") {
+      stopBallpen();
+      return true;
+    }
   }
-
-  if (stopRequested) {
-    testRunning = false;
-    disableMotor();
-    return true;
-  }
-  return false;
+  return stopRequested;
 }
 
 bool moveInterruptible(int steps) {
   const int direction = steps >= 0 ? 1 : -1;
-  const int numberOfSteps = abs(steps);
-
-  for (int step = 0; step < numberOfSteps; step++) {
-    if (checkForStopCommand()) return false;
+  const int count = abs(steps);
+  for (int i = 0; i < count; i++) {
+    if (readStopCommand()) return false;
     ballpenStepper.step(direction);
   }
   return true;
 }
 
-bool waitForSensorOrStop() {
-  const unsigned long startedAt = millis();
+bool waitForSensor() {
+  unsigned long startedAt = millis();
   while (millis() - startedAt < SENSOR_WAIT_MS) {
-    if (checkForStopCommand()) return false;
+    if (readStopCommand()) return false;
     if (sensorDetected()) return true;
     delay(5);
   }
   return sensorDetected();
 }
 
-void runBallpenTest() {
-  stopRequested = false;
-  testRunning = true;
-  setRunningIndicators(true);
-  tone(BUZZER_PIN, 1100, 120);
+bool dispenseOnePen() {
+  if (sensorDetected()) return false;
+  if (!moveInterruptible(HALF_TURN_STEPS)) return false;
 
-  Serial.println(F("BALLPEN_TEST_STARTED"));
-  if (!moveInterruptible(HALF_TURN_STEPS)) return;
+  bool detected = waitForSensor();
+  if (stopRequested) return false;
 
-  bool detected = waitForSensorOrStop();
-  if (!testRunning) return;
+  delay(300);
+  bool returned = moveInterruptible(-HALF_TURN_STEPS);
+  disableMotor();
+  return detected && returned;
+}
 
-  if (detected) {
-    Serial.println(F("BALLPEN_RESULT:DETECTED"));
-    digitalWrite(LED_GREEN_PIN, HIGH);
-    tone(BUZZER_PIN, 1800, 150);
-  } else {
-    Serial.println(F("BALLPEN_RESULT:NOTHING"));
-    digitalWrite(LED_RED_PIN, HIGH);
+void dispensePens(int channel, int quantity) {
+  if (channel != 1 || quantity <= 0) {
+    Serial.println("BALLPEN_FAIL:" + String(channel) + ":0:BAD_REQUEST");
+    return;
   }
 
-  // Always return to the starting position after the sensor check.
-  moveInterruptible(-HALF_TURN_STEPS);
+  stopRequested = false;
+  dispensing = true;
+  setIndicator("ACTIVE");
+  tone(BUZZER_PIN, 1100, 120);
+
+  int dispensed = 0;
+  for (int i = 0; i < quantity; i++) {
+    if (!dispenseOnePen()) break;
+    dispensed++;
+  }
+
   disableMotor();
-  setRunningIndicators(false);
-  testRunning = false;
-  Serial.println(F("BALLPEN_TEST_COMPLETE"));
+  dispensing = false;
+  if (dispensed == quantity) {
+    setIndicator("READY");
+    tone(BUZZER_PIN, 1800, 150);
+    Serial.println("BALLPEN_DONE:" + String(channel) + ":" + String(dispensed));
+  } else {
+    setIndicator("ERROR");
+    Serial.println("BALLPEN_FAIL:" + String(channel) + ":" + String(dispensed) + ":" +
+                   (stopRequested ? "STOPPED" : "IR_TIMEOUT"));
+    stopRequested = false;
+  }
+}
+
+void handleCommand(String command) {
+  command.trim();
+  if (command == "STOP" || command == "BALLPEN_STOP") {
+    stopBallpen();
+    Serial.println("BALLPEN_STOPPED");
+  }
+  else if (command == "STATUS?") {
+    Serial.println("BALLPEN_READY");
+    Serial.println(sensorDetected() ? "IR:DETECTED" : "IR:NOTHING");
+  }
+  else if (command.startsWith("INDICATOR:")) {
+    setIndicator(command.substring(10));
+  }
+  else if (command.startsWith("BEEP:")) {
+    int first = command.indexOf(':');
+    int second = command.indexOf(':', first + 1);
+    if (first > 0 && second > first) {
+      tone(BUZZER_PIN, command.substring(first + 1, second).toInt(),
+           command.substring(second + 1).toInt());
+    }
+  }
+  else if (command.startsWith("DISPENSE:")) {
+    int first = command.indexOf(':');
+    int second = command.indexOf(':', first + 1);
+    if (first > 0 && second > first) {
+      dispensePens(command.substring(first + 1, second).toInt(),
+                   command.substring(second + 1).toInt());
+    }
+  }
 }
 
 void setup() {
@@ -159,21 +187,12 @@ void setup() {
 
   ballpenStepper.setSpeed(MOTOR_SPEED_RPM);
   disableMotor();
-  setRunningIndicators(false);
-
-  Serial.println(F("UNO_BALLPEN_READY"));
-  Serial.println(sensorDetected() ? F("IR:DETECTED") : F("IR:NOTHING"));
+  setIndicator("READY");
+  Serial.println("BALLPEN_READY");
 }
 
 void loop() {
   if (Serial.available() > 0) {
-    String command = Serial.readStringUntil('\n');
-    command.trim();
-
-    if (command == "BALLPEN_TEST" && !testRunning) {
-      runBallpenTest();
-    } else {
-      handleCommand(command);
-    }
+    handleCommand(Serial.readStringUntil('\n'));
   }
 }

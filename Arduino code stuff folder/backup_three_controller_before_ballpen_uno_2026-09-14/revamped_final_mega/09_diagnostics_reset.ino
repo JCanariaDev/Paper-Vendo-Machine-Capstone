@@ -8,12 +8,17 @@ void runDiagnostics() {
   Serial.print("TFT (ILI9341)............ "); Serial.println(diagTftOk ? "OK" : "FAIL");
   Serial.print("Touchscreen (XPT2046)..... "); Serial.println(diagTouchOk ? "OK" : "FAIL");
   Serial.print("Coin acceptor pin (D2).... "); Serial.println("INPUT_PULLUP + interrupt INT0 configured");
-  Serial.println("Serial2 (Pins 16/17) ---> Paper Uno connected at 9600 baud");
-  Serial.println("Serial3 (Pins 14/15) ---> Ballpen Uno connected at 9600 baud");
+  Serial.println("Serial2 (Pins 16/17) ---> Arduino Uno Paper Controller connected at 9600 baud");
+
+  Serial.println("--- Pen IR sensors (active LOW = beam broken) ---");
+  for (int i = 0; i < BALLPEN_COUNT; i++) {
+    Serial.print("  Slot "); Serial.print(i + 1); Serial.print(" (D");
+    Serial.print(penIrPins[i]); Serial.print("): ");
+    Serial.println(digitalRead(penIrPins[i]) == HIGH ? "OK - beam clear" : "WARNING - LOW at idle");
+  }
 
   Serial.println("============================================");
   UNO_SERIAL.println("STATUS?");
-  BALLPEN_SERIAL.println("STATUS?");
 }
 
 void printHardwareStatus() {
@@ -22,15 +27,20 @@ void printHardwareStatus() {
   Serial.print("Order active: "); Serial.println(orderInProgress ? "YES" : "NO");
   Serial.print("Indicator: ");
   Serial.println(indicatorState == INDICATOR_READY ? "READY (green)" : indicatorState == INDICATOR_ACTIVE ? "ACTIVE (blue)" : "ERROR (red)");
-  Serial.print("Hopper relay D22: "); Serial.println(digitalRead(CHANGE_HOPPER_MOTOR_PIN) == HOPPER_RELAY_ON ? "ON" : "OFF");
-  Serial.print("Hopper sensor D23: "); Serial.println(digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW ? "LOW / blocked" : "HIGH / clear");
+  for (int i = 0; i < BALLPEN_COUNT; i++) {
+    Serial.print("Pen IR "); Serial.print(i + 1); Serial.print(" (D");
+    Serial.print(penIrPins[i]); Serial.print("): ");
+    Serial.println(digitalRead(penIrPins[i]) == LOW ? "LOW / blocked" : "HIGH / clear");
+  }
+  Serial.print("Hopper relay D14: "); Serial.println(digitalRead(CHANGE_HOPPER_MOTOR_PIN) == HOPPER_RELAY_ON ? "ON" : "OFF");
+  Serial.print("Hopper sensor D15: "); Serial.println(digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW ? "LOW / blocked" : "HIGH / clear");
 }
 
 void softResetMachineState() {
   Serial.println("SOFT RESET: returning machine logic to idle state.");
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   hopperManualRunning = false;
-  BALLPEN_SERIAL.println("STOP");
+  for (int i = 0; i < BALLPEN_COUNT; i++) stopStepper(i);
 
   noInterrupts();
   credits = 0;
@@ -64,7 +74,6 @@ void softResetMachineState() {
   delay(300);
   CLOUD_SERIAL.println("GET_CATALOG");
   UNO_SERIAL.println("STATUS?");
-  BALLPEN_SERIAL.println("STATUS?");
   Serial.println("SOFT RESET: done.");
 }
 
