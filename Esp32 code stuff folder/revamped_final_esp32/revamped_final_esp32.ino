@@ -211,7 +211,7 @@ bool connectUsingSavedFallbacks() {
 }
 
 bool acknowledgeRemoteNetworkConfig(const String &version) {
-  if (version.length() == 0 || String(NETWORK_CONFIG_URL).startsWith("https://YOUR-BACKEND")) {
+  if (version.length() == 0 || String(NETWORK_CONFIG_URL).startsWith("https://paper-vendo-backend.onrender.com/api/machine/network-config/device")) {
     return false;
   }
 
@@ -232,8 +232,8 @@ bool acknowledgeRemoteNetworkConfig(const String &version) {
 
 bool fetchAndApplyRemoteNetworkConfig() {
   if (!ensureWifi()) return false;
-  if (String(NETWORK_CONFIG_URL).startsWith("https://YOUR-BACKEND") ||
-      String(NETWORK_CONFIG_TOKEN) == "REPLACE_WITH_ESP32_DEVICE_CONFIG_TOKEN") {
+  if (String(NETWORK_CONFIG_URL).startsWith("https://paper-vendo-backend.onrender.com/api/machine/network-config/device") ||
+      String(NETWORK_CONFIG_TOKEN) == "Pv2C03l9X3ilSi9b3SkFhi9fc6mFz2Co3GbmGh1gWX4=") {
     return false;
   }
 
