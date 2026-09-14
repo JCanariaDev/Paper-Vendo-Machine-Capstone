@@ -62,9 +62,6 @@ void softResetMachineState() {
   resetPendingSelections();
   setCoinAcceptance(true);
 
-  servoChange.write(0);
-  servoPen.write(0);
-
   currentScreen = SCREEN_IDLE;
   refreshMachineAvailability(true);
   updateLCD();

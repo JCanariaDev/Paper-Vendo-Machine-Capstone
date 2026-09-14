@@ -1,5 +1,4 @@
 #include <Adafruit_GFX.h>
-#include <Servo.h>
 #include <Stepper.h>
 #include <SPI.h>
 #include <Adafruit_ILI9341.h>
@@ -26,8 +25,6 @@
 //  D6   COIN_INHIBIT_PIN    Coin acceptor INHIBIT line (OUTPUT, active HIGH)
 //  D7   PEN_IR_PIN          IR sensor pen slot 1 (INPUT_PULLUP, LOW = beam broken)
 //  D8   LED_GREEN_PIN       Green LED — machine READY / AVAILABLE
-//  D9   SERVO_CHANGE_PIN    Change-dispense servo signal
-//  D10  SERVO_PEN_PIN       Pen-ejection servo signal
 //  D11  penStepper1 IN3     28BYJ-48 pen slot 1, ULN2003 coil C
 //  D12  penStepper1 IN4     28BYJ-48 pen slot 1, ULN2003 coil D
 //  D13  LED_BLUE_PIN        Blue LED  — machine IDLE / IN USE (busy)
@@ -81,8 +78,6 @@ const int SW_RESET_BTN_PIN = A9;
 const int PEN_IR_PIN = 7;
 const int PEN_IR_PIN2 = 30;
 const int PEN_IR_PIN3 = 31;
-const int SERVO_CHANGE_PIN = 9;
-const int SERVO_PEN_PIN = 10;
 
 const int CHANGE_HOPPER_MOTOR_PIN  = 14;
 const int CHANGE_HOPPER_SENSOR_PIN = 15;
@@ -112,8 +107,6 @@ const int penIrPins[1] = { PEN_IR_PIN };
 // --- PERIPHERALS ---
 #define CLOUD_SERIAL Serial1 // ESP32 Gateway (Pins 18/19)
 #define UNO_SERIAL   Serial2 // Uno Paper Controller (Pins 16/17)
-
-Servo servoChange, servoPen;
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
 XPT2046_Touchscreen ts(TOUCH_CS);
@@ -348,11 +341,6 @@ void setup() {
   pinMode(CHANGE_HOPPER_MOTOR_PIN, OUTPUT);
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   pinMode(CHANGE_HOPPER_SENSOR_PIN, INPUT_PULLUP);
-
-  servoChange.attach(SERVO_CHANGE_PIN);
-  servoPen.attach(SERVO_PEN_PIN);
-  servoChange.write(0);
-  servoPen.write(0);
 
   updateLCD();
   CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)credits));
