@@ -37,9 +37,9 @@ const int MEGA_TX_PIN = 17;
 
 bool wifiConnected = false;
 unsigned long lastHeartbeatAt = 0;
-const unsigned long HEARTBEAT_INTERVAL_MS = 5000; // WIFI: status ping to Mega
+const unsigned long HEARTBEAT_INTERVAL_MS = 1000; // WIFI: status ping to Mega
 unsigned long lastOnlineHeartbeatAt = 0;
-const unsigned long ONLINE_HEARTBEAT_INTERVAL_MS = 5000; // Supabase heartbeat
+const unsigned long ONLINE_HEARTBEAT_INTERVAL_MS = 1000; // Supabase heartbeat
 
 // A finish request must survive a temporary Wi-Fi/API failure.  Keep the
 // payload in RAM and retry it from loop() instead of leaving the Mega waiting.

@@ -63,27 +63,6 @@ const ColorButton buttons[] = {
 };
 const uint8_t BUTTON_COUNT = sizeof(buttons) / sizeof(buttons[0]);
 
-void drawOledStatus(const char *colorName, int x, int y) {
-  if (!oledOk) return;
-  oled.clearDisplay();
-  oled.setTextColor(SH110X_WHITE);
-  oled.setTextSize(1);
-  oled.setCursor(0, 0);
-  oled.println(F("MEGA DISPLAY TEST"));
-  oled.drawFastHLine(0, 11, 128, SH110X_WHITE);
-  oled.setCursor(0, 18);
-  oled.print(F("Color: "));
-  oled.println(colorName);
-  oled.setCursor(0, 32);
-  if (x >= 0) {
-    oled.print(F("Touch X: ")); oled.println(x);
-    oled.print(F("Touch Y: ")); oled.println(y);
-  } else {
-    oled.println(F("Touch a TFT color"));
-    oled.println(F("button to test."));
-  }
-  oled.display();
-}
 
 void drawButton(uint8_t index, int x, int y) {
   const int w = 104, h = 48;
@@ -125,7 +104,6 @@ void setup() {
   oledOk = oled.begin(0x3C, true);
 
   drawTftScreen(ILI9341_BLACK, "Touch a colored button");
-  drawOledStatus("NONE", -1, -1);
   Serial.println(F("Mega TFT/touch/OLED test ready at 115200 baud."));
   if (!oledOk) Serial.println(F("OLED not found at address 0x3C."));
 }
@@ -148,7 +126,6 @@ void loop() {
     int by = 58 + row * 65;
     if (x >= bx && x < bx + 104 && y >= by && y < by + 48) {
       drawTftScreen(buttons[i].color, buttons[i].label);
-      drawOledStatus(buttons[i].label, x, y);
       delay(250); // debounce
       break;
     }
