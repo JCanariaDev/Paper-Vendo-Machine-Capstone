@@ -11,6 +11,7 @@ import Dashboard from './pages/Dashboard';
 import MachineMonitor from './pages/MachineMonitor';
 import Inventory from './pages/Inventory';
 import Transactions from './pages/Transactions';
+import Logs from './pages/Logs';
 import Analytics from './pages/Analytics';
 import Reports from './pages/Reports';
 import MachineConfiguration from './pages/MachineConfiguration';
@@ -189,6 +190,14 @@ export default function App() {
                 <Transactions />
               </ProtectedRoute>
             } 
+          />
+          <Route
+            path="/logs"
+            element={
+              <ProtectedRoute>
+                <Logs />
+              </ProtectedRoute>
+            }
           />
           <Route 
             path="/analytics" 

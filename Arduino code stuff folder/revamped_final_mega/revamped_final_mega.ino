@@ -167,6 +167,8 @@ void coinInterrupt();
 void softResetMachineState();
 void removeFromCart(int index);
 void addToCart(String type, int id, const char* name, float price, int qty);
+int ballpenCartQuantity();
+int ballpenPendingQuantity();
 void startOrder();
 void tftUiBegin();
 void tftUiSetCredits();
@@ -199,6 +201,7 @@ CatalogItem paperCatalog[PAPER_COUNT] = {
 };
 
 const int BALLPEN_COUNT = 1;
+const int MAX_BALLPENS_PER_TRANSACTION = 5;
 CatalogItem ballpenCatalog[BALLPEN_COUNT] = {
   {1, "Pen Slot 1", 5.00, true, 0, 1, true}
 };

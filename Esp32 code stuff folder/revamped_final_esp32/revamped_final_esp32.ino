@@ -26,6 +26,7 @@ const char* NETWORK_CONFIG_TOKEN = "Pv2C03l9X3ilSi9b3SkFhi9fc6mFz2Co3GbmGh1gWX4=
 String lastNetworkConfigVersion = "";
 unsigned long lastNetworkConfigCheck = 0;
 const unsigned long NETWORK_CONFIG_CHECK_INTERVAL = 30000;
+const int MAX_BALLPENS_PER_TRANSACTION = 5;
 
 // --- SUPABASE CONFIG ---
 const char* SUPABASE_URL = "https://jowpzdynbdeznuvohrpx.supabase.co";
@@ -518,11 +519,21 @@ void reserveCart(const String &message) {
   DynamicJsonDocument request(2048);
   request["p_credit_cents"] = creditCents;
   JsonArray lines = request.createNestedArray("p_lines");
+  int ballpenUnits = 0;
   int start = 0;
   while (start < encodedLines.length()) {
     const int end = encodedLines.indexOf(';', start);
     const String encoded = end < 0 ? encodedLines.substring(start) : encodedLines.substring(start, end);
     if (!parseCartLine(encoded, lines)) { sendError("BAD_CART_LINE"); return; }
+    const int comma1 = encoded.indexOf(',');
+    const int comma2 = encoded.indexOf(',', comma1 + 1);
+    if (encoded.substring(0, comma1) == "pen") {
+      ballpenUnits += encoded.substring(comma2 + 1).toInt();
+      if (ballpenUnits > MAX_BALLPENS_PER_TRANSACTION) {
+        sendError("MAX_5_BALLPENS");
+        return;
+      }
+    }
     if (end < 0) break;
     start = end + 1;
   }

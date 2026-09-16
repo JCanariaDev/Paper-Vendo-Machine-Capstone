@@ -21,6 +21,21 @@ void resetPendingSelections() {
   }
 }
 
+int ballpenCartQuantity() {
+  int total = 0;
+  for (int i = 0; i < cartCount; i++) {
+    if (cart[i].type == "pen") total += cart[i].qty;
+  }
+  return total;
+}
+
+int ballpenPendingQuantity() {
+  if (activeCatalogType != "pen") return 0;
+  int total = 0;
+  for (int i = 0; i < BALLPEN_COUNT; i++) total += pendingQty[i];
+  return total;
+}
+
 void removeFromCart(int index) {
   if (index < 0 || index >= cartCount) return;
   for (int i = index; i < cartCount - 1; i++) {
@@ -30,6 +45,9 @@ void removeFromCart(int index) {
 }
 
 void addToCart(String type, int id, const char* name, float price, int qty) {
+  if (type == "pen" && ballpenCartQuantity() + qty > MAX_BALLPENS_PER_TRANSACTION) {
+    return;
+  }
   for (int i = 0; i < cartCount; i++) {
     if (cart[i].type == type && cart[i].id == id) {
       cart[i].qty += qty;

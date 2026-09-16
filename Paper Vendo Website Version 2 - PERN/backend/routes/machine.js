@@ -389,6 +389,31 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     }
   });
 
+  router.get('/logs', async (req, res) => {
+    const limit = Math.min(Math.max(asInt(req.query.limit, 200), 1), 1000);
+    try {
+      let query = supabase
+        .from('machine_logs')
+        .select('id, level, source, event_type, message, transaction_id, metadata, created_at')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (req.query.level && req.query.level !== 'all') {
+        query = query.eq('level', req.query.level);
+      }
+      if (req.query.source && req.query.source !== 'all') {
+        query = query.eq('source', req.query.source);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+      return res.status(200).json(data || []);
+    } catch (err) {
+      console.error('Error fetching machine logs:', err);
+      return res.status(500).json({ message: 'Failed to retrieve machine logs.' });
+    }
+  });
+
   // Wi-Fi credentials are staged here for a future device-configuration flow.
   // The password is encrypted before it reaches Supabase and is never returned.
   router.get('/network-config', authorizeRoles('superadmin'), async (_req, res) => {

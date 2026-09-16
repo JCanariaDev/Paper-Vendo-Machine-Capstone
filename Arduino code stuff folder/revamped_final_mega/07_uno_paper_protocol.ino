@@ -124,13 +124,18 @@ void handleUnoMessage(String msg) {
 
 int dispensePaperFromUno(int bayNumber, int sheetCount) {
   if (bayNumber < 1 || bayNumber > PAPER_COUNT) return 0;
-  UNO_SERIAL.println("DISPENSE:" + String(bayNumber) + ":" + String(sheetCount));
+  String command = "DISPENSE:" + String(bayNumber) + ":" + String(sheetCount);
+  Serial.print("Paper Uno <- ");
+  Serial.println(command);
+  UNO_SERIAL.println(command);
 
   unsigned long startedAt = millis();
   while (millis() - startedAt < PAPER_DISPENSE_TIMEOUT_MS) {
     if (UNO_SERIAL.available()) {
       String response = UNO_SERIAL.readStringUntil('\n');
       response.trim();
+      Serial.print("Paper Uno -> ");
+      Serial.println(response);
       if (response.startsWith("DONE:")) {
         // Format: DONE:<bay>:<count>
         int second = response.indexOf(':', 5);
@@ -158,6 +163,7 @@ int dispensePaperFromUno(int bayNumber, int sheetCount) {
       }
     }
   }
+  Serial.println("Paper Uno response timeout; no NEMA17 completion received.");
   return 0; // Timeout
 }
 

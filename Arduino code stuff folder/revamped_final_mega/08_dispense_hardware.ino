@@ -1,7 +1,8 @@
 // DISPENSE HARDWARE
 // Paper is delegated to Paper Uno; ballpens are delegated to Ballpen Uno.
 
-const unsigned long BALLPEN_DISPENSE_TIMEOUT_MS = 15000;
+const unsigned long BALLPEN_DISPENSE_TIMEOUT_PER_ITEM_MS = 12000;
+const unsigned long BALLPEN_DISPENSE_TIMEOUT_MARGIN_MS = 5000;
 
 void handleBallpenMessage(String msg) {
   msg.trim();
@@ -16,8 +17,11 @@ int dispensePenFromUno(int channel, int quantity) {
   // Format: DISPENSE:<channel>:<quantity>
   BALLPEN_SERIAL.println("DISPENSE:" + String(channel) + ":" + String(quantity));
 
+  const unsigned long timeoutMs =
+    BALLPEN_DISPENSE_TIMEOUT_MARGIN_MS +
+    (BALLPEN_DISPENSE_TIMEOUT_PER_ITEM_MS * (unsigned long)quantity);
   const unsigned long startedAt = millis();
-  while (millis() - startedAt < BALLPEN_DISPENSE_TIMEOUT_MS) {
+  while (millis() - startedAt < timeoutMs) {
     if (!BALLPEN_SERIAL.available()) {
       delay(2);
       continue;

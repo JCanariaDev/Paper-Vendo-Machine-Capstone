@@ -6,6 +6,7 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+DROP TABLE IF EXISTS machine_logs CASCADE;
 DROP TABLE IF EXISTS sales_transaction_lines CASCADE;
 DROP TABLE IF EXISTS sales_transactions CASCADE;
 DROP TABLE IF EXISTS change_inventory CASCADE;
@@ -148,6 +149,51 @@ CREATE TABLE sales_transaction_lines (
     UNIQUE (transaction_id, item_type, product_id)
 );
 
+CREATE TABLE machine_logs (
+    id BIGSERIAL PRIMARY KEY,
+    level TEXT NOT NULL DEFAULT 'INFO'
+      CHECK (level IN ('DEBUG', 'INFO', 'WARNING', 'ERROR')),
+    source TEXT NOT NULL DEFAULT 'SYSTEM',
+    event_type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    transaction_id UUID REFERENCES sales_transactions(id) ON DELETE SET NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_machine_logs_created ON machine_logs(created_at DESC);
+CREATE INDEX idx_machine_logs_transaction ON machine_logs(transaction_id);
+GRANT SELECT ON machine_logs TO anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION log_sales_transaction_event()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO machine_logs (level, source, event_type, message, transaction_id, metadata)
+        VALUES ('INFO', 'DATABASE', 'TRANSACTION_RESERVED',
+                'Transaction reserved for dispensing', NEW.id,
+                jsonb_build_object('status', NEW.status, 'credit_received_cents', NEW.credit_received_cents));
+    ELSIF NEW.status IS DISTINCT FROM OLD.status THEN
+        INSERT INTO machine_logs (level, source, event_type, message, transaction_id, metadata)
+        VALUES (
+            CASE WHEN NEW.status LIKE 'FAILED%' THEN 'ERROR' ELSE 'INFO' END,
+            'DATABASE',
+            'TRANSACTION_STATUS_CHANGED',
+            'Transaction status changed from ' || OLD.status || ' to ' || NEW.status,
+            NEW.id,
+            jsonb_build_object('old_status', OLD.status, 'new_status', NEW.status,
+                               'failure_reason', NEW.failure_reason,
+                               'change_paid_cents', NEW.change_paid_cents)
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_log_sales_transaction_event
+AFTER INSERT OR UPDATE OF status ON sales_transactions
+FOR EACH ROW EXECUTE FUNCTION log_sales_transaction_event();
+
 CREATE TABLE machine_status (
     id SERIAL PRIMARY KEY,
     status_key TEXT UNIQUE NOT NULL,
@@ -258,6 +304,7 @@ DECLARE
     v_stock INTEGER;
     v_available INTEGER;
     v_subtotal INTEGER := 0;
+    v_pen_units INTEGER := 0;
     v_change INTEGER;
     v_remaining INTEGER;
     v_coin RECORD;
@@ -299,6 +346,10 @@ BEGIN
 
             v_qty := v_units * v_sheets;
         ELSE
+            v_pen_units := v_pen_units + v_units;
+            IF v_pen_units > 5 THEN
+                RAISE EXCEPTION 'A maximum of 5 ballpens can be purchased per transaction';
+            END IF;
             -- Pen validation by exact piece count in compartment
             SELECT p.cost_per_unit_cents, 1, p.item_name, NULL::TEXT, c.dispenser_channel,
                    c.current_piece_stock - c.reserved_piece_stock
@@ -415,20 +466,8 @@ BEGIN
              WHERE dispenser_channel = v_line.physical_channel;
         END IF;
 
-        IF v_line.item_type = 'paper' THEN
-            UPDATE paper_compartments
-               SET current_pad_stock = GREATEST(
-                       0,
-                       current_pad_stock - CEIL(v_actual::NUMERIC / NULLIF(v_line.sheets_per_unit_snapshot, 0))::INTEGER
-                   ),
-                   presence_status = CASE
-                       WHEN current_pad_stock - CEIL(v_actual::NUMERIC / NULLIF(v_line.sheets_per_unit_snapshot, 0))::INTEGER <= 0
-                       THEN 'LOW'
-                       ELSE presence_status
-                   END,
-                   updated_at = NOW()
-             WHERE motor_channel = v_line.physical_channel;
-        END IF;
+        -- Paper stock is not consumed when a reservation is cancelled.
+        -- It is decremented only by machine_finish_transaction after physical output.
     END LOOP;
     FOR v_coin IN SELECT value FROM jsonb_array_elements(v_tx.change_plan) LOOP
         UPDATE change_inventory SET reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)), updated_at = NOW() WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);

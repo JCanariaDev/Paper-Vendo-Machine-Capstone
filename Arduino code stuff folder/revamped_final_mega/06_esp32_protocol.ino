@@ -2,6 +2,10 @@
 // Split from revamped_final_mega.ino for readability.
 
 void startOrder() {
+  if (ballpenCartQuantity() > MAX_BALLPENS_PER_TRANSACTION) {
+    tftUiShowError("Max 5 ballpens");
+    return;
+  }
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   hopperManualRunning = false;
   orderInProgress = true;

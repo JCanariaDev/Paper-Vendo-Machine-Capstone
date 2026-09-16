@@ -6,6 +6,7 @@ import {
   MonitorCheck,
   Boxes, 
   History, 
+  ScrollText,
   TrendingUp,
   FileSpreadsheet,
   LogOut, 
@@ -24,6 +25,7 @@ export default function Sidebar({ isOpen, onClose }) {
     { to: '/monitor',   label: 'Machine Monitor', icon: MonitorCheck },
     { to: '/inventory', label: 'Inventory',        icon: Boxes },
     { to: '/transactions', label: 'Sales History', icon: History },
+    { to: '/logs',        label: 'Machine Logs',  icon: ScrollText },
   ];
 
   if (user?.role === 'superadmin') {
