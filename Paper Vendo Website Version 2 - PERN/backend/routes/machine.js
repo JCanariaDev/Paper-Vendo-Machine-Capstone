@@ -394,7 +394,7 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     try {
       let query = supabase
         .from('machine_logs')
-        .select('id, level, source, event_type, message, transaction_id, metadata, created_at')
+        .select('id, level, source, event_type, message, transaction_id, tr_number, metadata, created_at')
         .order('created_at', { ascending: false })
         .limit(limit);
 

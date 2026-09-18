@@ -157,6 +157,7 @@ CREATE TABLE machine_logs (
     event_type TEXT NOT NULL,
     message TEXT NOT NULL,
     transaction_id UUID REFERENCES sales_transactions(id) ON DELETE SET NULL,
+    tr_number TEXT,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -169,18 +170,18 @@ CREATE OR REPLACE FUNCTION log_sales_transaction_event()
 RETURNS TRIGGER AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        INSERT INTO machine_logs (level, source, event_type, message, transaction_id, metadata)
+        INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
         VALUES ('INFO', 'DATABASE', 'TRANSACTION_RESERVED',
-                'Transaction reserved for dispensing', NEW.id,
+                'Transaction reserved for dispensing', NEW.id, NEW.tr_number,
                 jsonb_build_object('status', NEW.status, 'credit_received_cents', NEW.credit_received_cents));
     ELSIF NEW.status IS DISTINCT FROM OLD.status THEN
-        INSERT INTO machine_logs (level, source, event_type, message, transaction_id, metadata)
+        INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
         VALUES (
             CASE WHEN NEW.status LIKE 'FAILED%' THEN 'ERROR' ELSE 'INFO' END,
             'DATABASE',
             'TRANSACTION_STATUS_CHANGED',
             'Transaction status changed from ' || OLD.status || ' to ' || NEW.status,
-            NEW.id,
+            NEW.id, NEW.tr_number,
             jsonb_build_object('old_status', OLD.status, 'new_status', NEW.status,
                                'failure_reason', NEW.failure_reason,
                                'change_paid_cents', NEW.change_paid_cents)

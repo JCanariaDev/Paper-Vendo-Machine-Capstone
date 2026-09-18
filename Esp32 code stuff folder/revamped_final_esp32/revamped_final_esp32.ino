@@ -407,7 +407,19 @@ bool callRpc(const char* functionName, JsonDocument &request, DynamicJsonDocumen
   http.end();
   if (code < 200 || code >= 300) {
     Serial.printf("RPC %s failed: %d %s\n", functionName, code, payload.c_str());
-    sendError("DATABASE_REJECTED");
+    // Forward the database's actual reason to the Mega instead of hiding it
+    // behind a generic error. This is especially useful for paper stock and
+    // compartment assignment failures.
+    String reason = "HTTP_" + String(code);
+    DynamicJsonDocument errorDoc(768);
+    if (deserializeJson(errorDoc, payload) == DeserializationError::Ok &&
+        !errorDoc["message"].isNull()) {
+      reason = errorDoc["message"].as<String>();
+    }
+    reason.replace(':', '-');
+    reason.replace('\n', ' ');
+    if (reason.length() > 90) reason = reason.substring(0, 90);
+    sendError("DATABASE_REJECTED:" + reason);
     return false;
   }
   if (payload.length() == 0) {

@@ -40,7 +40,7 @@ export default function Logs() {
 
   const filteredLogs = useMemo(() => logs.filter((log) => {
     if (level !== 'all' && log.level !== level) return false;
-    const searchable = [log.source, log.event_type, log.message, log.transaction_id]
+    const searchable = [log.source, log.event_type, log.message, log.tr_number, log.transaction_id]
       .filter(Boolean).join(' ').toLowerCase();
     return searchable.includes(search.toLowerCase());
   }), [logs, level, search]);
@@ -94,7 +94,7 @@ export default function Logs() {
                     <span>{log.source}</span><span>•</span><span>{log.event_type}</span>
                   </div>
                   <p className="mt-1 text-sm font-semibold text-slate-800 dark:text-white">{log.message}</p>
-                  {log.transaction_id && <p className="mt-1 text-xs font-mono text-slate-400 truncate">Transaction: {log.transaction_id}</p>}
+                  {log.tr_number && <p className="mt-1 text-xs font-bold text-slate-400">{log.tr_number}</p>}
                 </div>
                 <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 whitespace-nowrap"><Calendar className="w-3.5 h-3.5" />{new Date(log.created_at).toLocaleString()}</span>
               </div>
