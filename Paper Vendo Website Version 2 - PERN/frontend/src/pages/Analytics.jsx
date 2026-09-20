@@ -179,6 +179,7 @@ const buildProductBoxes = (productBreakdown = []) => {
 export default function Analytics() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [activeProductTab, setActiveProductTab] = useState('paper');
   const [error, setError] = useState('');
 
   const fetchAnalytics = async () => {
@@ -227,7 +228,7 @@ export default function Analytics() {
   const { paperBoxes, penBoxes } = buildProductBoxes(productBreakdown);
 
   // Fixed product groups keep paper sizes separate instead of averaging mixed sizes.
-  const productBoxes = [...paperBoxes, ...penBoxes];
+  const productBoxes = activeProductTab === 'paper' ? paperBoxes : penBoxes;
 
   return (
     <div className="space-y-10 max-w-7xl mx-auto font-sans">
@@ -297,7 +298,7 @@ export default function Analytics() {
       </div>
 
       {/* Main Aggregated Graphs */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 items-start lg:grid-cols-3 gap-6">
         
         {/* Peak Hours Area Chart */}
         <div className="lg:col-span-2 p-6 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm flex flex-col justify-between">
@@ -342,8 +343,19 @@ export default function Analytics() {
           </div>
         </div>
 
-        {/* Product Sales Boxes */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
+        {/* Product Sales Tabs */}
+        <div className="h-[420px] min-h-0 overflow-hidden rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 dark:border-white/[0.06]">
+            <div>
+              <h3 className="font-display font-bold text-base text-slate-800 dark:text-white">Product Sales</h3>
+              <p className="mt-0.5 text-xs text-slate-400">View paper and ballpen performance.</p>
+            </div>
+            <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-900/60">
+              <button type="button" onClick={() => setActiveProductTab('paper')} className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${activeProductTab === 'paper' ? 'bg-white text-primary-600 shadow-sm dark:bg-[#253149] dark:text-white' : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white'}`}>Paper</button>
+              <button type="button" onClick={() => setActiveProductTab('pen')} className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${activeProductTab === 'pen' ? 'bg-white text-primary-600 shadow-sm dark:bg-[#253149] dark:text-white' : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white'}`}>Ballpens</button>
+            </div>
+          </div>
+          <div className="h-[350px] space-y-4 overflow-y-auto p-4 pr-3">
           {productBoxes.map((box) => {
             const isPaperBox = Boolean(box.rows);
             const total = isPaperBox ? box.total : box;
@@ -392,7 +404,7 @@ export default function Analytics() {
               </div>
             );
           })}
-
+          </div>
         </div>
 
       </div>
