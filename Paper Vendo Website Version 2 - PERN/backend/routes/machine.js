@@ -418,11 +418,11 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     try {
       const { data, error } = await supabase
         .from('machine_options')
-        .select('id, minimum_credits, maximum_credits, minimum_ballpens_per_transaction, updated_at')
+        .select('id, minimum_credits, maximum_credits, minimum_ballpens_per_transaction, maximum_ballpens_per_transaction, updated_at')
         .eq('id', 1)
         .maybeSingle();
       if (error) throw error;
-      return res.status(200).json(data || { id: 1, minimum_credits: 1, maximum_credits: 30, minimum_ballpens_per_transaction: 1 });
+      return res.status(200).json(data || { id: 1, minimum_credits: 1, maximum_credits: 30, minimum_ballpens_per_transaction: 1, maximum_ballpens_per_transaction: 5 });
     } catch (err) {
       console.error('Error fetching machine options:', err);
       return res.status(500).json({ message: 'Failed to retrieve machine options.' });
@@ -433,8 +433,9 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     const minimumCredits = asInt(req.body.minimum_credits, 1);
     const maximumCredits = asInt(req.body.maximum_credits, 30);
     const minimumBallpens = asInt(req.body.minimum_ballpens_per_transaction, 1);
-    if (minimumCredits < 0 || maximumCredits < minimumCredits || maximumCredits > 10000 || minimumBallpens < 1 || minimumBallpens > 5) {
-      return res.status(400).json({ message: 'Credits must be between 0 and 10,000, and ballpens per transaction must be between 1 and 5.' });
+    const maximumBallpens = asInt(req.body.maximum_ballpens_per_transaction, 5);
+    if (minimumCredits < 0 || maximumCredits < minimumCredits || maximumCredits > 10000 || minimumBallpens < 1 || maximumBallpens < minimumBallpens || maximumBallpens > 5) {
+      return res.status(400).json({ message: 'Credits must be between 0 and 10,000, and ballpen limits must be between 1 and 5 with minimum no greater than maximum.' });
     }
     try {
       const { data, error } = await supabase
@@ -444,10 +445,11 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
           minimum_credits: minimumCredits,
           maximum_credits: maximumCredits,
           minimum_ballpens_per_transaction: minimumBallpens,
+          maximum_ballpens_per_transaction: maximumBallpens,
           updated_at: new Date().toISOString(),
           updated_by: req.user.id
         }, { onConflict: 'id' })
-        .select('id, minimum_credits, maximum_credits, minimum_ballpens_per_transaction, updated_at')
+        .select('id, minimum_credits, maximum_credits, minimum_ballpens_per_transaction, maximum_ballpens_per_transaction, updated_at')
         .single();
       if (error) throw error;
       return res.status(200).json({ message: 'Machine options saved.', options: data });

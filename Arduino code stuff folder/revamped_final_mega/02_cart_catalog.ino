@@ -45,7 +45,7 @@ void removeFromCart(int index) {
 }
 
 void addToCart(String type, int id, const char* name, float price, int qty) {
-  if (type == "pen" && ballpenCartQuantity() + qty > MAX_BALLPENS_PER_TRANSACTION) {
+  if (type == "pen" && ballpenCartQuantity() + qty > maximumBallpensPerTransaction) {
     return;
   }
   for (int i = 0; i < cartCount; i++) {

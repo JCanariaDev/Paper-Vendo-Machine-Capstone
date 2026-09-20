@@ -26,7 +26,7 @@ const char* NETWORK_CONFIG_TOKEN = "Pv2C03l9X3ilSi9b3SkFhi9fc6mFz2Co3GbmGh1gWX4=
 String lastNetworkConfigVersion = "";
 unsigned long lastNetworkConfigCheck = 0;
 const unsigned long NETWORK_CONFIG_CHECK_INTERVAL = 30000;
-const int MAX_BALLPENS_PER_TRANSACTION = 5;
+int maximumBallpensPerTransaction = 5;
 
 // --- SUPABASE CONFIG ---
 const char* SUPABASE_URL = "https://jowpzdynbdeznuvohrpx.supabase.co";
@@ -508,7 +508,7 @@ void syncLiveCatalogToMega() {
   }
 
   // 3. Fetch machine-wide operating options for the Mega.
-  url = String(SUPABASE_URL) + "/rest/v1/machine_options?id=eq.1&select=minimum_credits,maximum_credits,minimum_ballpens_per_transaction";
+  url = String(SUPABASE_URL) + "/rest/v1/machine_options?id=eq.1&select=minimum_credits,maximum_credits,minimum_ballpens_per_transaction,maximum_ballpens_per_transaction";
   if (http.begin(client, url)) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
@@ -518,9 +518,11 @@ void syncLiveCatalogToMega() {
       if (deserializeJson(optionsDoc, http.getString()) == DeserializationError::Ok &&
           optionsDoc.as<JsonArray>().size() > 0) {
         JsonObject options = optionsDoc[0];
+        maximumBallpensPerTransaction = constrain(options["maximum_ballpens_per_transaction"] | 5, 1, 5);
         MEGA_SERIAL.println("OPTIONS:" + String(options["minimum_credits"] | 1) + ":" +
                             String(options["maximum_credits"] | 30) + ":" +
-                            String(options["minimum_ballpens_per_transaction"] | 1));
+                            String(options["minimum_ballpens_per_transaction"] | 1) + ":" +
+                            String(maximumBallpensPerTransaction));
       }
     }
     http.end();
@@ -561,8 +563,8 @@ void reserveCart(const String &message) {
     const int comma2 = encoded.indexOf(',', comma1 + 1);
     if (encoded.substring(0, comma1) == "pen") {
       ballpenUnits += encoded.substring(comma2 + 1).toInt();
-      if (ballpenUnits > MAX_BALLPENS_PER_TRANSACTION) {
-        sendError("MAX_5_BALLPENS");
+      if (ballpenUnits > maximumBallpensPerTransaction) {
+        sendError("MAX_BALLPENS");
         return;
       }
     }

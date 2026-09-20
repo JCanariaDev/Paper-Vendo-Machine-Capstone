@@ -95,8 +95,8 @@ void handleCatalogTouch(int x, int y) {
       }
 
       if (activeCatalogType == "pen" &&
-          ballpenCartQuantity() + ballpenPendingQuantity() >= MAX_BALLPENS_PER_TRANSACTION) {
-        tftUiShowError("Max 5 ballpens");
+          ballpenCartQuantity() + ballpenPendingQuantity() >= maximumBallpensPerTransaction) {
+        tftUiShowError("Max " + String(maximumBallpensPerTransaction) + " ballpens");
         return;
       }
 

@@ -215,12 +215,13 @@ CREATE TABLE machine_options (
     minimum_credits INTEGER NOT NULL DEFAULT 1 CHECK (minimum_credits >= 0),
     maximum_credits INTEGER NOT NULL DEFAULT 30 CHECK (maximum_credits >= minimum_credits),
     minimum_ballpens_per_transaction INTEGER NOT NULL DEFAULT 1 CHECK (minimum_ballpens_per_transaction >= 1),
+    maximum_ballpens_per_transaction INTEGER NOT NULL DEFAULT 5 CHECK (maximum_ballpens_per_transaction >= minimum_ballpens_per_transaction AND maximum_ballpens_per_transaction <= 5),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_by INTEGER REFERENCES admins(id)
 );
 
-INSERT INTO machine_options (id, minimum_credits, maximum_credits, minimum_ballpens_per_transaction)
-VALUES (1, 1, 30, 1);
+INSERT INTO machine_options (id, minimum_credits, maximum_credits, minimum_ballpens_per_transaction, maximum_ballpens_per_transaction)
+VALUES (1, 1, 30, 1, 5);
 GRANT SELECT, UPDATE ON machine_options TO anon, authenticated, service_role;
 
 CREATE INDEX idx_revamped_tx_created ON sales_transactions(created_at DESC);
@@ -320,6 +321,7 @@ DECLARE
     v_available INTEGER;
     v_subtotal INTEGER := 0;
     v_pen_units INTEGER := 0;
+    v_max_ballpens INTEGER := 5;
     v_change INTEGER;
     v_remaining INTEGER;
     v_coin RECORD;
@@ -329,6 +331,11 @@ DECLARE
     v_tx UUID := gen_random_uuid();
     v_tr_number TEXT;
 BEGIN
+    SELECT COALESCE(maximum_ballpens_per_transaction, 5)
+      INTO v_max_ballpens
+      FROM machine_options
+     WHERE id = 1;
+
     IF p_credit_cents <= 0 OR jsonb_typeof(p_lines) <> 'array' OR jsonb_array_length(p_lines) = 0 THEN
         RAISE EXCEPTION 'A positive credit and at least one cart line are required';
     END IF;
@@ -362,8 +369,8 @@ BEGIN
             v_qty := v_units * v_sheets;
         ELSE
             v_pen_units := v_pen_units + v_units;
-            IF v_pen_units > 5 THEN
-                RAISE EXCEPTION 'A maximum of 5 ballpens can be purchased per transaction';
+            IF v_pen_units > v_max_ballpens THEN
+                RAISE EXCEPTION 'A maximum of % ballpens can be purchased per transaction', v_max_ballpens;
             END IF;
             -- Pen validation by exact piece count in compartment
             SELECT p.cost_per_unit_cents, 1, p.item_name, NULL::TEXT, c.dispenser_channel,

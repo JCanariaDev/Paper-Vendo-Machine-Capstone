@@ -2,8 +2,8 @@
 // Split from revamped_final_mega.ino for readability.
 
 void startOrder() {
-  if (ballpenCartQuantity() > MAX_BALLPENS_PER_TRANSACTION) {
-    tftUiShowError("Max 5 ballpens");
+  if (ballpenCartQuantity() > maximumBallpensPerTransaction) {
+    tftUiShowError("Max " + String(maximumBallpensPerTransaction) + " ballpens");
     return;
   }
   if (ballpenCartQuantity() > 0 && ballpenCartQuantity() < minimumBallpensPerTransaction) {

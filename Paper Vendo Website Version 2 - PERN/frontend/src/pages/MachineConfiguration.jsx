@@ -7,7 +7,7 @@ export default function MachineConfiguration() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [config, setConfig] = useState(null);
-  const [options, setOptions] = useState({ minimum_credits: 1, maximum_credits: 30, minimum_ballpens_per_transaction: 1 });
+  const [options, setOptions] = useState({ minimum_credits: 1, maximum_credits: 30, minimum_ballpens_per_transaction: 1, maximum_ballpens_per_transaction: 5 });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [optionsSaving, setOptionsSaving] = useState(false);
@@ -22,7 +22,7 @@ export default function MachineConfiguration() {
       ]);
       setConfig(networkResponse.data.config);
       setSsid(networkResponse.data.config?.ssid || '');
-      setOptions(optionsResponse.data || { minimum_credits: 1, maximum_credits: 30, minimum_ballpens_per_transaction: 1 });
+      setOptions(optionsResponse.data || { minimum_credits: 1, maximum_credits: 30, minimum_ballpens_per_transaction: 1, maximum_ballpens_per_transaction: 5 });
     } catch (err) {
       setError(err.response?.data?.message || 'Could not retrieve the network configuration.');
     } finally {
@@ -148,11 +148,17 @@ export default function MachineConfiguration() {
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-white/[0.08] dark:bg-white/[0.02]">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Ballpen configuration</h3>
-            <label className="mt-3 block max-w-sm">
-              <span className="mb-1.5 block text-xs font-semibold text-slate-500">Minimum ballpens per transaction</span>
-              <input type="number" min="1" max="5" value={options.minimum_ballpens_per_transaction} onChange={(event) => setOptions({ ...options, minimum_ballpens_per_transaction: Number(event.target.value) })} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-800 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-white" />
-              <span className="mt-1 block text-xs text-slate-400">Applies only when ballpens are included; the maximum remains 5.</span>
-            </label>
+            <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold text-slate-500">Minimum ballpens per transaction</span>
+                <input type="number" min="1" max={options.maximum_ballpens_per_transaction || 5} value={options.minimum_ballpens_per_transaction} onChange={(event) => setOptions({ ...options, minimum_ballpens_per_transaction: Number(event.target.value) })} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-800 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-white" />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold text-slate-500">Maximum ballpens per transaction</span>
+                <input type="number" min={options.minimum_ballpens_per_transaction || 1} max="5" value={options.maximum_ballpens_per_transaction} onChange={(event) => setOptions({ ...options, maximum_ballpens_per_transaction: Number(event.target.value) })} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-800 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-white" />
+              </label>
+            </div>
+            <span className="mt-2 block text-xs text-slate-400">Ballpen limits apply only when ballpens are included. The default maximum is 5.</span>
           </div>
           <button type="submit" disabled={optionsSaving} className="inline-flex items-center gap-2 rounded-xl bg-primary-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-primary-500/20 transition hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-60">
             {optionsSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}

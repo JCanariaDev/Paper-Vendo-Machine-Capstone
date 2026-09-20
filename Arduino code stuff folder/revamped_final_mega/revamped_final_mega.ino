@@ -110,6 +110,7 @@ XPT2046_Touchscreen ts(TOUCH_CS);
 volatile uint16_t credits = 0;
 volatile uint16_t minimumCreditsToStart = 1;
 volatile uint16_t minimumBallpensPerTransaction = 1;
+volatile uint16_t maximumBallpensPerTransaction = 5;
 volatile bool coinPulseReceived = false;
 bool isProcessing = false;
 String activeTransactionId = "";
@@ -204,7 +205,6 @@ CatalogItem paperCatalog[PAPER_COUNT] = {
 };
 
 const int BALLPEN_COUNT = 1;
-const int MAX_BALLPENS_PER_TRANSACTION = 5;
 CatalogItem ballpenCatalog[BALLPEN_COUNT] = {
   {1, "Pen Slot 1", 5.00, true, 0, 1, true}
 };
