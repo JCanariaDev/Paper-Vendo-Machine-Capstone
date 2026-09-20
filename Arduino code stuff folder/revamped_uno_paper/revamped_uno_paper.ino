@@ -31,6 +31,9 @@
   ==============================================================================
 */
 
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
 const int MOTOR_COUNT = 2;
 
 // Motor Pin Assignments (TMC2209 Step/Dir Mode)
@@ -46,11 +49,23 @@ const int PAPER_LEVEL_SENSOR_PINS[MOTOR_COUNT] = { 6, 7 };
 const int PAPER_LEVEL_HIGH_LEVEL = LOW;
 const unsigned long PAPER_EXIT_TIMEOUT_MS = 2500;
 const unsigned long PAPER_EXIT_CLEAR_TIMEOUT_MS = 1000;
+const uint8_t PAPER_LCD_ADDRESS = 0x27;
+const uint8_t PAPER_LCD_COLUMNS = 16;
+const uint8_t PAPER_LCD_ROWS = 2;
 
 const unsigned int STEP_PULSE_DELAY_US = 900;
 const int STEPS_PER_SHEET = 400; // Calibrated steps for 1 sheet feed
 int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
+LiquidCrystal_I2C paperLcd(PAPER_LCD_ADDRESS, PAPER_LCD_COLUMNS, PAPER_LCD_ROWS);
+
+void showPaperLcd(const String &line1, const String &line2 = "") {
+  paperLcd.clear();
+  paperLcd.setCursor(0, 0);
+  paperLcd.print(line1.substring(0, PAPER_LCD_COLUMNS));
+  paperLcd.setCursor(0, 1);
+  paperLcd.print(line2.substring(0, PAPER_LCD_COLUMNS));
+}
 
 void sendStatus();
 
@@ -130,7 +145,7 @@ void syncPaperStock(int bayNum, int padStock, int unitSheets) {
 }
 
 // Dispenses sheet-by-sheet and confirms each sheet at the exit IR sensor.
-void dispensePaper(int bayNum, int requestedSheets) {
+void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
   int idx = bayNum - 1;
   if (idx < 0 || idx >= MOTOR_COUNT) {
     Serial.println("ERR:BAD_BAY");
@@ -139,9 +154,12 @@ void dispensePaper(int bayNum, int requestedSheets) {
 
   // 1. Pre-check the software stock synchronized from the database.
   if (!paperBayHasStock(idx)) {
+    showPaperLcd("Paper unavailable", paperName);
     Serial.println("EMPTY:" + String(bayNum));
     return;
   }
+
+  showPaperLcd("Dispensing", paperName);
 
   enableDrivers();
   digitalWrite(DIR_PINS[idx], HIGH); // Forward feed
@@ -155,6 +173,7 @@ void dispensePaper(int bayNum, int requestedSheets) {
 
     if (!waitForPaperExit(idx)) {
       disableDrivers();
+      showPaperLcd("Paper error", paperName);
       Serial.println("EMPTY:" + String(bayNum) + ":" + String(sheetsDispensed));
       sendStatus();
       return;
@@ -170,6 +189,7 @@ void dispensePaper(int bayNum, int requestedSheets) {
     paperPadStock[idx] = max(0, paperPadStock[idx] - padsUsed);
   }
   Serial.println("DONE:" + String(bayNum) + ":" + String(sheetsDispensed));
+  showPaperLcd("Dispense done", paperName);
   sendStatus();
 }
 
@@ -196,8 +216,11 @@ void handleCommand(String cmd) {
     int second = cmd.indexOf(':', first + 1);
     if (first > 0 && second > first) {
       int bay = cmd.substring(first + 1, second).toInt();
-      int count = cmd.substring(second + 1).toInt();
-      dispensePaper(bay, count);
+      int third = cmd.indexOf(':', second + 1);
+      int count = (third < 0) ? cmd.substring(second + 1).toInt() : cmd.substring(second + 1, third).toInt();
+      String paperName = (third < 0) ? "Paper" : cmd.substring(third + 1);
+      paperName.trim();
+      dispensePaper(bay, count, paperName);
     }
   }
   else if (cmd.startsWith("STOCK:")) {
@@ -229,6 +252,10 @@ void handleCommand(String cmd) {
 
 void setup() {
   Serial.begin(9600); // UART Serial to Mega
+  Wire.begin();
+  paperLcd.init();
+  paperLcd.backlight();
+  showPaperLcd("Paper dispenser", "Ready");
 
   pinMode(ENABLE_PIN, OUTPUT);
   disableDrivers(); // Start with motors disabled

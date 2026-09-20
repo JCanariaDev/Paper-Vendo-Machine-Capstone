@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Calendar, Info, Search } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 const currency = (value) => `PHP ${Number(value || 0).toFixed(2)}`;
 
 export default function Transactions() {
+  const navigate = useNavigate();
   const [sales, setSales] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -92,7 +94,16 @@ export default function Transactions() {
                   )}
                 </td>
                 <td className={`py-4 px-4 text-center text-xs font-bold ${statusClass}`}>
-                  {line.status === 'COMPLETED_CHANGE_OWED' ? 'CHANGE OWED' : line.status}
+                  {line.status?.startsWith('FAILED') ? (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/logs?transaction=${encodeURIComponent(line.tr_number || '')}`)}
+                      className="underline decoration-dotted underline-offset-4 hover:text-red-700 dark:hover:text-red-300"
+                      title="Open related machine logs"
+                    >
+                      {line.status}
+                    </button>
+                  ) : (line.status === 'COMPLETED_CHANGE_OWED' ? 'CHANGE OWED' : line.status)}
                 </td>
                 <td className="py-4 px-4 text-right text-xs text-slate-500 font-semibold"><span className="inline-flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5" />{new Date(line.transaction_date).toLocaleString()}</span></td>
               </tr>;

@@ -51,7 +51,7 @@ const int COIN_INHIBIT_PIN = 6; // Pin D6: Drives Coin Acceptor Relay
 // Pin D6 LOW  -> Relay LED ON  -> 12V CUT (Coin Acceptor Powered OFF / Rejects Coins)
 int coinRelayOnLevel  = HIGH;   // HIGH = Power ON
 int coinRelayOffLevel = LOW;    // LOW  = Power OFF (Cut at >= 30 credits)
-const uint16_t MAX_CREDITS_ALLOWED = 25; // Maximum allowed credits (PHP 30 cap)
+volatile uint16_t maximumCreditsAllowed = 30;
 volatile unsigned long ignoreCoinPulsesUntil = 0; // Anti-glitch surge filter on relay switching
 volatile bool coinAcceptorEnabled = true;         // Software gate for coin pulses
 // Option A: Delayed relay cutoff to capture all pulses from last inserted coin
@@ -108,6 +108,8 @@ XPT2046_Touchscreen ts(TOUCH_CS);
 
 // --- STATE ---
 volatile uint16_t credits = 0;
+volatile uint16_t minimumCreditsToStart = 1;
+volatile uint16_t minimumBallpenStockWarning = 5;
 volatile bool coinPulseReceived = false;
 bool isProcessing = false;
 String activeTransactionId = "";
@@ -159,7 +161,7 @@ void drawStatusScreen(String headline, String message);
 void refreshMachineAvailability(bool sound = false);
 int dispensePenFromUno(int channel, int quantity);
 void handleBallpenMessage(String msg);
-int dispensePaperFromUno(int bayNumber, int sheetCount);
+int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName);
 int releaseVerifiedChange(int changeCents);
 void handleCloudCommand(String msg);
 void handleUnoMessage(String msg);
@@ -177,6 +179,7 @@ void tftUiSetWifiConnected(bool connected);
 void drawWifiSpinnerFrame();
 void parsePaperBay(String msg);
 void parsePenBay(String msg);
+void parseMachineOptions(String msg);
 void runDiagnostics();
 void printHardwareStatus();
 void executeDispensePlan(String message);
@@ -383,8 +386,8 @@ void loop() {
     pendingCoinAcceptorOff = false;  // Clear the flag
     interrupts();
     setCoinAcceptance(false);
-    Serial.println("MAX CREDIT CAP (P" + String(MAX_CREDITS_ALLOWED) + ") REACHED: Coin acceptor relay turned OFF (Power Cut). Final credits: P" + String((unsigned int)creditSnapshot));
-    tftUiShowError("Max P30 credit reached");
+    Serial.println("MAX CREDIT CAP (P" + String(maximumCreditsAllowed) + ") REACHED: Coin acceptor relay turned OFF (Power Cut). Final credits: P" + String((unsigned int)creditSnapshot));
+    tftUiShowError("Max P" + String(maximumCreditsAllowed) + " credit reached");
   }
 
   if (creditSnapshot != lastCredits) {
@@ -395,7 +398,7 @@ void loop() {
     Serial.println("Credits inserted! Total: P" + String((unsigned int)creditSnapshot));
 
     // Re-enable coin acceptor after each credit update (no WiFi dependency)
-    if (creditSnapshot < MAX_CREDITS_ALLOWED && !pendingOff && !orderInProgress && uiWifiConnected) {
+    if (creditSnapshot < maximumCreditsAllowed && !pendingOff && !orderInProgress && uiWifiConnected) {
       setCoinAcceptance(true);
     }
   }
@@ -437,7 +440,7 @@ void loop() {
       int tmp = coinRelayOnLevel;
       coinRelayOnLevel = coinRelayOffLevel;
       coinRelayOffLevel = tmp;
-      setCoinAcceptance(credits < MAX_CREDITS_ALLOWED);
+      setCoinAcceptance(credits < maximumCreditsAllowed);
       Serial.print("COIN RELAY POLARITY FLIPPED. ON level is now = ");
       Serial.println(coinRelayOnLevel == HIGH ? "HIGH (5V)" : "LOW (0V)");
     } else if (cmd == "COIN 1") {

@@ -105,7 +105,8 @@ void executeDispensePlan(String message) {
 
     if (type == "paper") {
       // Delegate paper dispense to Arduino Uno.
-      actualOutput = dispensePaperFromUno(channel, expectedOutput);
+      actualOutput = dispensePaperFromUno(channel, expectedOutput,
+                                           paperCatalog[channel - 1].name);
     } else {
       // Delegate ballpen dispense to the dedicated Ballpen Uno.
       actualOutput = dispensePenFromUno(channel, expectedOutput);
@@ -193,6 +194,7 @@ void handleCloudCommand(String msg) {
   // -- Dynamic catalog sync from ESP32 --------------------------
   else if (msg.startsWith("PAPER_BAY:")) parsePaperBay(msg);
   else if (msg.startsWith("PEN_BAY:"))   parsePenBay(msg);
+  else if (msg.startsWith("OPTIONS:"))   parseMachineOptions(msg);
   // -------------------------------------------------------------
   else if (msg.startsWith("WIFI:")) {
     bool connected = msg.substring(5) == "1";

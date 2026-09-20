@@ -34,7 +34,7 @@ void refreshMachineAvailability(bool sound) {
 }
 
 void setCoinAcceptance(bool allowed) {
-  if (credits >= MAX_CREDITS_ALLOWED) {
+  if (credits >= maximumCreditsAllowed) {
     allowed = false;
   }
   int targetLevel = allowed ? coinRelayOnLevel : coinRelayOffLevel;
@@ -65,7 +65,7 @@ void coinInterrupt() {
     lastCoinBurstTime = now;  // Track when the last pulse arrived
     lastPulse = now;
 
-    if (credits >= MAX_CREDITS_ALLOWED) {
+    if (credits >= maximumCreditsAllowed) {
       // Option A: Do NOT cut relay here.
       // Queue the cutoff and let loop() fire it only after 350ms of silence,
       // so all remaining pulses of the current coin are fully counted first.

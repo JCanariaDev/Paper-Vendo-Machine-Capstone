@@ -346,6 +346,7 @@ void updateStatusKey(const String &key, const String &value) {
     }
     http.end();
   }
+
 }
 
 void handleCreditUpdate(String message) {
@@ -501,6 +502,25 @@ void syncLiveCatalogToMega() {
         // Format: PEN_BAY:<bay_num>:<prod_id>:<stock>:<price_cents>:<name>
         MEGA_SERIAL.println("PEN_BAY:" + String(bayNum) + ":" + String(prodId) + ":" + String(stock) + ":" + String(price) + ":" + name);
         delay(30);
+      }
+    }
+    http.end();
+  }
+
+  // 3. Fetch machine-wide operating options for the Mega.
+  url = String(SUPABASE_URL) + "/rest/v1/machine_options?id=eq.1&select=minimum_credits,maximum_credits,minimum_ballpen_stock";
+  if (http.begin(client, url)) {
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    int code = http.GET();
+    if (code == 200) {
+      DynamicJsonDocument optionsDoc(512);
+      if (deserializeJson(optionsDoc, http.getString()) == DeserializationError::Ok &&
+          optionsDoc.as<JsonArray>().size() > 0) {
+        JsonObject options = optionsDoc[0];
+        MEGA_SERIAL.println("OPTIONS:" + String(options["minimum_credits"] | 1) + ":" +
+                            String(options["maximum_credits"] | 30) + ":" +
+                            String(options["minimum_ballpen_stock"] | 5));
       }
     }
     http.end();
@@ -799,6 +819,7 @@ void loop() {
 
   if (wifiConnected && millis() - lastStatusUpdate > statusInterval) {
     updateMachineStatus();
+    syncLiveCatalogToMega();
     lastStatusUpdate = millis();
   }
 

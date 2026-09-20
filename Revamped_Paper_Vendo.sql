@@ -16,6 +16,7 @@ DROP TABLE IF EXISTS ballpen_compartments CASCADE;
 DROP TABLE IF EXISTS ballpen_inventory CASCADE;
 DROP TABLE IF EXISTS machine_status CASCADE;
 DROP TABLE IF EXISTS machine_online_status CASCADE;
+DROP TABLE IF EXISTS machine_options CASCADE;
 DROP TABLE IF EXISTS admins CASCADE;
 
 -- Drop all existing RPC functions so signature changes are applied cleanly
@@ -208,6 +209,19 @@ CREATE TABLE machine_online_status (
     last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE machine_options (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    minimum_credits INTEGER NOT NULL DEFAULT 1 CHECK (minimum_credits >= 0),
+    maximum_credits INTEGER NOT NULL DEFAULT 30 CHECK (maximum_credits >= minimum_credits),
+    minimum_ballpen_stock INTEGER NOT NULL DEFAULT 5 CHECK (minimum_ballpen_stock >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by INTEGER REFERENCES admins(id)
+);
+
+INSERT INTO machine_options (id, minimum_credits, maximum_credits, minimum_ballpen_stock)
+VALUES (1, 1, 30, 5);
+GRANT SELECT, UPDATE ON machine_options TO anon, authenticated, service_role;
 
 CREATE INDEX idx_revamped_tx_created ON sales_transactions(created_at DESC);
 CREATE INDEX idx_revamped_tx_lines ON sales_transaction_lines(item_type, product_id);
@@ -522,7 +536,16 @@ BEGIN
              WHERE dispenser_channel = v_line.physical_channel;
         END IF;
         
-        IF v_actual <> v_line.qty_requested THEN v_all_success := FALSE; END IF;
+        IF v_actual <> v_line.qty_requested THEN
+            v_all_success := FALSE;
+            IF v_reason IS NULL THEN
+                v_reason := CASE v_line.item_type
+                    WHEN 'paper' THEN 'Paper Bay ' || v_line.physical_channel || ' failed to confirm the requested paper output'
+                    WHEN 'pen' THEN 'Ballpen Uno / Bay ' || v_line.physical_channel || ' failed to confirm the requested pen output'
+                    ELSE 'Unknown dispenser failed to confirm the requested output'
+                END;
+            END IF;
+        END IF;
     END LOOP;
 
     -- Adjust change inventory (deduct actually released coins, free unused reservations)
@@ -536,7 +559,7 @@ BEGIN
 
     IF NOT v_all_success THEN
         v_final_status := 'FAILED_DISPENSE';
-        v_reason := 'Physical dispense sensor did not confirm all requested output';
+        v_reason := COALESCE(v_reason, 'Physical dispense sensor did not confirm all requested output');
     ELSIF v_paid < v_tx.change_due_cents THEN
         v_final_status := 'COMPLETED_CHANGE_OWED';
         v_reason := 'Unreleased change of PHP ' || TO_CHAR((v_tx.change_due_cents - v_paid) / 100.0, 'FM999,990.00') || ' owed to student';

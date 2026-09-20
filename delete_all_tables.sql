@@ -14,6 +14,7 @@ DROP TABLE IF EXISTS ballpen_compartments CASCADE;
 DROP TABLE IF EXISTS ballpen_inventory CASCADE;
 DROP TABLE IF EXISTS machine_status CASCADE;
 DROP TABLE IF EXISTS machine_online_status CASCADE;
+DROP TABLE IF EXISTS machine_options CASCADE;
 DROP TABLE IF EXISTS machine_logs CASCADE;
 DROP TABLE IF EXISTS machine_network_config CASCADE;
 DROP TABLE IF EXISTS admins CASCADE;

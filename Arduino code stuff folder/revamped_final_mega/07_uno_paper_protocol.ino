@@ -122,9 +122,25 @@ void handleUnoMessage(String msg) {
   }
 }
 
-int dispensePaperFromUno(int bayNumber, int sheetCount) {
+void parseMachineOptions(String msg) {
+  // Format: OPTIONS:<minimum_credits>:<maximum_credits>:<minimum_ballpen_stock>
+  int first = msg.indexOf(':');
+  int second = msg.indexOf(':', first + 1);
+  int third = msg.indexOf(':', second + 1);
+  if (first < 0 || second < 0 || third < 0) return;
+  minimumCreditsToStart = constrain(msg.substring(first + 1, second).toInt(), 0, 10000);
+  maximumCreditsAllowed = constrain(msg.substring(second + 1, third).toInt(), minimumCreditsToStart, 10000);
+  minimumBallpenStockWarning = constrain(msg.substring(third + 1).toInt(), 0, 10000);
+  Serial.print("Machine options synced: minimum credits=P");
+  Serial.print(minimumCreditsToStart);
+  Serial.print(", ballpen warning=");
+  Serial.println(minimumBallpenStockWarning);
+  tftUiSetCredits();
+}
+
+int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName) {
   if (bayNumber < 1 || bayNumber > PAPER_COUNT) return 0;
-  String command = "DISPENSE:" + String(bayNumber) + ":" + String(sheetCount);
+  String command = "DISPENSE:" + String(bayNumber) + ":" + String(sheetCount) + ":" + paperName;
   Serial.print("Paper Uno <- ");
   Serial.println(command);
   UNO_SERIAL.println(command);

@@ -12,7 +12,7 @@ void tftUiBegin() {
 }
 
 void tftUiSetCredits() {
-  bool hasCredits = credits > 0;
+  bool hasCredits = credits >= minimumCreditsToStart;
   if ((currentScreen == SCREEN_IDLE || currentScreen == SCREEN_RECEIPT) && hasCredits) {
     activeTrNumber = "";
     activeTransactionId = "";

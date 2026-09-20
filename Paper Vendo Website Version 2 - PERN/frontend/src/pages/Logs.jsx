@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { AlertCircle, Calendar, CheckCircle2, Info, RefreshCw, Search, ScrollText, TriangleAlert } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 
 const LEVEL_STYLES = {
   INFO: 'text-sky-500 bg-sky-50 border-sky-200 dark:bg-sky-950/30 dark:border-sky-800/40',
@@ -17,6 +18,7 @@ function LevelIcon({ level }) {
 }
 
 export default function Logs() {
+  const location = useLocation();
   const [logs, setLogs] = useState([]);
   const [level, setLevel] = useState('all');
   const [search, setSearch] = useState('');
@@ -37,6 +39,11 @@ export default function Logs() {
   };
 
   useEffect(() => { fetchLogs(); }, []);
+
+  useEffect(() => {
+    const transaction = new URLSearchParams(location.search).get('transaction');
+    if (transaction) setSearch(transaction);
+  }, [location.search]);
 
   const filteredLogs = useMemo(() => logs.filter((log) => {
     if (level !== 'all' && log.level !== level) return false;
@@ -94,6 +101,9 @@ export default function Logs() {
                     <span>{log.source}</span><span>•</span><span>{log.event_type}</span>
                   </div>
                   <p className="mt-1 text-sm font-semibold text-slate-800 dark:text-white">{log.message}</p>
+                  {log.metadata?.failure_reason && (
+                    <p className="mt-1 text-xs font-semibold text-red-500 dark:text-red-300">Cause: {log.metadata.failure_reason}</p>
+                  )}
                   {log.tr_number && <p className="mt-1 text-xs font-bold text-slate-400">{log.tr_number}</p>}
                 </div>
                 <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 whitespace-nowrap"><Calendar className="w-3.5 h-3.5" />{new Date(log.created_at).toLocaleString()}</span>

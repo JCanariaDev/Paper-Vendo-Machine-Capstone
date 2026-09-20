@@ -7,6 +7,7 @@ export default function MachineConfiguration() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [config, setConfig] = useState(null);
+  const [options, setOptions] = useState({ minimum_credits: 1, maximum_credits: 30, minimum_ballpen_stock: 5 });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -14,9 +15,13 @@ export default function MachineConfiguration() {
 
   const loadConfiguration = async () => {
     try {
-      const response = await axios.get('/api/machine/network-config');
-      setConfig(response.data.config);
-      setSsid(response.data.config?.ssid || '');
+      const [networkResponse, optionsResponse] = await Promise.all([
+        axios.get('/api/machine/network-config'),
+        axios.get('/api/machine/options')
+      ]);
+      setConfig(networkResponse.data.config);
+      setSsid(networkResponse.data.config?.ssid || '');
+      setOptions(optionsResponse.data || { minimum_credits: 1, maximum_credits: 30, minimum_ballpen_stock: 5 });
     } catch (err) {
       setError(err.response?.data?.message || 'Could not retrieve the network configuration.');
     } finally {
@@ -37,6 +42,8 @@ export default function MachineConfiguration() {
     try {
       const response = await axios.put('/api/machine/network-config', { ssid, password });
       setConfig(response.data.config);
+      const optionsResponse = await axios.put('/api/machine/options', options);
+      setOptions(optionsResponse.data.options);
       setPassword('');
       setMessage(response.data.message);
     } catch (err) {
@@ -103,6 +110,28 @@ export default function MachineConfiguration() {
             {saving ? 'Staging configuration…' : 'Stage network configuration'}
           </button>
         </form>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/[0.08] dark:bg-[#161F30]">
+        <div className="mb-5">
+          <h2 className="font-display text-lg font-bold text-slate-800 dark:text-white">Machine options</h2>
+          <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">These values are stored as machine-wide operating settings.</p>
+        </div>
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Minimum credits to start</span>
+            <input type="number" min="0" max="10000" value={options.minimum_credits} onChange={(event) => setOptions({ ...options, minimum_credits: Number(event.target.value) })} className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-800 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-white" />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Maximum credits per transaction</span>
+            <input type="number" min={options.minimum_credits} max="10000" value={options.maximum_credits} onChange={(event) => setOptions({ ...options, maximum_credits: Number(event.target.value) })} className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-800 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-white" />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Minimum ballpen stock warning</span>
+            <input type="number" min="0" max="10000" value={options.minimum_ballpen_stock} onChange={(event) => setOptions({ ...options, minimum_ballpen_stock: Number(event.target.value) })} className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-800 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-white" />
+          </label>
+        </div>
+        <p className="mt-4 text-xs text-slate-400">The ballpen value is a stock warning threshold, not a required purchase quantity.</p>
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-white/[0.08] dark:bg-[#161F30]">

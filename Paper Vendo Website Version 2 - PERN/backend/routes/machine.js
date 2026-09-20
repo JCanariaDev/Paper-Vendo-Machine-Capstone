@@ -414,6 +414,49 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     }
   });
 
+  router.get('/options', async (_req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('machine_options')
+        .select('id, minimum_credits, maximum_credits, minimum_ballpen_stock, updated_at')
+        .eq('id', 1)
+        .maybeSingle();
+      if (error) throw error;
+      return res.status(200).json(data || { id: 1, minimum_credits: 1, maximum_credits: 30, minimum_ballpen_stock: 5 });
+    } catch (err) {
+      console.error('Error fetching machine options:', err);
+      return res.status(500).json({ message: 'Failed to retrieve machine options.' });
+    }
+  });
+
+  router.put('/options', authorizeRoles('superadmin'), async (req, res) => {
+    const minimumCredits = asInt(req.body.minimum_credits, 1);
+    const maximumCredits = asInt(req.body.maximum_credits, 30);
+    const minimumBallpenStock = asInt(req.body.minimum_ballpen_stock, 5);
+    if (minimumCredits < 0 || maximumCredits < minimumCredits || maximumCredits > 10000 || minimumBallpenStock < 0 || minimumBallpenStock > 10000) {
+      return res.status(400).json({ message: 'Machine option values must be between 0 and 10,000.' });
+    }
+    try {
+      const { data, error } = await supabase
+        .from('machine_options')
+        .upsert({
+          id: 1,
+          minimum_credits: minimumCredits,
+          maximum_credits: maximumCredits,
+          minimum_ballpen_stock: minimumBallpenStock,
+          updated_at: new Date().toISOString(),
+          updated_by: req.user.id
+        }, { onConflict: 'id' })
+        .select('id, minimum_credits, maximum_credits, minimum_ballpen_stock, updated_at')
+        .single();
+      if (error) throw error;
+      return res.status(200).json({ message: 'Machine options saved.', options: data });
+    } catch (err) {
+      console.error('Error saving machine options:', err);
+      return res.status(500).json({ message: 'Failed to save machine options.' });
+    }
+  });
+
   // Wi-Fi credentials are staged here for a future device-configuration flow.
   // The password is encrypted before it reaches Supabase and is never returned.
   router.get('/network-config', authorizeRoles('superadmin'), async (_req, res) => {
