@@ -1,15 +1,69 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { Calendar, Info, Search } from 'lucide-react';
+import {
+  AlertCircle,
+  Calendar,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
+  Filter,
+  Info,
+  Search,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
+const PAGE_SIZE = 10;
 const currency = (value) => `PHP ${Number(value || 0).toFixed(2)}`;
+
+const dateKey = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const startOfWeek = (date) => {
+  const result = new Date(date);
+  const day = result.getDay();
+  const offset = day === 0 ? 6 : day - 1;
+  result.setHours(0, 0, 0, 0);
+  result.setDate(result.getDate() - offset);
+  return result;
+};
+
+const getDateLabel = (date) => {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+
+  if (dateKey(date) === dateKey(today)) return 'Today';
+  if (dateKey(date) === dateKey(yesterday)) return 'Yesterday';
+  return date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+};
+
+const statusDetails = (status) => {
+  if (status?.startsWith('FAILED')) return { label: status.replaceAll('_', ' '), tone: 'red', icon: AlertCircle };
+  if (status === 'COMPLETED_CHANGE_OWED') return { label: 'CHANGE OWED', tone: 'amber', icon: Clock3 };
+  if (status === 'COMPLETED') return { label: 'COMPLETED', tone: 'emerald', icon: CheckCircle2 };
+  return { label: status || 'PENDING', tone: 'slate', icon: Clock3 };
+};
+
+const statusTone = {
+  red: 'border-red-200 bg-red-50 text-red-600 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300',
+  amber: 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300',
+  emerald: 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300',
+  slate: 'border-slate-200 bg-slate-50 text-slate-500 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-slate-300',
+};
 
 export default function Transactions() {
   const navigate = useNavigate();
   const [sales, setSales] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [dateFilter, setDateFilter] = useState('all');
+  const [specificDate, setSpecificDate] = useState('');
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     axios.get('/api/machine/transactions')
@@ -18,99 +72,108 @@ export default function Transactions() {
       .finally(() => setLoading(false));
   }, []);
 
-  const filteredSales = sales.filter((item) => {
-    const searchable = [item.tr_number, item.transaction_id, item.item_type, item.product_name, item.paper_size, item.status, item.amount_paid, item.failure_reason]
-      .filter(Boolean).join(' ').toLowerCase();
-    return searchable.includes(searchQuery.toLowerCase());
-  });
+  const filteredSales = useMemo(() => {
+    const now = new Date();
+    const today = dateKey(now);
+    const weekStart = startOfWeek(now);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const query = searchQuery.trim().toLowerCase();
+
+    return sales.filter((item) => {
+      const transactionDate = new Date(item.transaction_date);
+      const searchable = [item.tr_number, item.transaction_id, item.item_type, item.product_name, item.paper_size, item.status, item.amount_paid, item.failure_reason]
+        .filter(Boolean).join(' ').toLowerCase();
+      const matchesSearch = !query || searchable.includes(query);
+      const transactionDay = dateKey(transactionDate);
+      const matchesDate = dateFilter === 'all'
+        || (dateFilter === 'today' && transactionDay === today)
+        || (dateFilter === 'week' && transactionDate >= weekStart)
+        || (dateFilter === 'month' && transactionDate >= monthStart)
+        || (dateFilter === 'day' && specificDate && transactionDay === specificDate);
+      return matchesSearch && matchesDate;
+    });
+  }, [dateFilter, sales, searchQuery, specificDate]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [dateFilter, searchQuery, specificDate]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredSales.length / PAGE_SIZE));
+  const visibleSales = filteredSales.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const groupedSales = visibleSales.reduce((groups, line) => {
+    const date = new Date(line.transaction_date);
+    const key = dateKey(date);
+    if (!groups[key]) groups[key] = { label: getDateLabel(date), items: [] };
+    groups[key].items.push(line);
+    return groups;
+  }, {});
+
+  const updateDateFilter = (value) => {
+    setDateFilter(value);
+    if (value !== 'day') setSpecificDate('');
+  };
 
   if (loading) {
     return <div className="flex h-[70vh] items-center justify-center"><div className="h-10 w-10 animate-spin rounded-full border-4 border-primary-200 border-t-primary-500" /></div>;
   }
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto font-sans">
+    <div className="mx-auto max-w-7xl space-y-8 font-sans">
       <div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-white border border-slate-200 dark:border-white/[0.08] p-2 shadow-sm">
-            <img src="/logo.png" alt="P&B V Machine Logo" className="w-full h-full object-contain" />
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-white p-2 shadow-sm dark:border-white/[0.08] dark:bg-[#161F30]"><img src="/logo.png" alt="P&B V Machine Logo" className="h-full w-full object-contain" /></div>
+          <h1 className="font-display text-3xl font-extrabold leading-tight text-slate-800 dark:text-white md:text-4xl">Sales History Logs</h1>
+        </div>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Verified transaction lines with TR Number receipts, physical-output records, and change tracking.</p>
+      </div>
+
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-1 flex-col gap-3 sm:flex-row">
+          <div className="relative flex-1 lg:max-w-xl">
+            <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"><Search className="h-5 w-5" /></span>
+            <input type="text" placeholder="Search TR No., product, status, or claims..." value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-11 pr-4 text-sm text-slate-800 outline-none transition-all focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-white" />
           </div>
-          <h1 className="font-display font-extrabold text-3xl md:text-4xl text-slate-800 dark:text-white leading-tight">Sales History Logs</h1>
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1 sm:flex-none">
+              <Filter className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary-500" />
+              <select value={dateFilter} onChange={(event) => updateDateFilter(event.target.value)} className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white pl-9 pr-9 text-sm font-semibold text-slate-700 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-white sm:w-40"><option value="all">All dates</option><option value="today">Today</option><option value="week">This week</option><option value="month">This month</option><option value="day">Specific day</option></select>
+            </div>
+            {dateFilter === 'day' && <input type="date" value={specificDate} onChange={(event) => setSpecificDate(event.target.value)} className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-white" aria-label="Choose a specific day" />}
+          </div>
         </div>
-        <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Verified transaction lines with TR Number receipts, physical-output records, and change tracking.</p>
+        <div className="flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-400 dark:border-white/[0.05] dark:bg-white/[0.01]"><Info className="h-4 w-4 text-primary-500" /><span>Showing {filteredSales.length} of {sales.length} lines</span></div>
       </div>
 
-      <div className="flex flex-col md:flex-row gap-4 justify-between items-stretch">
-        <div className="relative flex-1 max-w-md">
-          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"><Search className="w-5 h-5" /></span>
-          <input type="text" placeholder="Search TR No., product, status, or claims..." value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className="w-full h-11 pl-11 pr-4 rounded-xl text-sm bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.08] text-slate-800 dark:text-white outline-none focus:border-primary-500 transition-all" />
-        </div>
-        <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-50 border border-slate-200 dark:bg-white/[0.01] dark:border-white/[0.05] px-4 py-2.5 rounded-xl self-start md:self-auto">
-          <Info className="w-4 h-4 text-primary-500" /><span>Showing {filteredSales.length} of {sales.length} lines</span>
-        </div>
-      </div>
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-white/[0.06] dark:bg-[#161F30] sm:p-6">
+        <div className="max-h-[760px] space-y-6 overflow-y-auto pr-1">
+          {Object.keys(groupedSales).length ? Object.entries(groupedSales).map(([key, group]) => (
+            <section key={key}>
+              <div className="mb-3 flex items-center gap-3 px-1"><span className="whitespace-nowrap text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">{group.label}</span><div className="h-px flex-1 bg-slate-100 dark:bg-white/[0.06]" /></div>
+              <div className="space-y-3">
+                {group.items.map((line) => {
+                  const isPaper = line.item_type === 'paper';
+                  const outputLabel = isPaper ? 'sheets' : 'pieces';
+                  const details = statusDetails(line.status);
+                  const StatusIcon = details.icon;
+                  const isChangeOwed = Number(line.change_owed || 0) > 0;
+                  const hasChangeDue = Number(line.change_due || 0) > 0;
+                  const isFailed = line.status?.startsWith('FAILED');
+                  const trNumber = line.tr_number || `TR-${String(line.transaction_id || line.id).slice(0, 5).toUpperCase()}`;
 
-      <div className="p-6 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm overflow-x-auto">
-        <table className="w-full text-left text-sm border-collapse">
-          <thead><tr className="border-b border-slate-100 dark:border-white/[0.04] text-slate-400 font-bold">
-            <th className="py-3 px-4">TR Record No.</th>
-            <th className="py-3 px-4">Product</th>
-            <th className="py-3 px-4 text-center">Units</th>
-            <th className="py-3 px-4 text-center">Physical Output</th>
-            <th className="py-3 px-4 text-center">Line Total</th>
-            <th className="py-3 px-4 text-center">Change Audit</th>
-            <th className="py-3 px-4 text-center">Status</th>
-            <th className="py-3 px-4 text-right">Date</th>
-          </tr></thead>
-          <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
-            {filteredSales.map((line) => {
-              const isPaper = line.item_type === 'paper';
-              const outputLabel = isPaper ? 'sheets' : 'pieces';
-              const statusClass = line.status === 'COMPLETED' ? 'text-emerald-500' : line.status === 'COMPLETED_CHANGE_OWED' ? 'text-amber-500' : line.status?.startsWith('FAILED') ? 'text-red-500' : 'text-slate-400';
-              const isChangeOwed = Number(line.change_owed || 0) > 0;
-              const hasChangeDue = Number(line.change_due || 0) > 0;
+                  return (
+                    <article key={line.id} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 transition hover:border-primary-300 hover:bg-primary-50/30 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-primary-500/50 dark:hover:bg-primary-500/[0.06] sm:p-5">
+                      <div className="flex items-start justify-between gap-4"><span className="inline-flex items-center rounded-lg border border-primary-100 bg-primary-50 px-2.5 py-1 font-mono text-xs font-extrabold text-primary-600 dark:border-primary-800/40 dark:bg-primary-950/40 dark:text-primary-300">{trNumber}</span><span className="inline-flex items-center gap-1.5 text-right text-xs font-semibold text-slate-400"><Calendar className="h-3.5 w-3.5" />{new Date(line.transaction_date).toLocaleString()}</span></div>
+                      <div className="mt-4 min-w-0"><p className="truncate text-base font-extrabold text-slate-800 dark:text-white">{line.product_name}{isPaper && line.paper_size ? ` · ${line.paper_size}` : ''}</p><p className="mt-1 text-sm font-semibold text-slate-500 dark:text-slate-400">{line.units_requested} {line.units_requested === 1 ? 'unit' : 'units'} · {line.qty_dispensed}/{line.qty_requested} {outputLabel} dispensed</p><p className="mt-1 text-xs font-semibold text-slate-400">Line total: {currency(line.amount_paid)}</p></div>
+                      <div className="mt-4 flex flex-col gap-3 border-t border-slate-200/80 pt-3 dark:border-white/[0.07] sm:flex-row sm:items-center sm:justify-between"><div className="text-xs font-semibold text-slate-500 dark:text-slate-400"><span className="mr-2 uppercase tracking-wider text-slate-400">Change audit</span>{isChangeOwed ? <span className="text-amber-600 dark:text-amber-300">Owed {currency(line.change_owed)}</span> : hasChangeDue ? <span className="text-emerald-600 dark:text-emerald-300">Paid {currency(line.change_paid)}</span> : <span>Exact pay</span>}</div>{isFailed ? <button type="button" onClick={() => navigate(`/logs?transaction=${encodeURIComponent(trNumber)}`)} className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-extrabold uppercase tracking-wide ${statusTone[details.tone]} underline decoration-dotted underline-offset-4`} title="Open related machine logs"><StatusIcon className="h-3.5 w-3.5" />{details.label}</button> : <span className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-extrabold uppercase tracking-wide ${statusTone[details.tone]}`}><StatusIcon className="h-3.5 w-3.5" />{details.label}</span>}</div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          )) : <div className="py-16 text-center font-semibold text-slate-400">No transaction lines found for the selected filters.</div>}
+        </div>
 
-              return <tr key={line.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
-                <td className="py-4 px-4 font-mono font-bold text-slate-800 dark:text-white text-xs">
-                  <span className="inline-block px-2.5 py-1 rounded-md bg-primary-50 dark:bg-primary-950/40 text-primary-600 dark:text-primary-400 border border-primary-100 dark:border-primary-800/40">
-                    {line.tr_number || `TR-${String(line.transaction_id || line.id).slice(0, 5).toUpperCase()}`}
-                  </span>
-                </td>
-                <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white"><span className="block">{line.product_name}</span>{isPaper && <span className="text-xs text-slate-400">{line.paper_size}</span>}</td>
-                <td className="py-4 px-4 text-center font-bold">{line.units_requested}</td>
-                <td className="py-4 px-4 text-center text-slate-500">{line.qty_dispensed}/{line.qty_requested} {outputLabel}</td>
-                <td className="py-4 px-4 text-center font-extrabold text-primary-500">{currency(line.amount_paid)}</td>
-                <td className="py-4 px-4 text-center text-xs font-semibold">
-                  {isChangeOwed ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800/40" title={line.failure_reason || 'Change owed to student'}>
-                      ⚠️ Owed {currency(line.change_owed)}
-                    </span>
-                  ) : hasChangeDue ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40">
-                      ✓ Paid {currency(line.change_paid)}
-                    </span>
-                  ) : (
-                    <span className="text-slate-400">Exact Pay</span>
-                  )}
-                </td>
-                <td className={`py-4 px-4 text-center text-xs font-bold ${statusClass}`}>
-                  {line.status?.startsWith('FAILED') ? (
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/logs?transaction=${encodeURIComponent(line.tr_number || '')}`)}
-                      className="underline decoration-dotted underline-offset-4 hover:text-red-700 dark:hover:text-red-300"
-                      title="Open related machine logs"
-                    >
-                      {line.status}
-                    </button>
-                  ) : (line.status === 'COMPLETED_CHANGE_OWED' ? 'CHANGE OWED' : line.status)}
-                </td>
-                <td className="py-4 px-4 text-right text-xs text-slate-500 font-semibold"><span className="inline-flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5" />{new Date(line.transaction_date).toLocaleString()}</span></td>
-              </tr>;
-            })}
-            {!filteredSales.length && <tr><td colSpan="8" className="py-10 text-center font-semibold text-slate-400">No transaction lines found.</td></tr>}
-          </tbody>
-        </table>
+        <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-4 dark:border-white/[0.06] sm:flex-row sm:items-center sm:justify-between"><p className="text-xs font-semibold text-slate-400">Page {Math.min(page, totalPages)} of {totalPages}</p><div className="flex items-center gap-1.5"><button type="button" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-500 transition hover:border-primary-300 hover:text-primary-600 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:text-slate-300"><ChevronLeft className="h-4 w-4" />Previous</button>{Array.from({ length: totalPages }, (_, index) => index + 1).map((pageNumber) => <button key={pageNumber} type="button" onClick={() => setPage(pageNumber)} className={`h-9 min-w-9 rounded-lg px-2 text-xs font-extrabold transition ${pageNumber === page ? 'bg-primary-500 text-white shadow-sm' : 'border border-slate-200 text-slate-500 hover:border-primary-300 hover:text-primary-600 dark:border-white/[0.08] dark:text-slate-300'}`}>{pageNumber}</button>)}<button type="button" disabled={page >= totalPages} onClick={() => setPage((current) => Math.min(totalPages, current + 1))} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-500 transition hover:border-primary-300 hover:text-primary-600 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:text-slate-300">Next<ChevronRight className="h-4 w-4" /></button></div></div>
       </div>
     </div>
   );
