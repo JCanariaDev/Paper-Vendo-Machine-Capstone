@@ -6,6 +6,10 @@ void startOrder() {
     tftUiShowError("Max 5 ballpens");
     return;
   }
+  if (ballpenCartQuantity() > 0 && ballpenCartQuantity() < minimumBallpensPerTransaction) {
+    tftUiShowError("Minimum " + String(minimumBallpensPerTransaction) + " ballpens");
+    return;
+  }
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   hopperManualRunning = false;
   orderInProgress = true;

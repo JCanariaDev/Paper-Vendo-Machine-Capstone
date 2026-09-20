@@ -418,11 +418,11 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     try {
       const { data, error } = await supabase
         .from('machine_options')
-        .select('id, minimum_credits, maximum_credits, minimum_ballpen_stock, updated_at')
+        .select('id, minimum_credits, maximum_credits, minimum_ballpens_per_transaction, updated_at')
         .eq('id', 1)
         .maybeSingle();
       if (error) throw error;
-      return res.status(200).json(data || { id: 1, minimum_credits: 1, maximum_credits: 30, minimum_ballpen_stock: 5 });
+      return res.status(200).json(data || { id: 1, minimum_credits: 1, maximum_credits: 30, minimum_ballpens_per_transaction: 1 });
     } catch (err) {
       console.error('Error fetching machine options:', err);
       return res.status(500).json({ message: 'Failed to retrieve machine options.' });
@@ -432,9 +432,9 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
   router.put('/options', authorizeRoles('superadmin'), async (req, res) => {
     const minimumCredits = asInt(req.body.minimum_credits, 1);
     const maximumCredits = asInt(req.body.maximum_credits, 30);
-    const minimumBallpenStock = asInt(req.body.minimum_ballpen_stock, 5);
-    if (minimumCredits < 0 || maximumCredits < minimumCredits || maximumCredits > 10000 || minimumBallpenStock < 0 || minimumBallpenStock > 10000) {
-      return res.status(400).json({ message: 'Machine option values must be between 0 and 10,000.' });
+    const minimumBallpens = asInt(req.body.minimum_ballpens_per_transaction, 1);
+    if (minimumCredits < 0 || maximumCredits < minimumCredits || maximumCredits > 10000 || minimumBallpens < 1 || minimumBallpens > 5) {
+      return res.status(400).json({ message: 'Credits must be between 0 and 10,000, and ballpens per transaction must be between 1 and 5.' });
     }
     try {
       const { data, error } = await supabase
@@ -443,11 +443,11 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
           id: 1,
           minimum_credits: minimumCredits,
           maximum_credits: maximumCredits,
-          minimum_ballpen_stock: minimumBallpenStock,
+          minimum_ballpens_per_transaction: minimumBallpens,
           updated_at: new Date().toISOString(),
           updated_by: req.user.id
         }, { onConflict: 'id' })
-        .select('id, minimum_credits, maximum_credits, minimum_ballpen_stock, updated_at')
+        .select('id, minimum_credits, maximum_credits, minimum_ballpens_per_transaction, updated_at')
         .single();
       if (error) throw error;
       return res.status(200).json({ message: 'Machine options saved.', options: data });

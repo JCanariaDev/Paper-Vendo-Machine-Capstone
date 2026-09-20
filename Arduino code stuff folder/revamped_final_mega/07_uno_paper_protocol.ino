@@ -123,18 +123,18 @@ void handleUnoMessage(String msg) {
 }
 
 void parseMachineOptions(String msg) {
-  // Format: OPTIONS:<minimum_credits>:<maximum_credits>:<minimum_ballpen_stock>
+  // Format: OPTIONS:<minimum_credits>:<maximum_credits>:<minimum_ballpens_per_transaction>
   int first = msg.indexOf(':');
   int second = msg.indexOf(':', first + 1);
   int third = msg.indexOf(':', second + 1);
   if (first < 0 || second < 0 || third < 0) return;
   minimumCreditsToStart = constrain(msg.substring(first + 1, second).toInt(), 0, 10000);
   maximumCreditsAllowed = constrain(msg.substring(second + 1, third).toInt(), minimumCreditsToStart, 10000);
-  minimumBallpenStockWarning = constrain(msg.substring(third + 1).toInt(), 0, 10000);
+  minimumBallpensPerTransaction = constrain(msg.substring(third + 1).toInt(), 1, MAX_BALLPENS_PER_TRANSACTION);
   Serial.print("Machine options synced: minimum credits=P");
   Serial.print(minimumCreditsToStart);
-  Serial.print(", ballpen warning=");
-  Serial.println(minimumBallpenStockWarning);
+  Serial.print(", minimum ballpens per transaction=");
+  Serial.println(minimumBallpensPerTransaction);
   tftUiSetCredits();
 }
 

@@ -214,13 +214,13 @@ CREATE TABLE machine_options (
     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     minimum_credits INTEGER NOT NULL DEFAULT 1 CHECK (minimum_credits >= 0),
     maximum_credits INTEGER NOT NULL DEFAULT 30 CHECK (maximum_credits >= minimum_credits),
-    minimum_ballpen_stock INTEGER NOT NULL DEFAULT 5 CHECK (minimum_ballpen_stock >= 0),
+    minimum_ballpens_per_transaction INTEGER NOT NULL DEFAULT 1 CHECK (minimum_ballpens_per_transaction >= 1),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_by INTEGER REFERENCES admins(id)
 );
 
-INSERT INTO machine_options (id, minimum_credits, maximum_credits, minimum_ballpen_stock)
-VALUES (1, 1, 30, 5);
+INSERT INTO machine_options (id, minimum_credits, maximum_credits, minimum_ballpens_per_transaction)
+VALUES (1, 1, 30, 1);
 GRANT SELECT, UPDATE ON machine_options TO anon, authenticated, service_role;
 
 CREATE INDEX idx_revamped_tx_created ON sales_transactions(created_at DESC);

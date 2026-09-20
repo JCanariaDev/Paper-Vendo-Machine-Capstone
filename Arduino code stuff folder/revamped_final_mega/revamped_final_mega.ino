@@ -109,7 +109,7 @@ XPT2046_Touchscreen ts(TOUCH_CS);
 // --- STATE ---
 volatile uint16_t credits = 0;
 volatile uint16_t minimumCreditsToStart = 1;
-volatile uint16_t minimumBallpenStockWarning = 5;
+volatile uint16_t minimumBallpensPerTransaction = 1;
 volatile bool coinPulseReceived = false;
 bool isProcessing = false;
 String activeTransactionId = "";

@@ -508,7 +508,7 @@ void syncLiveCatalogToMega() {
   }
 
   // 3. Fetch machine-wide operating options for the Mega.
-  url = String(SUPABASE_URL) + "/rest/v1/machine_options?id=eq.1&select=minimum_credits,maximum_credits,minimum_ballpen_stock";
+  url = String(SUPABASE_URL) + "/rest/v1/machine_options?id=eq.1&select=minimum_credits,maximum_credits,minimum_ballpens_per_transaction";
   if (http.begin(client, url)) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
@@ -520,7 +520,7 @@ void syncLiveCatalogToMega() {
         JsonObject options = optionsDoc[0];
         MEGA_SERIAL.println("OPTIONS:" + String(options["minimum_credits"] | 1) + ":" +
                             String(options["maximum_credits"] | 30) + ":" +
-                            String(options["minimum_ballpen_stock"] | 5));
+                            String(options["minimum_ballpens_per_transaction"] | 1));
       }
     }
     http.end();
