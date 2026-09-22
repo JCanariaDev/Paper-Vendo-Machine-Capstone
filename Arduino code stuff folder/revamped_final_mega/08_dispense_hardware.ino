@@ -1,8 +1,8 @@
 // DISPENSE HARDWARE
 // Paper is delegated to Paper Uno; ballpens are delegated to Ballpen Uno.
 
-const unsigned long BALLPEN_DISPENSE_TIMEOUT_PER_ITEM_MS = 12000;
-const unsigned long BALLPEN_DISPENSE_TIMEOUT_MARGIN_MS = 5000;
+const unsigned long BALLPEN_DISPENSE_TIMEOUT_PER_ITEM_MS = 8000;
+const unsigned long BALLPEN_DISPENSE_TIMEOUT_MARGIN_MS = 2500;
 
 void handleBallpenMessage(String msg) {
   msg.trim();

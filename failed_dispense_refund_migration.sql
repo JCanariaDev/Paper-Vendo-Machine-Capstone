@@ -3,6 +3,12 @@ ALTER TABLE sales_transactions
   ADD COLUMN IF NOT EXISTS refund_paid_cents INTEGER NOT NULL DEFAULT 0
   CHECK (refund_paid_cents >= 0);
 
+-- Keep the status constraint in sync with the main schema for existing installs.
+ALTER TABLE sales_transactions DROP CONSTRAINT IF EXISTS sales_transactions_status_check;
+ALTER TABLE sales_transactions
+  ADD CONSTRAINT sales_transactions_status_check
+  CHECK (status IN ('RESERVED', 'CHANGE_PAID', 'COMPLETED', 'CANCELLED', 'FAILED_CHANGE', 'FAILED_DISPENSE', 'PARTIAL_SUCCESS', 'REFUNDED', 'COMPLETED_CHANGE_OWED'));
+
 CREATE OR REPLACE FUNCTION machine_record_failed_dispense_refund(p_transaction_id UUID)
 RETURNS TABLE(tr_number TEXT, refund_paid_cents INTEGER, remaining_refund_cents INTEGER)
 LANGUAGE plpgsql AS $$
@@ -25,6 +31,7 @@ BEGIN
     END IF;
     UPDATE sales_transactions
        SET refund_paid_cents = refund_paid_cents + v_amount,
+           status = 'REFUNDED',
            completed_at = COALESCE(completed_at, NOW())
      WHERE id = p_transaction_id;
     INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)

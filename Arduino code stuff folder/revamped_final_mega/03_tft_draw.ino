@@ -267,8 +267,29 @@ void drawReceiptScreen() {
   bool dispenseFailed = activeTransactionStatus == "FAILED_DISPENSE" ||
                         activeTransactionStatus == "FAILED_CHANGE" ||
                         activeTransactionStatus == "CANCELLED";
+  bool partialSuccess = activeTransactionStatus == "PARTIAL_SUCCESS";
 
-  if (dispenseFailed) {
+  if (partialSuccess) {
+    tft.setTextColor(COL_ORANGE);
+    printCentered("Partial Success", tft.width() / 2, 70);
+    tft.setTextColor(COL_WHITE);
+    tft.setTextSize(1);
+    int resultY = 115;
+    int resultStart = 0;
+    while (resultStart < (int)dispenseResultSummary.length()) {
+      int resultEnd = dispenseResultSummary.indexOf('\n', resultStart);
+      String resultLine = resultEnd == -1
+        ? dispenseResultSummary.substring(resultStart)
+        : dispenseResultSummary.substring(resultStart, resultEnd);
+      printCentered(resultLine, tft.width() / 2, resultY);
+      resultY += 20;
+      if (resultEnd == -1) break;
+      resultStart = resultEnd + 1;
+    }
+    tft.setTextColor(COL_ORANGE);
+    printCentered("Check the item results above.", tft.width() / 2, 175);
+  }
+  else if (dispenseFailed) {
     tft.setTextColor(COL_RED);
     printCentered("Dispense failed", tft.width() / 2, 85);
     tft.setTextColor(COL_WHITE);

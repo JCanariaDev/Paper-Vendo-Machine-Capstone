@@ -161,10 +161,10 @@ function inferMachineState(machineStatus, latestTx, currentCredits = 0) {
   const ageSeconds = (Date.now() - new Date(created_at || transaction_date).getTime()) / 1000;
 
   if (
-    ['COMPLETED', 'COMPLETED_CHANGE_OWED', 'CANCELLED', 'FAILED_DISPENSE', 'FAILED_CHANGE'].includes(status)
+    ['COMPLETED', 'COMPLETED_CHANGE_OWED', 'PARTIAL_SUCCESS', 'CANCELLED', 'FAILED_DISPENSE', 'FAILED_CHANGE'].includes(status)
   ) {
     if (ageSeconds > 30) return 'idle';
-    return status === 'COMPLETED' || status === 'COMPLETED_CHANGE_OWED' ? 'done' : 'failed';
+    return ['COMPLETED', 'COMPLETED_CHANGE_OWED', 'PARTIAL_SUCCESS'].includes(status) ? 'done' : 'failed';
   }
   if (status === 'CHANGE_PAID') {
     return ageSeconds > STALE_TRANSACTION_TIMEOUT_SECONDS ? 'stale' : 'dispensing_change';
@@ -183,6 +183,7 @@ function inferMachineState(machineStatus, latestTx, currentCredits = 0) {
 const TX_MAP = {
   COMPLETED:             { label: 'Completed',         color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
   COMPLETED_CHANGE_OWED: { label: 'Done (Change Owed)',color: 'bg-lime-500/10 text-lime-400 border-lime-500/20' },
+  PARTIAL_SUCCESS:       { label: 'Partial Success',    color: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
   RESERVED:              { label: 'In Progress',       color: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' },
   CHANGE_PAID:           { label: 'Change Released',   color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' },
   CANCELLED:             { label: 'Cancelled',         color: 'bg-slate-500/10 text-slate-400 border-slate-500/20' },

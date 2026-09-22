@@ -69,7 +69,7 @@ const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
 // Paper Uno reports a confirmed result promptly; avoid a long dead wait if its
 // UART cable/controller is unavailable.
-const unsigned long PAPER_DISPENSE_TIMEOUT_MS = 8000;
+const unsigned long PAPER_DISPENSE_TIMEOUT_MS = 6000;
 
 const int HOPPER_RELAY_ON  = LOW;  // LOW  = Relay LED ON  -> Motor ON
 const int HOPPER_RELAY_OFF = HIGH; // HIGH = Relay LED OFF -> Motor OFF
@@ -249,6 +249,7 @@ unsigned long touchDebounceUntil = 0;
 volatile bool orderInProgress = false;
 int cartDispenseIndex = 0;
 String orderSummaryText = "";
+String dispenseResultSummary = "";
 float orderTotalCost = 0;
 
 // ================= DRAWING HELPERS =================
@@ -300,6 +301,8 @@ void setup() {
   CLOUD_SERIAL.begin(9600); // UART to ESP32 (Pins 18/19)
   UNO_SERIAL.begin(9600);   // UART to Arduino Uno (Pins 16/17)
   BALLPEN_SERIAL.begin(9600); // UART to Ballpen Uno (Pins 14/15)
+  UNO_SERIAL.setTimeout(500);
+  BALLPEN_SERIAL.setTimeout(500);
   Serial.println("--- REVAMPED SMART PAPER VENDO FIRMWARE (OPTION A) STARTING ---");
 
   tftUiBegin();

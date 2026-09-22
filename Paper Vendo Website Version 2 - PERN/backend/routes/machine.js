@@ -145,6 +145,7 @@ function flattenTransactionLine(line) {
     change_due: asMoney(dueCents),
     change_paid: asMoney(paidCents),
     change_owed: asMoney(owedCents),
+    refund_paid_cents: asInt(transaction.refund_paid_cents),
     failure_reason: transaction.failure_reason,
     transaction_date: transaction.created_at,
     completed_at: transaction.completed_at,
@@ -782,7 +783,7 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     try {
       const [sales, inventory] = await Promise.all([getTransactionLines(supabase), getInventory(supabase)]);
       const completedSales = sales.filter((sale) =>
-        ['COMPLETED', 'COMPLETED_CHANGE_OWED'].includes(sale.status) || 
+        ['COMPLETED', 'COMPLETED_CHANGE_OWED', 'PARTIAL_SUCCESS'].includes(sale.status) ||
         (sale.line_status === 'DISPENSED' && sale.qty_dispensed > 0)
       );
       const analyticsTimeZone = process.env.MACHINE_TIMEZONE || 'Asia/Manila';

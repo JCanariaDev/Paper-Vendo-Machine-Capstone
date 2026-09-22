@@ -122,7 +122,7 @@ CREATE TABLE sales_transactions (
     tr_number TEXT GENERATED ALWAYS AS ('TR-' || LPAD(transaction_number::text, 5, '0')) STORED,
     machine_id TEXT NOT NULL DEFAULT 'paper-vendo-01',
     status TEXT NOT NULL DEFAULT 'RESERVED'
-      CHECK (status IN ('RESERVED', 'CHANGE_PAID', 'COMPLETED', 'CANCELLED', 'FAILED_CHANGE', 'FAILED_DISPENSE', 'COMPLETED_CHANGE_OWED')),
+      CHECK (status IN ('RESERVED', 'CHANGE_PAID', 'COMPLETED', 'CANCELLED', 'FAILED_CHANGE', 'FAILED_DISPENSE', 'PARTIAL_SUCCESS', 'REFUNDED', 'COMPLETED_CHANGE_OWED')),
     credit_received_cents INTEGER NOT NULL CHECK (credit_received_cents >= 0),
     subtotal_cents INTEGER NOT NULL CHECK (subtotal_cents >= 0),
     change_due_cents INTEGER NOT NULL CHECK (change_due_cents >= 0),
@@ -548,6 +548,7 @@ BEGIN
 
     UPDATE sales_transactions
        SET refund_paid_cents = refund_paid_cents + v_amount,
+           status = 'REFUNDED',
            completed_at = COALESCE(completed_at, NOW())
      WHERE id = p_transaction_id;
 
@@ -598,6 +599,8 @@ DECLARE
     v_result JSONB; 
     v_actual INTEGER; 
     v_all_success BOOLEAN := TRUE;
+    v_any_success BOOLEAN := FALSE;
+    v_any_failure BOOLEAN := FALSE;
     v_coin JSONB;
     v_paid INTEGER;
     v_final_status TEXT;
@@ -631,6 +634,7 @@ BEGIN
         
         IF v_actual <> v_line.qty_requested THEN
             v_all_success := FALSE;
+            v_any_failure := TRUE;
             IF v_reason IS NULL THEN
                 v_reason := CASE v_line.item_type
                     WHEN 'paper' THEN 'Paper Bay ' || v_line.physical_channel || ' failed to confirm the requested paper output'
@@ -639,6 +643,7 @@ BEGIN
                 END;
             END IF;
         END IF;
+        IF v_actual > 0 THEN v_any_success := TRUE; END IF;
     END LOOP;
 
     -- Deduct released coins and free the unused reservation.
@@ -650,7 +655,10 @@ BEGIN
          WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
     END LOOP;
 
-    IF NOT v_all_success THEN
+    IF v_any_success AND v_any_failure THEN
+        v_final_status := 'PARTIAL_SUCCESS';
+        v_reason := COALESCE(v_reason, 'Some products dispensed successfully while other products failed');
+    ELSIF NOT v_all_success THEN
         v_final_status := 'FAILED_DISPENSE';
         v_reason := COALESCE(v_reason, 'Physical dispense sensor did not confirm all requested output');
     ELSIF v_paid < v_tx.change_due_cents THEN

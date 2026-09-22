@@ -16,7 +16,13 @@ void startOrder() {
   setMachineIndicator(INDICATOR_ACTIVE, true);
   setCoinAcceptance(false);
   orderSummaryText = "";
-  orderTotalCost = 0;
+  orderTotalCost = cartTotal();
+  for (int i = 0; i < cartCount; i++) {
+    if (orderSummaryText.length()) orderSummaryText += "\n";
+    orderSummaryText += cart[i].name + " x" + String(cart[i].qty) +
+                        "  P" + String(cart[i].price * cart[i].qty, 2);
+  }
+  dispenseResultSummary = "";
   activeTransactionId = "";
   activeTrNumber = "";
   activeTransactionStatus = "";
@@ -34,7 +40,7 @@ void startOrder() {
 }
 
 void executeDispensePlan(String message) {
-  const unsigned long DISPENSE_PLAN_TIMEOUT_MS = 90000;
+  const unsigned long DISPENSE_PLAN_TIMEOUT_MS = 45000;
   const unsigned long planStartedAt = millis();
 
   // Format: PLAN:<tx_id>:<tr_number>:<subtotal_cents>:<change_due_cents>:<encodedPlan>
@@ -115,6 +121,12 @@ void executeDispensePlan(String message) {
       // Delegate ballpen dispense to the dedicated Ballpen Uno.
       actualOutput = dispensePenFromUno(channel, expectedOutput);
     }
+
+    if (dispenseResultSummary.length()) dispenseResultSummary += "\n";
+    String resultLabel = actualOutput >= expectedOutput ? "OK " : "FAILED ";
+    String resultType = type == "pen" ? "Ballpen" : "Paper";
+    dispenseResultSummary += resultLabel + resultType + " " +
+                             String(actualOutput) + "/" + String(expectedOutput);
 
     if (results.length()) results += ';';
     results += type + "," + String(productId) + "," + String(actualOutput);
