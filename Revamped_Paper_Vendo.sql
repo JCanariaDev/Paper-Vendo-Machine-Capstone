@@ -24,6 +24,7 @@ DROP FUNCTION IF EXISTS machine_reserve_transaction(INTEGER, JSONB) CASCADE;
 DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB) CASCADE;
 DROP FUNCTION IF EXISTS machine_mark_change_paid(UUID, INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS machine_release_change(UUID) CASCADE;
 DROP FUNCTION IF EXISTS machine_cancel_reserved_transaction(UUID, TEXT) CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) CASCADE;
@@ -390,9 +391,10 @@ BEGIN
                 RAISE EXCEPTION 'Insufficient pen stock in compartment for product %', v_product_id; 
             END IF;
 
-            UPDATE ballpen_compartments 
-               SET reserved_piece_stock = reserved_piece_stock + v_qty, updated_at = NOW() 
+            UPDATE ballpen_compartments
+               SET reserved_piece_stock = reserved_piece_stock + v_qty, updated_at = NOW()
              WHERE assigned_product_id = v_product_id;
+
         END IF;
 
         v_subtotal := v_subtotal + (v_price * v_units);
@@ -446,8 +448,8 @@ BEGIN
         v_dispense_plan := v_dispense_plan || jsonb_build_array(jsonb_build_object('item_type', v_type, 'product_id', v_product_id, 'physical_channel', v_channel, 'qty_requested', v_qty));
     END LOOP;
 
-    -- Reserve Coins in Hopper (if available)
-    FOR v_coin IN SELECT * FROM jsonb_array_elements(v_change_plan) LOOP
+    -- Reserve the planned change only for this active transaction.
+    FOR v_coin IN SELECT value FROM jsonb_array_elements(v_change_plan) LOOP
         UPDATE change_inventory
            SET reserved_coin_count = reserved_coin_count + ((v_coin.value->>'count')::INTEGER), updated_at = NOW()
          WHERE hopper_channel = ((v_coin.value->>'hopper_channel')::INTEGER);
@@ -474,6 +476,47 @@ BEGIN
 END;
 $$;
 
+-- Confirm that an administrator handed the remaining change to the customer.
+CREATE OR REPLACE FUNCTION machine_release_change(p_transaction_id UUID)
+RETURNS TABLE(tr_number TEXT, final_status TEXT, change_paid_cents INTEGER)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_tx sales_transactions%ROWTYPE;
+    v_status TEXT;
+BEGIN
+    SELECT * INTO v_tx
+      FROM sales_transactions
+     WHERE id = p_transaction_id
+     FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Transaction % not found', p_transaction_id;
+    END IF;
+    IF v_tx.change_due_cents <= v_tx.change_paid_cents THEN
+        RETURN QUERY SELECT v_tx.tr_number, v_tx.status, v_tx.change_paid_cents;
+        RETURN;
+    END IF;
+    IF v_tx.status NOT IN ('COMPLETED_CHANGE_OWED', 'FAILED_DISPENSE', 'FAILED_CHANGE', 'CANCELLED') THEN
+        RAISE EXCEPTION 'Transaction % has no outstanding change to release', v_tx.tr_number;
+    END IF;
+
+    v_status := CASE WHEN v_tx.status = 'COMPLETED_CHANGE_OWED' THEN 'COMPLETED' ELSE v_tx.status END;
+    UPDATE sales_transactions
+       SET status = v_status,
+           change_paid_cents = change_due_cents,
+           completed_at = COALESCE(completed_at, NOW())
+     WHERE id = p_transaction_id;
+
+    INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
+    VALUES ('INFO', 'DASHBOARD', 'CHANGE_RELEASED',
+            'Remaining change was handed to the customer', p_transaction_id, v_tx.tr_number,
+            jsonb_build_object('change_due_cents', v_tx.change_due_cents,
+                               'previously_paid_cents', v_tx.change_paid_cents));
+
+    RETURN QUERY SELECT v_tx.tr_number, v_status, v_tx.change_due_cents;
+END;
+$$;
+
 -- Cancel Reserved Transaction
 CREATE OR REPLACE FUNCTION machine_cancel_reserved_transaction(p_transaction_id UUID, p_reason TEXT)
 RETURNS VOID LANGUAGE plpgsql AS $$
@@ -483,16 +526,15 @@ BEGIN
     IF NOT FOUND OR v_tx.status <> 'RESERVED' THEN RAISE EXCEPTION 'Only reserved transactions can be cancelled'; END IF;
     FOR v_line IN SELECT * FROM sales_transaction_lines WHERE transaction_id = p_transaction_id LOOP
         IF v_line.item_type = 'pen' THEN
-            UPDATE ballpen_compartments 
-               SET reserved_piece_stock = reserved_piece_stock - v_line.qty_requested, updated_at = NOW() 
+            UPDATE ballpen_compartments
+               SET reserved_piece_stock = GREATEST(0, reserved_piece_stock - v_line.qty_requested), updated_at = NOW()
              WHERE dispenser_channel = v_line.physical_channel;
         END IF;
-
-        -- Paper stock is not consumed when a reservation is cancelled.
-        -- It is decremented only by machine_finish_transaction after physical output.
     END LOOP;
     FOR v_coin IN SELECT value FROM jsonb_array_elements(v_tx.change_plan) LOOP
-        UPDATE change_inventory SET reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)), updated_at = NOW() WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
+        UPDATE change_inventory
+           SET reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)), updated_at = NOW()
+         WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
     END LOOP;
     UPDATE sales_transactions SET status = 'CANCELLED', failure_reason = p_reason, completed_at = NOW() WHERE id = p_transaction_id;
 END;
@@ -537,8 +579,8 @@ BEGIN
         
         IF v_line.item_type = 'pen' THEN
             UPDATE ballpen_compartments 
-               SET current_piece_stock = current_piece_stock - v_actual, 
-                   reserved_piece_stock = reserved_piece_stock - v_line.qty_requested, 
+               SET current_piece_stock = current_piece_stock - v_actual,
+                   reserved_piece_stock = GREATEST(0, reserved_piece_stock - v_line.qty_requested),
                    updated_at = NOW() 
              WHERE dispenser_channel = v_line.physical_channel;
         END IF;
@@ -555,7 +597,7 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- Adjust change inventory (deduct actually released coins, free unused reservations)
+    -- Deduct released coins and free the unused reservation.
     FOR v_coin IN SELECT value FROM jsonb_array_elements(v_tx.change_plan) LOOP
         UPDATE change_inventory 
            SET reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)),
@@ -806,6 +848,7 @@ $$;
 
 GRANT EXECUTE ON FUNCTION machine_reserve_transaction(INTEGER, JSONB) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_mark_change_paid(UUID, INTEGER) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION machine_release_change(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_cancel_reserved_transaction(UUID, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_finish_transaction(UUID, JSONB, INTEGER) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) TO anon, authenticated;

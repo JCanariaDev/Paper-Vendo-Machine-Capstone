@@ -389,6 +389,19 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     }
   });
 
+  router.post('/transactions/:transactionId/release-change', authorizeRoles('superadmin', 'staff'), async (req, res) => {
+    try {
+      const { data, error } = await supabase.rpc('machine_release_change', {
+        p_transaction_id: req.params.transactionId
+      });
+      if (error) throw error;
+      return res.status(200).json({ message: 'Change marked as released.', transaction: data?.[0] || null });
+    } catch (err) {
+      console.error('Error releasing transaction change:', err);
+      return res.status(400).json({ message: err.message || 'Could not release the transaction change.' });
+    }
+  });
+
   router.get('/logs', async (req, res) => {
     const limit = Math.min(Math.max(asInt(req.query.limit, 200), 1), 1000);
     try {
