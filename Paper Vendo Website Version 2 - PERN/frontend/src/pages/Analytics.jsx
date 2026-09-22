@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { 
   BarChart, 
@@ -278,12 +278,12 @@ export default function Analytics() {
   const analyticsSales = data.analyticsSales || data.sales || [];
   const { paperBoxes, penBoxes } = buildProductBoxes(productBreakdown);
 
-  const peakSales = useMemo(() => {
+  const peakSales = (() => {
     const range = getAnalyticsRange(peakFilter, peakFromDate, peakToDate);
     return analyticsSales.filter((sale) => inRange(sale.transaction_date, range));
-  }, [analyticsSales, peakFilter, peakFromDate, peakToDate]);
+  })();
 
-  const peakHourlySales = useMemo(() => {
+  const peakHourlySales = (() => {
     const buckets = Array.from({ length: 24 }, (_, hour) => ({
       hour: `${String(hour).padStart(2, '0')}:00`,
       transactions: 0,
@@ -301,11 +301,11 @@ export default function Analytics() {
       transactions: transactionIds.size,
       revenue: Number(revenue.toFixed(2)),
     }));
-  }, [peakSales]);
+  })();
 
   const peakHour = peakHourlySales.reduce((best, bucket) => bucket.transactions > best.transactions ? bucket : best, peakHourlySales[0]);
 
-  const volumeAnalytics = useMemo(() => {
+  const volumeAnalytics = (() => {
     const range = getAnalyticsRange(volumeFilter);
     const filteredSales = analyticsSales.filter((sale) => inRange(sale.transaction_date, range));
     let buckets;
@@ -345,7 +345,7 @@ export default function Analytics() {
       chart: buckets.map(({ transactionIds, revenue, ...bucket }) => ({ ...bucket, transactions: transactionIds.size, revenue: Number(revenue.toFixed(2)) })),
       topItems: Array.from(topItems.values()).sort((a, b) => b.units - a.units || b.revenue - a.revenue).slice(0, 5),
     };
-  }, [analyticsSales, volumeFilter]);
+  })();
 
   const volumePeak = volumeAnalytics.chart.reduce((best, bucket) => bucket.transactions > best.transactions ? bucket : best, volumeAnalytics.chart[0]);
   const productBoxes = activeProductTab === 'paper' ? paperBoxes : penBoxes;
