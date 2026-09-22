@@ -765,10 +765,31 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
   router.get('/analytics', async (_req, res) => {
     try {
       const [sales, inventory] = await Promise.all([getTransactionLines(supabase), getInventory(supabase)]);
-      const completedSales = sales.filter((sale) => 
+      const completedSales = sales.filter((sale) =>
         ['COMPLETED', 'COMPLETED_CHANGE_OWED'].includes(sale.status) || 
         (sale.line_status === 'DISPENSED' && sale.qty_dispensed > 0)
       );
+      const analyticsTimeZone = process.env.MACHINE_TIMEZONE || 'Asia/Manila';
+      const machineDateFormatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: analyticsTimeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        hourCycle: 'h23',
+        weekday: 'short'
+      });
+      const weekdayIndexes = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+      const analyticsSales = completedSales.map((sale) => {
+        const parts = Object.fromEntries(machineDateFormatter.formatToParts(new Date(sale.transaction_date)).map((part) => [part.type, part.value]));
+        return {
+          ...sale,
+          analytics_time_zone: analyticsTimeZone,
+          transaction_local_date: `${parts.year}-${parts.month}-${parts.day}`,
+          transaction_local_hour: Number(parts.hour),
+          transaction_local_weekday: weekdayIndexes[parts.weekday]
+        };
+      });
 
       const productBreakdownMap = new Map();
       const hourlySales = Array.from({ length: 24 }, (_, hour) => ({ hour: `${String(hour).padStart(2, '0')}:00`, transactions: 0, revenue: 0 }));
@@ -800,26 +821,26 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
       let paperRevenue = 0;
       let penRevenue = 0;
 
-      completedSales.forEach((sale) => {
+      analyticsSales.forEach((sale) => {
         const revenue = Number(sale.amount_paid || 0);
         const date = new Date(sale.transaction_date);
         const key = `${sale.item_type}-${sale.brand_id}`;
         transactionIds.add(sale.transaction_id);
         totalRevenue = Number((totalRevenue + revenue).toFixed(2));
 
-        const hour = date.getHours();
+        const hour = sale.transaction_local_hour;
         if (hour >= 0 && hour < 24) {
           hourlySales[hour].transactions += 1;
           hourlySales[hour].revenue = Number((hourlySales[hour].revenue + revenue).toFixed(2));
         }
 
-        const day = date.getDay();
+        const day = sale.transaction_local_weekday;
         if (day >= 0 && day < 7) {
           dayOfWeekSales[day].transactions += 1;
           dayOfWeekSales[day].revenue = Number((dayOfWeekSales[day].revenue + revenue).toFixed(2));
         }
 
-        const saleDateStr = dayFormatter.format(date);
+        const saleDateStr = new Intl.DateTimeFormat('en-US', { timeZone: analyticsTimeZone, month: 'short', day: 'numeric' }).format(date);
         const daySlot = past7Days.find((slot) => slot.date === saleDateStr);
         if (daySlot) {
           daySlot[sale.item_type] += sale.qty_dispensed;
@@ -877,6 +898,8 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
         chartData: past7Days,
         hourlySales,
         dayOfWeekSales,
+        analyticsSales,
+        analyticsTimeZone,
         productBreakdown: Array.from(productBreakdownMap.values())
       });
     } catch (err) {

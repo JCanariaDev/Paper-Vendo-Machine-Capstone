@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { 
   BarChart, 
@@ -80,6 +80,52 @@ const toNumber = (value) => {
 };
 
 const formatCurrency = (value) => `₱${toNumber(value).toFixed(2)}`;
+
+const startOfLocalWeek = (date) => {
+  const result = new Date(date);
+  const day = result.getDay();
+  result.setHours(0, 0, 0, 0);
+  result.setDate(result.getDate() - (day === 0 ? 6 : day - 1));
+  return result;
+};
+
+const getAnalyticsRange = (mode, fromDate, toDate) => {
+  const now = new Date();
+  let start = new Date(now);
+  let end = new Date(now);
+
+  if (mode === 'day') {
+    start = fromDate ? new Date(`${fromDate}T00:00:00`) : new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    end = new Date(start);
+  } else if (mode === 'range') {
+    start = fromDate ? new Date(`${fromDate}T00:00:00`) : new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    end = toDate ? new Date(`${toDate}T00:00:00`) : new Date(start);
+  } else if (mode === 'month') {
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  } else if (mode === 'week') {
+    start = startOfLocalWeek(now);
+    end = new Date(start);
+    end.setDate(start.getDate() + 6);
+  }
+
+  start.setHours(0, 0, 0, 0);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+};
+
+const inRange = (dateValue, range) => {
+  const date = new Date(dateValue);
+  return Number.isFinite(date.getTime()) && date >= range.start && date <= range.end;
+};
+
+const getSaleHour = (sale) => Number.isInteger(sale?.transaction_local_hour)
+  ? sale.transaction_local_hour
+  : new Date(sale.transaction_date).getHours();
+
+const getSaleWeekday = (sale) => Number.isInteger(sale?.transaction_local_weekday)
+  ? sale.transaction_local_weekday
+  : new Date(sale.transaction_date).getDay();
 
 const getItemName = (item) => (
   item?.name ||
@@ -180,6 +226,10 @@ export default function Analytics() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeProductTab, setActiveProductTab] = useState('paper');
+  const [peakFilter, setPeakFilter] = useState('week');
+  const [peakFromDate, setPeakFromDate] = useState('');
+  const [peakToDate, setPeakToDate] = useState('');
+  const [volumeFilter, setVolumeFilter] = useState('week');
   const [error, setError] = useState('');
 
   const fetchAnalytics = async () => {
@@ -224,10 +274,80 @@ export default function Analytics() {
     );
   }
 
-  const { kpis, hourlySales, dayOfWeekSales, productBreakdown } = data;
+  const { kpis, productBreakdown } = data;
+  const analyticsSales = data.analyticsSales || data.sales || [];
   const { paperBoxes, penBoxes } = buildProductBoxes(productBreakdown);
 
-  // Fixed product groups keep paper sizes separate instead of averaging mixed sizes.
+  const peakSales = useMemo(() => {
+    const range = getAnalyticsRange(peakFilter, peakFromDate, peakToDate);
+    return analyticsSales.filter((sale) => inRange(sale.transaction_date, range));
+  }, [analyticsSales, peakFilter, peakFromDate, peakToDate]);
+
+  const peakHourlySales = useMemo(() => {
+    const buckets = Array.from({ length: 24 }, (_, hour) => ({
+      hour: `${String(hour).padStart(2, '0')}:00`,
+      transactions: 0,
+      revenue: 0,
+      transactionIds: new Set(),
+    }));
+    peakSales.forEach((sale) => {
+      const hour = getSaleHour(sale);
+      if (!buckets[hour]) return;
+      buckets[hour].transactionIds.add(sale.transaction_id);
+      buckets[hour].revenue += toNumber(sale.amount_paid);
+    });
+    return buckets.map(({ transactionIds, revenue, ...bucket }) => ({
+      ...bucket,
+      transactions: transactionIds.size,
+      revenue: Number(revenue.toFixed(2)),
+    }));
+  }, [peakSales]);
+
+  const peakHour = peakHourlySales.reduce((best, bucket) => bucket.transactions > best.transactions ? bucket : best, peakHourlySales[0]);
+
+  const volumeAnalytics = useMemo(() => {
+    const range = getAnalyticsRange(volumeFilter);
+    const filteredSales = analyticsSales.filter((sale) => inRange(sale.transaction_date, range));
+    let buckets;
+
+    if (volumeFilter === 'day') {
+      buckets = Array.from({ length: 24 }, (_, hour) => ({ label: `${String(hour).padStart(2, '0')}:00`, transactions: 0, revenue: 0, transactionIds: new Set() }));
+    } else if (volumeFilter === 'month') {
+      const daysInMonth = new Date(range.start.getFullYear(), range.start.getMonth() + 1, 0).getDate();
+      buckets = Array.from({ length: daysInMonth }, (_, index) => ({ label: String(index + 1), transactions: 0, revenue: 0, transactionIds: new Set() }));
+    } else {
+      buckets = Array.from({ length: 7 }, (_, index) => ({ label: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][index], transactions: 0, revenue: 0, transactionIds: new Set() }));
+    }
+
+    const topItems = new Map();
+    filteredSales.forEach((sale) => {
+      const date = new Date(sale.transaction_date);
+      const bucketIndex = volumeFilter === 'day'
+        ? getSaleHour(sale)
+        : volumeFilter === 'month'
+          ? date.getDate() - 1
+          : (getSaleWeekday(sale) + 6) % 7;
+      const bucket = buckets[bucketIndex];
+      if (bucket) {
+        bucket.transactionIds.add(sale.transaction_id);
+        bucket.revenue += toNumber(sale.amount_paid);
+      }
+
+      const itemKey = `${sale.item_type}-${sale.brand_id || sale.product_name}`;
+      const item = topItems.get(itemKey) || { name: sale.product_name, itemType: sale.item_type, units: 0, revenue: 0 };
+      item.units += toNumber(sale.qty_dispensed);
+      item.revenue += toNumber(sale.amount_paid);
+      topItems.set(itemKey, item);
+    });
+
+    return {
+      filteredSales,
+      chart: buckets.map(({ transactionIds, revenue, ...bucket }) => ({ ...bucket, transactions: transactionIds.size, revenue: Number(revenue.toFixed(2)) })),
+      topItems: Array.from(topItems.values()).sort((a, b) => b.units - a.units || b.revenue - a.revenue).slice(0, 5),
+    };
+  }, [analyticsSales, volumeFilter]);
+
+  const volumePeak = volumeAnalytics.chart.reduce((best, bucket) => bucket.transactions > best.transactions ? bucket : best, volumeAnalytics.chart[0]);
   const productBoxes = activeProductTab === 'paper' ? paperBoxes : penBoxes;
 
   return (
@@ -244,7 +364,7 @@ export default function Analytics() {
           </h1>
         </div>
         <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-          Review machine peak performance hours, weekly transactions activity, and item volume distributions.
+          Review local-time performance, transaction volumes, and the items customers buy most.
         </p>
       </div>
 
@@ -258,7 +378,7 @@ export default function Analytics() {
           </div>
           <div>
             <span className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">Peak Sales Hours</span>
-            <span className="block text-lg font-extrabold text-slate-850 dark:text-white mt-0.5 truncate">{kpis.peakHourStr}</span>
+            <span className="block text-lg font-extrabold text-slate-850 dark:text-white mt-0.5 truncate">{peakHour?.transactions ? peakHour.hour : 'N/A'}</span>
           </div>
         </div>
 
@@ -269,7 +389,7 @@ export default function Analytics() {
           </div>
           <div>
             <span className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">Most Active Day</span>
-            <span className="block text-lg font-extrabold text-slate-850 dark:text-white mt-0.5">{kpis.peakDayStr}</span>
+            <span className="block text-lg font-extrabold text-slate-850 dark:text-white mt-0.5">{volumePeak?.transactions ? volumePeak.label : 'N/A'}</span>
           </div>
         </div>
 
@@ -301,45 +421,35 @@ export default function Analytics() {
       <div className="grid grid-cols-1 items-start lg:grid-cols-3 gap-6">
         
         {/* Peak Hours Area Chart */}
-        <div className="lg:col-span-2 p-6 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm flex flex-col justify-between">
-          <div className="mb-4">
-            <h3 className="font-display font-bold text-lg text-slate-800 dark:text-white">Peak Hours Activity Distribution</h3>
-            <p className="text-xs text-slate-400 mt-0.5">Hourly transaction volumes and revenue aggregation trends.</p>
+        <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/[0.06] dark:bg-[#161F30]">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 className="font-display text-lg font-bold text-slate-800 dark:text-white">Peak Hour Distribution</h3>
+              <p className="mt-0.5 text-xs text-slate-400">Local-time transaction activity for the selected date range.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select value={peakFilter} onChange={(event) => setPeakFilter(event.target.value)} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-slate-200">
+                <option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option><option value="range">Date range</option>
+              </select>
+              {(peakFilter === 'day' || peakFilter === 'range') && <input type="date" value={peakFromDate} onChange={(event) => setPeakFromDate(event.target.value)} className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-600 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-slate-200" aria-label="Peak hour start date" />}
+              {peakFilter === 'range' && <input type="date" value={peakToDate} onChange={(event) => setPeakToDate(event.target.value)} className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-600 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-slate-200" aria-label="Peak hour end date" />}
+            </div>
           </div>
           <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={hourlySales} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorHour" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0EA5E9" stopOpacity={0.2}/>
-                    <stop offset="95%" stopColor="#0EA5E9" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
+              <AreaChart data={peakHourlySales} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <defs><linearGradient id="colorHour" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#0EA5E9" stopOpacity={0.2}/><stop offset="95%" stopColor="#0EA5E9" stopOpacity={0}/></linearGradient></defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(148, 163, 184, 0.08)" />
-                <XAxis dataKey="hour" stroke="#94A3B8" fontSize={10} tickLine={false} />
+                <XAxis dataKey="hour" stroke="#94A3B8" fontSize={10} tickLine={false} interval={1} />
                 <YAxis stroke="#94A3B8" fontSize={10} tickLine={false} allowDecimals={false} />
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: 'rgba(30, 41, 59, 0.95)', 
-                    borderColor: 'rgba(255,255,255,0.06)', 
-                    color: '#fff', 
-                    borderRadius: '12px',
-                    fontSize: '12px'
-                  }} 
-                />
-                <Area 
-                  type="monotone" 
-                  dataKey="transactions" 
-                  stroke="#0EA5E9" 
-                  strokeWidth={2} 
-                  dot={{ r: 3, fill: '#0EA5E9' }}
-                  activeDot={{ r: 6 }}
-                  fillOpacity={1} 
-                  fill="url(#colorHour)" 
-                  name="Transactions" 
-                />
+                <Tooltip contentStyle={{ backgroundColor: 'rgba(30, 41, 59, 0.95)', borderColor: 'rgba(255,255,255,0.06)', color: '#fff', borderRadius: '12px', fontSize: '12px' }} />
+                <Area type="monotone" dataKey="transactions" stroke="#0EA5E9" strokeWidth={2} dot={{ r: 3, fill: '#0EA5E9' }} activeDot={{ r: 6 }} fillOpacity={1} fill="url(#colorHour)" name="Transactions" />
               </AreaChart>
             </ResponsiveContainer>
+          </div>
+          <div className="mt-4 flex items-center justify-between rounded-xl bg-primary-50 px-4 py-3 text-sm dark:bg-primary-950/30">
+            <span className="font-semibold text-slate-500 dark:text-slate-300">Peak hour</span>
+            <span className="font-extrabold text-primary-600 dark:text-primary-300">{peakHour?.transactions ? `${peakHour.hour} · ${peakHour.transactions} transactions` : 'No transactions in this range'}</span>
           </div>
         </div>
 
@@ -409,30 +519,31 @@ export default function Analytics() {
 
       </div>
 
-      {/* Week Day Sales Volume (Bar Chart) */}
-      <div className="p-6 rounded-2xl bg-white border border-slate-200 dark:bg-[#161F30] dark:border-white/[0.06] shadow-sm">
-        <div className="mb-6">
-          <h3 className="font-display font-bold text-lg text-slate-800 dark:text-white">Transactions Volume by Day of Week</h3>
-          <p className="text-xs text-slate-400 mt-0.5">Determine the busiest operating days based on weekly transactions count.</p>
+      {/* Transaction Volume and Top Items */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/[0.06] dark:bg-[#161F30]">
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="font-display text-lg font-bold text-slate-800 dark:text-white">Transaction Volumes</h3>
+            <p className="mt-0.5 text-xs text-slate-400">Compare completed transaction activity and the most purchased items.</p>
+          </div>
+          <select value={volumeFilter} onChange={(event) => setVolumeFilter(event.target.value)} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-slate-200">
+            <option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option>
+          </select>
         </div>
         <div className="h-72 w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={dayOfWeekSales} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+            <BarChart data={volumeAnalytics.chart} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(148, 163, 184, 0.08)" />
-              <XAxis dataKey="day" stroke="#94A3B8" fontSize={11} tickLine={false} />
+              <XAxis dataKey="label" stroke="#94A3B8" fontSize={10} tickLine={false} interval={volumeFilter === 'month' ? 2 : 0} />
               <YAxis stroke="#94A3B8" fontSize={11} tickLine={false} allowDecimals={false} />
-              <Tooltip 
-                contentStyle={{ 
-                  backgroundColor: 'rgba(30, 41, 59, 0.95)', 
-                  borderColor: 'rgba(255,255,255,0.06)', 
-                  color: '#fff', 
-                  borderRadius: '12px',
-                  fontSize: '12px'
-                }} 
-              />
+              <Tooltip contentStyle={{ backgroundColor: 'rgba(30, 41, 59, 0.95)', borderColor: 'rgba(255,255,255,0.06)', color: '#fff', borderRadius: '12px', fontSize: '12px' }} />
               <Bar dataKey="transactions" fill="#10B981" radius={[8, 8, 0, 0]} maxBarSize={45} name="Transactions" />
             </BarChart>
           </ResponsiveContainer>
+        </div>
+        <div className="mt-6 border-t border-slate-100 pt-5 dark:border-white/[0.06]">
+          <h4 className="mb-3 text-xs font-extrabold uppercase tracking-[0.16em] text-slate-400">Top 5 Most Bought Items</h4>
+          {volumeAnalytics.topItems.length ? <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">{volumeAnalytics.topItems.map((item, index) => <div key={`${item.itemType}-${item.name}`} className="rounded-xl bg-slate-50 px-3 py-3 dark:bg-slate-900/40"><div className="flex items-center justify-between gap-2"><span className="text-xs font-extrabold text-primary-500">#{index + 1}</span><span className="text-xs font-bold text-slate-400">{item.units} sold</span></div><p className="mt-2 truncate text-sm font-extrabold text-slate-700 dark:text-slate-200">{item.name}</p><p className="mt-1 text-xs font-semibold text-slate-400">{formatCurrency(item.revenue)}</p></div>)}</div> : <p className="text-sm font-semibold text-slate-400">No completed transactions in this period.</p>}
         </div>
       </div>
 
