@@ -148,7 +148,8 @@ function flattenTransactionLine(line) {
     failure_reason: transaction.failure_reason,
     transaction_date: transaction.created_at,
     completed_at: transaction.completed_at,
-    line_status: line.line_status
+    line_status: line.line_status,
+    refund_paid: asMoney(transaction.refund_paid_cents)
   };
 }
 
@@ -179,7 +180,7 @@ async function getInventory(supabase) {
 async function getTransactionLines(supabase) {
   const { data, error } = await supabase
     .from('sales_transaction_lines')
-    .select('*, sales_transactions!inner(id, tr_number, status, credit_received_cents, subtotal_cents, change_due_cents, change_paid_cents, failure_reason, created_at, completed_at)');
+    .select('*, sales_transactions!inner(id, tr_number, status, credit_received_cents, subtotal_cents, change_due_cents, change_paid_cents, refund_paid_cents, failure_reason, created_at, completed_at)');
   if (error) throw error;
   return (data || [])
     .map(flattenTransactionLine)
@@ -399,6 +400,21 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     } catch (err) {
       console.error('Error releasing transaction change:', err);
       return res.status(400).json({ message: err.message || 'Could not release the transaction change.' });
+    }
+  });
+
+  // This records a physical cash handover by an authorized administrator.
+  // The dashboard is intentionally not permitted to run the hopper remotely.
+  router.post('/transactions/:transactionId/record-failed-dispense-refund', authorizeRoles('superadmin', 'staff'), async (req, res) => {
+    try {
+      const { data, error } = await supabase.rpc('machine_record_failed_dispense_refund', {
+        p_transaction_id: req.params.transactionId
+      });
+      if (error) throw error;
+      return res.status(200).json({ message: 'Failed-dispense credit refund recorded.', transaction: data?.[0] || null });
+    } catch (err) {
+      console.error('Error recording failed-dispense refund:', err);
+      return res.status(400).json({ message: err.message || 'Could not record the failed-dispense credit refund.' });
     }
   });
 

@@ -400,6 +400,10 @@ bool callRpc(const char* functionName, JsonDocument &request, DynamicJsonDocumen
     sendError("HTTPS_START_FAILED");
     return false;
   }
+  // Reservation/finish requests are on the customer's critical path. Fail
+  // promptly and use the existing retry flow instead of blocking for a long
+  // network timeout.
+  http.setTimeout(5000);
   http.addHeader("apikey", SUPABASE_ANON_KEY);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
   http.addHeader("Content-Type", "application/json");

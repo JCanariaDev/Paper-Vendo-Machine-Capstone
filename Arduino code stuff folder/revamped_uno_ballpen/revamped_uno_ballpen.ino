@@ -103,7 +103,7 @@ bool dispenseOnePen() {
   bool detected = waitForSensor();
   if (stopRequested) return false;
 
-  delay(300);
+  delay(100); // Let the pen clear the sensor, without delaying the next item.
   bool returned = moveInterruptible(-HALF_TURN_STEPS);
   disableMotor();
   return detected && returned;

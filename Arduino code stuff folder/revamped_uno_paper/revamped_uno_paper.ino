@@ -47,8 +47,9 @@ const int PAPER_EXIT_SENSOR_PINS[MOTOR_COUNT] = { 11, 12 };
 const int PAPER_EXIT_BLOCKED_LEVEL = LOW;
 const int PAPER_LEVEL_SENSOR_PINS[MOTOR_COUNT] = { 6, 7 };
 const int PAPER_LEVEL_HIGH_LEVEL = LOW;
-const unsigned long PAPER_EXIT_TIMEOUT_MS = 2500;
-const unsigned long PAPER_EXIT_CLEAR_TIMEOUT_MS = 1000;
+// Failure detection should be quick, while still allowing normal paper travel.
+const unsigned long PAPER_EXIT_TIMEOUT_MS = 1200;
+const unsigned long PAPER_EXIT_CLEAR_TIMEOUT_MS = 400;
 const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
@@ -180,7 +181,7 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
     }
 
     sheetsDispensed++;
-    delay(100); // Inter-sheet stabilization gap
+    delay(40); // Short gap prevents a second sheet from immediately following.
   }
 
   disableDrivers();

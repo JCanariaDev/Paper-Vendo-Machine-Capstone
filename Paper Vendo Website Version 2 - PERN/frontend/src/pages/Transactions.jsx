@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { AlertCircle, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Filter, HandCoins, Info, Search } from 'lucide-react';
+import { AlertCircle, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Filter, HandCoins, Info, RefreshCw, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const PAGE_SIZE = 10;
+const AUTO_REFRESH_MS = 15000;
 const currency = (value) => `PHP ${Number(value || 0).toFixed(2)}`;
 const dateKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 
@@ -64,12 +65,28 @@ export default function Transactions() {
   const [specificDate, setSpecificDate] = useState('');
   const [page, setPage] = useState(1);
   const [releasingId, setReleasingId] = useState('');
+  const [refundingId, setRefundingId] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
-  const loadSales = () => axios.get('/api/machine/transactions').then((response) => setSales(response.data || []));
+  const loadSales = useCallback(async ({ showRefreshing = false } = {}) => {
+    if (showRefreshing) setRefreshing(true);
+    try {
+      const response = await axios.get('/api/machine/transactions');
+      setSales(response.data || []);
+      setLastUpdated(new Date());
+    } finally {
+      if (showRefreshing) setRefreshing(false);
+    }
+  }, []);
 
   useEffect(() => {
     loadSales().catch((error) => console.error('Error fetching transaction lines:', error)).finally(() => setLoading(false));
-  }, []);
+    const refreshTimer = window.setInterval(() => {
+      loadSales().catch((error) => console.error('Automatic transaction refresh failed:', error));
+    }, AUTO_REFRESH_MS);
+    return () => window.clearInterval(refreshTimer);
+  }, [loadSales]);
 
   const transactions = useMemo(() => {
     const now = new Date();
@@ -116,6 +133,21 @@ export default function Transactions() {
     }
   };
 
+  const recordFailedDispenseRefund = async (transaction) => {
+    const refundAmount = Math.max(0, Number(transaction.credit_received || 0) - Number(transaction.change_paid || 0) - Number(transaction.refund_paid || 0));
+    if (!window.confirm(`Confirm that you handed ${currency(refundAmount)} to the customer for ${transaction.tr_number}. This records the manual refund and cannot run the hopper.`)) return;
+    setRefundingId(transaction.transaction_id);
+    try {
+      await axios.post(`/api/machine/transactions/${encodeURIComponent(transaction.transaction_id)}/record-failed-dispense-refund`);
+      await loadSales();
+    } catch (error) {
+      console.error('Error recording failed-dispense refund:', error);
+      window.alert(error.response?.data?.message || 'Could not record the refund.');
+    } finally {
+      setRefundingId('');
+    }
+  };
+
   const updateDateFilter = (value) => {
     setDateFilter(value);
     if (value !== 'day') setSpecificDate('');
@@ -125,9 +157,12 @@ export default function Transactions() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-8 font-sans">
-      <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
         <div className="flex items-center gap-3"><div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-white p-2 shadow-sm dark:border-white/[0.08] dark:bg-[#161F30]"><img src="/logo.png" alt="P&B V Machine Logo" className="h-full w-full object-contain" /></div><h1 className="font-display text-3xl font-extrabold leading-tight text-slate-800 dark:text-white md:text-4xl">Sales History Logs</h1></div>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Verified transaction receipts with physical output, change tracking, and release confirmation.</p>
+        </div>
+        <div className="flex items-center gap-3"><span className="text-xs font-semibold text-slate-400">{lastUpdated ? `Auto-refresh: ${lastUpdated.toLocaleTimeString()}` : 'Auto-refreshing...'}</span><button type="button" onClick={() => loadSales({ showRefreshing: true }).catch((error) => { console.error('Manual transaction refresh failed:', error); window.alert('Could not refresh sales history.'); })} disabled={refreshing} className="inline-flex h-10 items-center gap-2 rounded-xl border border-primary-200 bg-primary-50 px-3.5 text-xs font-extrabold text-primary-700 transition hover:bg-primary-100 disabled:cursor-wait disabled:opacity-60 dark:border-primary-800/50 dark:bg-primary-950/30 dark:text-primary-300"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />{refreshing ? 'Refreshing...' : 'Refresh'}</button></div>
       </div>
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -146,13 +181,16 @@ export default function Transactions() {
                 const changeDue = Number(transaction.change_due || 0);
                 const changePaid = Number(transaction.change_paid || 0);
                 const changeOwed = Math.max(0, changeDue - changePaid);
+                const refundPaid = Number(transaction.refund_paid || 0);
+                const refundableCredit = Math.max(0, Number(transaction.credit_received || 0) - changePaid - refundPaid);
+                const canRecordRefund = transaction.status === 'FAILED_DISPENSE' && transaction.totalDispensed === 0 && refundableCredit > 0;
                 const trNumber = transaction.tr_number || `TR-${String(transaction.transaction_id || transaction.id).slice(0, 5).toUpperCase()}`;
                 const transactionId = transaction.transaction_id;
 
                 return <article key={transactionId} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 transition hover:border-primary-300 hover:bg-primary-50/30 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-primary-500/50 dark:hover:bg-primary-500/[0.06] sm:p-5">
                   <div className="flex items-start justify-between gap-4"><span className="inline-flex items-center rounded-lg border border-primary-100 bg-primary-50 px-2.5 py-1 font-mono text-xs font-extrabold text-primary-600 dark:border-primary-800/40 dark:bg-primary-950/40 dark:text-primary-300">{trNumber}</span><span className="inline-flex items-center gap-1.5 text-right text-xs font-semibold text-slate-400"><Calendar className="h-3.5 w-3.5" />{new Date(transaction.transaction_date).toLocaleString()}</span></div>
                   <div className="mt-4 space-y-2">{transaction.lines.map((line) => <div key={line.id} className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-base font-extrabold text-slate-800 dark:text-white">{line.product_name}{line.item_type === 'paper' && line.paper_size ? ` · ${line.paper_size}` : ''}</p><p className="mt-1 text-sm font-semibold text-slate-500 dark:text-slate-400">{line.units_requested} {line.units_requested === 1 ? 'unit' : 'units'} · {line.qty_dispensed}/{line.qty_requested} {line.item_type === 'paper' ? 'sheets' : 'pieces'} dispensed</p></div><span className="shrink-0 text-xs font-bold text-primary-600 dark:text-primary-300">{currency(line.amount_paid)}</span></div>)}</div>
-                  <div className="mt-4 flex flex-col gap-3 border-t border-slate-200/80 pt-3 dark:border-white/[0.07] sm:flex-row sm:items-center sm:justify-between"><div className="text-xs font-semibold text-slate-500 dark:text-slate-400"><span className="mr-2 uppercase tracking-wider text-slate-400">Change audit</span>{changeOwed > 0 ? <span className="text-amber-600 dark:text-amber-300">Owed {currency(changeOwed)}</span> : changeDue > 0 ? <span className="text-emerald-600 dark:text-emerald-300">Paid {currency(changePaid)}</span> : <span>Exact pay</span>}</div><div className="flex flex-wrap items-center gap-2">{changeOwed > 0 && <button type="button" disabled={releasingId === transactionId} onClick={() => releaseChange(transactionId)} className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-100 px-3 py-1.5 text-xs font-extrabold text-amber-700 transition hover:bg-amber-200 disabled:cursor-wait disabled:opacity-50 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300"><HandCoins className="h-3.5 w-3.5" />{releasingId === transactionId ? 'Releasing...' : 'Release Change'}</button>}{isFailed ? <button type="button" onClick={() => navigate(`/logs?transaction=${encodeURIComponent(trNumber)}`)} className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-extrabold uppercase tracking-wide ${statusTone[details.tone]} underline decoration-dotted underline-offset-4`} title="Open related machine logs"><StatusIcon className="h-3.5 w-3.5" />{details.label}</button> : <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-extrabold uppercase tracking-wide ${statusTone[details.tone]}`}><StatusIcon className="h-3.5 w-3.5" />{details.label}</span>}</div></div>
+                  <div className="mt-4 flex flex-col gap-3 border-t border-slate-200/80 pt-3 dark:border-white/[0.07] sm:flex-row sm:items-center sm:justify-between"><div className="text-xs font-semibold text-slate-500 dark:text-slate-400"><span className="mr-2 uppercase tracking-wider text-slate-400">Change audit</span>{changeOwed > 0 ? <span className="text-amber-600 dark:text-amber-300">Owed {currency(changeOwed)}</span> : changeDue > 0 ? <span className="text-emerald-600 dark:text-emerald-300">Paid {currency(changePaid)}</span> : <span>Exact pay</span>}{refundPaid > 0 && <span className="ml-2 text-emerald-600 dark:text-emerald-300">Credit refund recorded {currency(refundPaid)}</span>}</div><div className="flex flex-wrap items-center gap-2">{changeOwed > 0 && <button type="button" disabled={releasingId === transactionId} onClick={() => releaseChange(transactionId)} className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-100 px-3 py-1.5 text-xs font-extrabold text-amber-700 transition hover:bg-amber-200 disabled:cursor-wait disabled:opacity-50 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300"><HandCoins className="h-3.5 w-3.5" />{releasingId === transactionId ? 'Releasing...' : 'Release Change'}</button>}{canRecordRefund && <button type="button" disabled={refundingId === transactionId} onClick={() => recordFailedDispenseRefund(transaction)} className="inline-flex items-center gap-1.5 rounded-full border border-red-300 bg-red-100 px-3 py-1.5 text-xs font-extrabold text-red-700 transition hover:bg-red-200 disabled:cursor-wait disabled:opacity-50 dark:border-red-800/50 dark:bg-red-950/40 dark:text-red-300"><HandCoins className="h-3.5 w-3.5" />{refundingId === transactionId ? 'Recording...' : `Record Refund ${currency(refundableCredit)}`}</button>}{isFailed ? <button type="button" onClick={() => navigate(`/logs?transaction=${encodeURIComponent(trNumber)}`)} className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-extrabold uppercase tracking-wide ${statusTone[details.tone]} underline decoration-dotted underline-offset-4`} title="Open related machine logs"><StatusIcon className="h-3.5 w-3.5" />{details.label}</button> : <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-extrabold uppercase tracking-wide ${statusTone[details.tone]}`}><StatusIcon className="h-3.5 w-3.5" />{details.label}</span>}</div></div>
                 </article>;
               })}
             </div></section>

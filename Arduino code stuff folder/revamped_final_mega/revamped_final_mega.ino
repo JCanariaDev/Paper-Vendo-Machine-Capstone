@@ -67,7 +67,9 @@ const int CHANGE_HOPPER_SENSOR_PIN = 23;
 const unsigned long CHANGE_COIN_TIMEOUT_MS  = 5000;
 const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
-const unsigned long PAPER_DISPENSE_TIMEOUT_MS = 15000;
+// Paper Uno reports a confirmed result promptly; avoid a long dead wait if its
+// UART cable/controller is unavailable.
+const unsigned long PAPER_DISPENSE_TIMEOUT_MS = 8000;
 
 const int HOPPER_RELAY_ON  = LOW;  // LOW  = Relay LED ON  -> Motor ON
 const int HOPPER_RELAY_OFF = HIGH; // HIGH = Relay LED OFF -> Motor OFF
