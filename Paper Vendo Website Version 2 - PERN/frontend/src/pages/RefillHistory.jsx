@@ -10,6 +10,8 @@ const formatDate = (value) => new Date(value).toLocaleString(undefined, {
 export default function RefillHistory() {
   const [history, setHistory] = useState([]);
   const [filter, setFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState('all');
+  const [specificDate, setSpecificDate] = useState('');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -32,16 +34,28 @@ export default function RefillHistory() {
   }, []);
 
   const visibleHistory = useMemo(() => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekStart = new Date(today);
+    weekStart.setDate(today.getDate() - (today.getDay() === 0 ? 6 : today.getDay() - 1));
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const query = search.trim().toLowerCase();
     return history.filter((entry) => {
       const matchesType = filter === 'all' || entry.item_type === filter;
+      const entryDate = new Date(entry.created_at);
+      const entryDay = `${entryDate.getFullYear()}-${String(entryDate.getMonth() + 1).padStart(2, '0')}-${String(entryDate.getDate()).padStart(2, '0')}`;
+      const matchesDate = dateFilter === 'all'
+        || (dateFilter === 'today' && entryDate >= today)
+        || (dateFilter === 'week' && entryDate >= weekStart)
+        || (dateFilter === 'month' && entryDate >= monthStart)
+        || (dateFilter === 'day' && specificDate === entryDay);
       const searchable = [entry.product_name, entry.compartment_number, entry.operation, entry.performed_by]
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
-      return matchesType && (!query || searchable.includes(query));
+      return matchesType && matchesDate && (!query || searchable.includes(query));
     });
-  }, [filter, history, search]);
+  }, [dateFilter, filter, history, search, specificDate]);
 
   return (
     <div className="mx-auto max-w-6xl space-y-8 font-sans">
@@ -64,8 +78,18 @@ export default function RefillHistory() {
           <Search className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search product, compartment, or operation..." className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-11 pr-4 text-sm text-slate-800 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-white" />
         </div>
-        <div className="flex rounded-xl border border-slate-200 bg-white p-1 dark:border-white/[0.08] dark:bg-[#161F30]">
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={dateFilter} onChange={(event) => { setDateFilter(event.target.value); if (event.target.value !== 'day') setSpecificDate(''); }} className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-white">
+            <option value="all">All dates</option>
+            <option value="today">Today</option>
+            <option value="week">This week</option>
+            <option value="month">This month</option>
+            <option value="day">Specific day</option>
+          </select>
+          {dateFilter === 'day' && <input type="date" value={specificDate} onChange={(event) => setSpecificDate(event.target.value)} className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-[#161F30] dark:text-white" aria-label="Choose refill date" />}
+          <div className="flex rounded-xl border border-slate-200 bg-white p-1 dark:border-white/[0.08] dark:bg-[#161F30]">
           {['all', 'paper', 'pen'].map((value) => <button key={value} type="button" onClick={() => setFilter(value)} className={`rounded-lg px-4 py-2 text-xs font-extrabold capitalize transition ${filter === value ? 'bg-primary-500 text-white' : 'text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/[0.05]'}`}>{value === 'pen' ? 'Ballpens' : value === 'all' ? 'All' : 'Paper'}</button>)}
+          </div>
         </div>
       </div>
 

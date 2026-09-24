@@ -388,69 +388,33 @@ export default function Inventory() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm border-collapse">
-              <thead>
-                <tr className="border-b border-slate-100 dark:border-white/[0.04] text-slate-400 text-xs font-bold uppercase tracking-wider">
-                  <th className="py-3 px-4">Brand / Specification</th>
-                  <th className="py-3 px-4 text-center">Sheets / Unit</th>
-                  <th className="py-3 px-4 text-center">Price / Unit</th>
-                  <th className="py-3 px-4 text-center">Storage Stock (PADs)</th>
-                  <th className="py-3 px-4 text-center">Location State</th>
-                  {user?.role !== 'staff' && <th className="py-3 px-4 text-right">Actions</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
-                {filteredPaper.map((item) => {
-                  const isInBay = item.location_status === 'In compartment';
-                  return (
-                    <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
-                      <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
-                        <div className="flex items-center gap-2">
-                          <span className={`w-2 h-2 rounded-full ${isInBay ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                          <span>{item.brand_name} – {item.paper_size}</span>
-                        </div>
-                      </td>
-                      <td className="py-4 px-4 text-center font-bold text-primary-500">
-                        {item.sheets_per_unit} sheets
-                      </td>
-                      <td className="py-4 px-4 text-center font-bold">
-                        ₱{item.cost_per_unit}
-                      </td>
-                      <td className="py-4 px-4 text-center">
-                        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-100 dark:bg-white/[0.04] font-bold text-slate-700 dark:text-slate-200">
-                          <Package className="w-3.5 h-3.5 text-primary-500" />
-                          <span>{item.stock_pads} PADs</span>
-                        </span>
-                      </td>
-                      <td className="py-4 px-4 text-center">
-                        {isInBay ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                            <CheckCircle className="w-3 h-3" />
-                            Bay {item.assigned_bay} ({item.presence_status === 'HIGH' ? 'Active' : 'Empty'})
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 dark:bg-white/[0.05] text-slate-500">
-                            In Storage
-                          </span>
-                        )}
-                      </td>
-                      {user?.role !== 'staff' && (
-                        <td className="py-4 px-4 text-right">
-                          <button 
-                            onClick={() => openMasterEditModal('paper', item)}
-                            className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-400 hover:text-primary-500 transition-colors"
-                            title="Edit Pricing & Storage Pads"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="grid gap-3 md:grid-cols-2">
+            {filteredPaper.map((item) => {
+              const isInBay = item.location_status === 'In compartment';
+              return (
+                <article key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-primary-300 hover:bg-primary-50/30 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-primary-500/50 dark:hover:bg-primary-500/[0.05]">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-2.5">
+                      <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${isInBay ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                      <div className="min-w-0">
+                        <h3 className="truncate text-base font-extrabold text-slate-800 dark:text-white">{item.brand_name}</h3>
+                        <p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">{item.paper_size}</p>
+                      </div>
+                    </div>
+                    {user?.role !== 'staff' && <button onClick={() => openMasterEditModal('paper', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title="Edit Pricing & Storage Pads"><Edit3 className="h-4 w-4" /></button>}
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-2 border-t border-slate-200/80 pt-3 dark:border-white/[0.07]">
+                    <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Sheets / pad</p><p className="mt-1 text-sm font-extrabold text-primary-600 dark:text-primary-300">{item.sheets_per_unit}</p></div>
+                    <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Price</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">₱{item.cost_per_unit}</p></div>
+                    <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Storage</p><p className="mt-1 inline-flex items-center gap-1 text-sm font-extrabold text-slate-800 dark:text-white"><Package className="h-3.5 w-3.5 text-primary-500" />{item.stock_pads} pads</p></div>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Location</span>
+                    {isInBay ? <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-600 dark:text-emerald-400"><CheckCircle className="h-3 w-3" />Bay {item.assigned_bay} · {item.presence_status === 'HIGH' ? 'Active' : 'Empty'}</span> : <span className="rounded-full bg-slate-200/70 px-2.5 py-1 text-xs font-bold text-slate-500 dark:bg-white/[0.05]">In Storage</span>}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         </div>
 
@@ -465,57 +429,17 @@ export default function Inventory() {
             </h2>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm border-collapse">
-              <thead>
-                <tr className="border-b border-slate-100 dark:border-white/[0.04] text-slate-400 text-xs font-bold uppercase tracking-wider">
-                  <th className="py-3 px-4">Pen Specification</th>
-                  <th className="py-3 px-4 text-center">Cost / Piece</th>
-                  <th className="py-3 px-4 text-center">Storage Stock (Pieces)</th>
-                  <th className="py-3 px-4 text-center">Location State</th>
-                  {user?.role !== 'staff' && <th className="py-3 px-4 text-right">Actions</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-white/[0.03]">
-                {filteredPen.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.01]">
-                    <td className="py-4 px-4 font-semibold text-slate-800 dark:text-white">
-                      {item.item_name}
-                    </td>
-                    <td className="py-4 px-4 text-center font-bold">₱{item.cost_per_unit}</td>
-                    <td className="py-4 px-4 text-center">
-                      <span className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-100 dark:bg-white/[0.04] font-bold text-slate-700 dark:text-slate-200">
-                        <Package className="w-3.5 h-3.5 text-blue-500" />
-                        <span>{item.storage_stock_pieces} pcs</span>
-                      </span>
-                    </td>
-                    <td className="py-4 px-4 text-center">
-                      {item.assigned_bay ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-500/10 text-blue-500 border border-blue-500/20">
-                          <CheckCircle className="w-3 h-3" />
-                          Loaded in Bay {item.assigned_bay} ({item.current_bay_stock} pcs)
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 dark:bg-white/[0.05] text-slate-500">
-                          In Storage
-                        </span>
-                      )}
-                    </td>
-                    {user?.role !== 'staff' && (
-                      <td className="py-4 px-4 text-right">
-                        <button 
-                          onClick={() => openMasterEditModal('pen', item)}
-                          className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.04] text-slate-400 hover:text-primary-500 transition-colors"
-                          title="Edit Pricing & Storage Pieces"
-                        >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {filteredPen.map((item) => (
+              <article key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-blue-300 hover:bg-blue-50/30 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-blue-500/50 dark:hover:bg-blue-500/[0.05]">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-2.5"><span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-blue-500" /><div className="min-w-0"><h3 className="truncate text-base font-extrabold text-slate-800 dark:text-white">{item.item_name}</h3><p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Ballpen product</p></div></div>
+                  {user?.role !== 'staff' && <button onClick={() => openMasterEditModal('pen', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title="Edit Pricing & Storage Pieces"><Edit3 className="h-4 w-4" /></button>}
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-200/80 pt-3 dark:border-white/[0.07]"><div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cost / piece</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">₱{item.cost_per_unit}</p></div><div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Storage</p><p className="mt-1 inline-flex items-center gap-1 text-sm font-extrabold text-slate-800 dark:text-white"><Package className="h-3.5 w-3.5 text-blue-500" />{item.storage_stock_pieces} pcs</p></div></div>
+                <div className="mt-3 flex items-center justify-between gap-2"><span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Location</span>{item.assigned_bay ? <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/20 bg-blue-500/10 px-2.5 py-1 text-xs font-bold text-blue-500"><CheckCircle className="h-3 w-3" />Bay {item.assigned_bay} · {item.current_bay_stock} pcs</span> : <span className="rounded-full bg-slate-200/70 px-2.5 py-1 text-xs font-bold text-slate-500 dark:bg-white/[0.05]">In Storage</span>}</div>
+              </article>
+            ))}
           </div>
         </div>
 
