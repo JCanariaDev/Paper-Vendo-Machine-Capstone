@@ -69,7 +69,9 @@ const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
 // Paper Uno reports a confirmed result promptly; avoid a long dead wait if its
 // UART cable/controller is unavailable.
-const unsigned long PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS = 4500;
+// Must cover the Paper Uno's 20-second sensor/jam safety window. A normal
+// dispense still returns immediately when the exit sensor clears.
+const unsigned long PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS = 22000;
 
 const int HOPPER_RELAY_ON  = LOW;  // LOW  = Relay LED ON  -> Motor ON
 const int HOPPER_RELAY_OFF = HIGH; // HIGH = Relay LED OFF -> Motor OFF
@@ -205,6 +207,7 @@ CatalogItem paperCatalog[PAPER_COUNT] = {
   {1, "Bay 1 Paper",  1.00, true, 1, 1, true},
   {2, "Bay 2 Paper",  1.00, true, 1, 1, true}
 };
+long paperRemainingSheets[PAPER_COUNT] = { -1, -1 };
 
 const int BALLPEN_COUNT = 1;
 CatalogItem ballpenCatalog[BALLPEN_COUNT] = {

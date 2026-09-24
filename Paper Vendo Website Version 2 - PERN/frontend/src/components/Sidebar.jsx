@@ -5,6 +5,7 @@ import {
   LayoutDashboard, 
   MonitorCheck,
   Boxes, 
+  PackagePlus,
   History, 
   ScrollText,
   TrendingUp,
@@ -24,6 +25,7 @@ export default function Sidebar({ isOpen, onClose }) {
     { to: '/dashboard', label: 'Dashboard',       icon: LayoutDashboard },
     { to: '/monitor',   label: 'Machine Monitor', icon: MonitorCheck },
     { to: '/inventory', label: 'Inventory',        icon: Boxes },
+    { to: '/refill-history', label: 'Refill History', icon: PackagePlus },
     { to: '/transactions', label: 'Sales History', icon: History },
     { to: '/logs',        label: 'Machine Logs',  icon: ScrollText },
   ];

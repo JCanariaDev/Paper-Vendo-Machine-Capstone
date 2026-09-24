@@ -9,6 +9,14 @@ const asInt = (value, fallback = 0) => {
 
 const asMoney = (cents) => asInt(cents) / 100;
 
+async function recordRefillHistory(supabase, entry) {
+  const { error } = await supabase.from('inventory_refill_history').insert(entry);
+  if (error) {
+    // A history write must not undo an already-completed stock transfer.
+    console.error('Could not record inventory refill history:', error.message);
+  }
+}
+
 function encryptNetworkPassword(password) {
   const key = Buffer.from(process.env.NETWORK_CONFIG_ENCRYPTION_KEY || '', 'base64');
   if (key.length !== 32) {
@@ -375,6 +383,21 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     }
   });
 
+  router.get('/inventory/refill-history', async (_req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('inventory_refill_history')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(500);
+      if (error) throw error;
+      return res.status(200).json(data || []);
+    } catch (err) {
+      console.error('Error fetching inventory refill history:', err);
+      return res.status(500).json({ message: 'Failed to retrieve refill history.' });
+    }
+  });
+
   router.get('/transactions', async (req, res) => {
     const { limit, startDate, endDate, itemType, status } = req.query;
     try {
@@ -562,6 +585,11 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     try {
       const productId = assigned_product_id ? asInt(assigned_product_id) : null;
       const pads = asInt(pads_refilled, 0);
+      const { data: beforeComp } = await supabase
+        .from('paper_compartments')
+        .select('assigned_product_id, current_pad_stock')
+        .eq('compartment_number', compartmentNumber)
+        .single();
 
       // Call database procedure to reassign and deduct pads safely
       const { error: rpcError } = await supabase.rpc('admin_reassign_paper_bay', {
@@ -634,6 +662,30 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
         }).eq('compartment_number', compartmentNumber);
       }
 
+      const { data: afterComp } = await supabase
+        .from('paper_compartments')
+        .select('assigned_product_id, current_pad_stock')
+        .eq('compartment_number', compartmentNumber)
+        .single();
+      const { data: product } = productId
+        ? await supabase.from('paper_inventory').select('brand_name, paper_size').eq('id', productId).single()
+        : { data: null };
+      const wasReassigned = beforeComp?.assigned_product_id && productId && beforeComp.assigned_product_id !== productId;
+      if (pads > 0 || wasReassigned) {
+        await recordRefillHistory(supabase, {
+          item_type: 'paper',
+          compartment_number: compartmentNumber,
+          product_id: productId,
+          product_name: product ? `${product.brand_name} ${product.paper_size}` : 'Unassigned paper bay',
+          operation: wasReassigned ? 'REASSIGNMENT' : 'REFILL',
+          quantity_added: pads,
+          quantity_unit: 'pads',
+          previous_compartment_stock: asInt(beforeComp?.current_pad_stock),
+          resulting_compartment_stock: asInt(afterComp?.current_pad_stock),
+          performed_by: req.user?.username || null
+        });
+      }
+
       return res.status(200).json({ message: `Paper Compartment ${compartmentNumber} updated successfully.` });
     } catch (err) {
       console.error('Error updating paper compartment:', err);
@@ -650,6 +702,11 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
       const productId = assigned_product_id ? asInt(assigned_product_id) : null;
       const refilled = asInt(pieces_refilled, 0);
       const directStock = (current_stock !== undefined && refilled === 0) ? asInt(current_stock) : null;
+      const { data: beforeComp } = await supabase
+        .from('ballpen_compartments')
+        .select('assigned_product_id, current_piece_stock')
+        .eq('compartment_number', compartmentNumber)
+        .single();
 
       // 1. Try atomic database stored procedure
       const { error: rpcError } = await supabase.rpc('admin_reassign_pen_bay', {
@@ -716,6 +773,30 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
         }).eq('compartment_number', compartmentNumber);
 
         if (error) throw error;
+      }
+
+      const { data: afterComp } = await supabase
+        .from('ballpen_compartments')
+        .select('assigned_product_id, current_piece_stock')
+        .eq('compartment_number', compartmentNumber)
+        .single();
+      const { data: product } = productId
+        ? await supabase.from('ballpen_inventory').select('item_name').eq('id', productId).single()
+        : { data: null };
+      const wasReassigned = beforeComp?.assigned_product_id && productId && beforeComp.assigned_product_id !== productId;
+      if (refilled > 0 || directStock !== null || wasReassigned) {
+        await recordRefillHistory(supabase, {
+          item_type: 'pen',
+          compartment_number: compartmentNumber,
+          product_id: productId,
+          product_name: product?.item_name || 'Unassigned ballpen bay',
+          operation: wasReassigned ? 'REASSIGNMENT' : refilled > 0 ? 'REFILL' : 'ADJUSTMENT',
+          quantity_added: refilled,
+          quantity_unit: 'pieces',
+          previous_compartment_stock: asInt(beforeComp?.current_piece_stock),
+          resulting_compartment_stock: asInt(afterComp?.current_piece_stock),
+          performed_by: req.user?.username || null
+        });
       }
 
       return res.status(200).json({ message: `Ballpen Compartment ${compartmentNumber} updated successfully.` });

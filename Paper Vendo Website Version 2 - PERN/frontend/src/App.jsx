@@ -10,6 +10,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import MachineMonitor from './pages/MachineMonitor';
 import Inventory from './pages/Inventory';
+import RefillHistory from './pages/RefillHistory';
 import Transactions from './pages/Transactions';
 import Logs from './pages/Logs';
 import Analytics from './pages/Analytics';
@@ -190,6 +191,14 @@ export default function App() {
                 <Transactions />
               </ProtectedRoute>
             } 
+          />
+          <Route
+            path="/refill-history"
+            element={
+              <ProtectedRoute>
+                <RefillHistory />
+              </ProtectedRoute>
+            }
           />
           <Route
             path="/logs"

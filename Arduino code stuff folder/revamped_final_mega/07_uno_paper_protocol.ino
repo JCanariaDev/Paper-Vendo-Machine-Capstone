@@ -34,10 +34,19 @@ void parsePaperBay(String msg) {
   int idx = bayNum - 1;
   if (idx < 0 || idx >= PAPER_COUNT) return;
 
+  const int normalizedPadStock = max(0, currentPadStock);
+  const int normalizedSheetsPerPad = max(1, sheetsPerPad);
+  const bool sameStockSnapshot = paperRemainingSheets[idx] >= 0 &&
+                                 paperCatalog[idx].currentPadStock == normalizedPadStock &&
+                                 paperCatalog[idx].sheetsPerPad == normalizedSheetsPerPad;
+
   paperCatalog[idx].id    = prodId;
   paperCatalog[idx].price = priceCents / 100.0;
-  paperCatalog[idx].currentPadStock = max(0, currentPadStock);
-  paperCatalog[idx].sheetsPerPad = max(1, sheetsPerPad);
+  paperCatalog[idx].currentPadStock = normalizedPadStock;
+  paperCatalog[idx].sheetsPerPad = normalizedSheetsPerPad;
+  if (!sameStockSnapshot) {
+    paperRemainingSheets[idx] = (long)paperCatalog[idx].currentPadStock * paperCatalog[idx].sheetsPerPad;
+  }
   paperCatalog[idx].isPaperPresent = currentPadStock > 0;
   name.toCharArray(paperCatalogNames[idx], 32);
   paperCatalog[idx].name = paperCatalogNames[idx];
@@ -165,11 +174,14 @@ int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName)
         int second = response.indexOf(':', 5);
         int count = response.substring(second + 1).toInt();
         const int sheetsPerPad = max(1, paperCatalog[bayNumber - 1].sheetsPerPad);
-        const int padsUsed = (count + sheetsPerPad - 1) / sheetsPerPad;
-        paperCatalog[bayNumber - 1].currentPadStock = max(
-          0,
-          paperCatalog[bayNumber - 1].currentPadStock - padsUsed
-        );
+        if (paperRemainingSheets[bayNumber - 1] >= 0) {
+          paperRemainingSheets[bayNumber - 1] = max(
+            0L,
+            paperRemainingSheets[bayNumber - 1] - count
+          );
+          paperCatalog[bayNumber - 1].currentPadStock =
+            (paperRemainingSheets[bayNumber - 1] + sheetsPerPad - 1) / sheetsPerPad;
+        }
         paperCatalog[bayNumber - 1].isPaperPresent = paperCatalog[bayNumber - 1].currentPadStock > 0;
         if (!paperCatalog[bayNumber - 1].isPaperPresent) {
           CLOUD_SERIAL.println("BAY_EMPTY:" + String(bayNumber));
@@ -177,12 +189,11 @@ int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName)
         return count;
       }
       else if (response.startsWith("EMPTY:")) {
-        // Format: EMPTY:<bay>:<count>
+        // Format: EMPTY:<bay>:<count>. A sensor timeout is not proof that the
+        // whole pad is empty, so preserve the Mega's synchronized pad stock.
         int second = response.indexOf(':', 6);
         int count = (second > 0) ? response.substring(second + 1).toInt() : 0;
-        paperCatalog[bayNumber - 1].isPaperPresent = false;
-        paperCatalog[bayNumber - 1].currentPadStock = 0;
-        CLOUD_SERIAL.println("BAY_EMPTY:" + String(bayNumber));
+        Serial.println("Paper Uno reported no confirmed sheet; stock was not cleared.");
         return count;
       }
     }

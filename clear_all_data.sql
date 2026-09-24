@@ -18,6 +18,7 @@ BEGIN;
 
 TRUNCATE TABLE
     machine_network_config,
+    inventory_refill_history,
     machine_logs,
     sales_transaction_lines,
     sales_transactions,

@@ -48,10 +48,12 @@ const int PAPER_EXIT_BLOCKED_LEVEL = LOW;
 const int PAPER_LEVEL_SENSOR_PINS[MOTOR_COUNT] = { 6, 7 };
 const int PAPER_LEVEL_HIGH_LEVEL = LOW;
 // The motor feeds continuously until the exit beam is interrupted and then
-// cleared. These limits only protect against a jam or failed sensor.
-const unsigned long PAPER_EXIT_TIMEOUT_MS = 3000;
+// cleared. The 15-second checkpoint avoids treating a brief sensor miss as
+// an empty pad; the 20-second limit is only a final jam/sensor safety stop.
+const unsigned long PAPER_NO_STOCK_CONFIRM_MS = 15000;
+const unsigned long PAPER_EXIT_TIMEOUT_MS = 20000;
 const unsigned long PAPER_EXIT_CLEAR_TIMEOUT_MS = 800;
-const long MAX_STEPS_PER_SHEET = 3000;
+const long MAX_STEPS_PER_SHEET = 12000;
 const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
@@ -59,6 +61,7 @@ const uint8_t PAPER_LCD_ROWS = 2;
 const unsigned int STEP_PULSE_DELAY_US = 900;
 int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
+long remainingSheets[MOTOR_COUNT] = { -1, -1 };
 LiquidCrystal_I2C paperLcd(PAPER_LCD_ADDRESS, PAPER_LCD_COLUMNS, PAPER_LCD_ROWS);
 
 void showPaperLcd(const String &line1, const String &line2 = "") {
@@ -108,6 +111,7 @@ bool feedOneSheet(int bayIndex) {
   }
 
   bool paperDetected = false;
+  bool noStockCheckReported = false;
   const unsigned long feedStartedAt = millis();
   for (long step = 0; step < MAX_STEPS_PER_SHEET; step++) {
     // Keep the motor running while the paper travels toward and through the
@@ -120,7 +124,14 @@ bool feedOneSheet(int bayIndex) {
     // Count the sheet only after it has interrupted and then cleared the beam.
     if (paperDetected && !blocked) return true;
 
-    if (millis() - feedStartedAt >= PAPER_EXIT_TIMEOUT_MS) return false;
+    const unsigned long feedElapsed = millis() - feedStartedAt;
+    if (!paperDetected && !noStockCheckReported && feedElapsed >= PAPER_NO_STOCK_CONFIRM_MS) {
+      noStockCheckReported = true;
+      Serial.println(paperLevelIsHigh(bayIndex)
+        ? "NO_EXIT_SIGNAL_STOCK_LEVEL_HIGH"
+        : "NO_EXIT_SIGNAL_STOCK_LEVEL_LOW");
+    }
+    if (feedElapsed >= PAPER_EXIT_TIMEOUT_MS) return false;
   }
   return false;
 }
@@ -146,8 +157,14 @@ void sendStatus() {
 void syncPaperStock(int bayNum, int padStock, int unitSheets) {
   const int idx = bayNum - 1;
   if (idx < 0 || idx >= MOTOR_COUNT) return;
+  const bool sameStockSnapshot = remainingSheets[idx] >= 0 &&
+                                 paperPadStock[idx] == max(0, padStock) &&
+                                 sheetsPerPad[idx] == max(1, unitSheets);
   paperPadStock[idx] = max(0, padStock);
   sheetsPerPad[idx] = max(1, unitSheets);
+  if (!sameStockSnapshot) {
+    remainingSheets[idx] = (long)paperPadStock[idx] * sheetsPerPad[idx];
+  }
   sendStatus();
 }
 
@@ -175,8 +192,8 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
   for (int s = 0; s < requestedSheets; s++) {
     if (!feedOneSheet(idx)) {
       disableDrivers();
-      showPaperLcd("Paper error", paperName);
-      Serial.println("EMPTY:" + String(bayNum) + ":" + String(sheetsDispensed));
+       showPaperLcd("Paper sensor wait", paperName);
+       Serial.println("EMPTY:" + String(bayNum) + ":" + String(sheetsDispensed));
       sendStatus();
       return;
     }
@@ -186,9 +203,9 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
   }
 
   disableDrivers();
-  if (paperPadStock[idx] > 0) {
-    const int padsUsed = (sheetsDispensed + sheetsPerPad[idx] - 1) / sheetsPerPad[idx];
-    paperPadStock[idx] = max(0, paperPadStock[idx] - padsUsed);
+  if (remainingSheets[idx] >= 0) {
+    remainingSheets[idx] = max(0L, remainingSheets[idx] - sheetsDispensed);
+    paperPadStock[idx] = (remainingSheets[idx] + sheetsPerPad[idx] - 1) / sheetsPerPad[idx];
   }
   Serial.println("DONE:" + String(bayNum) + ":" + String(sheetsDispensed));
   showPaperLcd("Dispense done", paperName);

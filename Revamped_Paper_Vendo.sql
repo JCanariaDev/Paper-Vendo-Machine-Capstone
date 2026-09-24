@@ -7,6 +7,7 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 DROP TABLE IF EXISTS machine_logs CASCADE;
+DROP TABLE IF EXISTS inventory_refill_history CASCADE;
 DROP TABLE IF EXISTS sales_transaction_lines CASCADE;
 DROP TABLE IF EXISTS sales_transactions CASCADE;
 DROP TABLE IF EXISTS change_inventory CASCADE;
@@ -168,6 +169,27 @@ CREATE TABLE machine_logs (
 CREATE INDEX idx_machine_logs_created ON machine_logs(created_at DESC);
 CREATE INDEX idx_machine_logs_transaction ON machine_logs(transaction_id);
 GRANT SELECT ON machine_logs TO anon, authenticated, service_role;
+
+-- ------------------------------------------------------------------------------
+-- 5b. Inventory Refill History
+-- ------------------------------------------------------------------------------
+CREATE TABLE inventory_refill_history (
+    id BIGSERIAL PRIMARY KEY,
+    item_type TEXT NOT NULL CHECK (item_type IN ('paper', 'pen')),
+    compartment_number INTEGER NOT NULL CHECK (compartment_number > 0),
+    product_id INTEGER,
+    product_name TEXT NOT NULL,
+    operation TEXT NOT NULL DEFAULT 'REFILL' CHECK (operation IN ('REFILL', 'ADJUSTMENT', 'REASSIGNMENT')),
+    quantity_added INTEGER NOT NULL DEFAULT 0 CHECK (quantity_added >= 0),
+    quantity_unit TEXT NOT NULL CHECK (quantity_unit IN ('pads', 'pieces')),
+    previous_compartment_stock INTEGER NOT NULL DEFAULT 0 CHECK (previous_compartment_stock >= 0),
+    resulting_compartment_stock INTEGER NOT NULL DEFAULT 0 CHECK (resulting_compartment_stock >= 0),
+    performed_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_inventory_refill_history_created ON inventory_refill_history(created_at DESC);
+CREATE INDEX idx_inventory_refill_history_type ON inventory_refill_history(item_type);
+GRANT SELECT ON inventory_refill_history TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION log_sales_transaction_event()
 RETURNS TRIGGER AS $$

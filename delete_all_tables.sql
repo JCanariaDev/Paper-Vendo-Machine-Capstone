@@ -16,6 +16,7 @@ DROP TABLE IF EXISTS machine_status CASCADE;
 DROP TABLE IF EXISTS machine_online_status CASCADE;
 DROP TABLE IF EXISTS machine_options CASCADE;
 DROP TABLE IF EXISTS machine_logs CASCADE;
+DROP TABLE IF EXISTS inventory_refill_history CASCADE;
 DROP TABLE IF EXISTS machine_network_config CASCADE;
 DROP TABLE IF EXISTS admins CASCADE;
 
