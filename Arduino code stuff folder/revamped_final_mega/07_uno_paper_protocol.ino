@@ -150,7 +150,11 @@ int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName)
   UNO_SERIAL.println(command);
 
   unsigned long startedAt = millis();
-  while (millis() - startedAt < PAPER_DISPENSE_TIMEOUT_MS) {
+  const unsigned long timeoutMs = max(
+    6000UL,
+    PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS * (unsigned long)max(1, sheetCount)
+  );
+  while (millis() - startedAt < timeoutMs) {
     if (UNO_SERIAL.available()) {
       String response = UNO_SERIAL.readStringUntil('\n');
       response.trim();

@@ -47,15 +47,16 @@ const int PAPER_EXIT_SENSOR_PINS[MOTOR_COUNT] = { 11, 12 };
 const int PAPER_EXIT_BLOCKED_LEVEL = LOW;
 const int PAPER_LEVEL_SENSOR_PINS[MOTOR_COUNT] = { 6, 7 };
 const int PAPER_LEVEL_HIGH_LEVEL = LOW;
-// Failure detection should be quick, while still allowing normal paper travel.
-const unsigned long PAPER_EXIT_TIMEOUT_MS = 1200;
-const unsigned long PAPER_EXIT_CLEAR_TIMEOUT_MS = 400;
+// The motor feeds continuously until the exit beam is interrupted and then
+// cleared. These limits only protect against a jam or failed sensor.
+const unsigned long PAPER_EXIT_TIMEOUT_MS = 3000;
+const unsigned long PAPER_EXIT_CLEAR_TIMEOUT_MS = 800;
+const long MAX_STEPS_PER_SHEET = 3000;
 const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
 
 const unsigned int STEP_PULSE_DELAY_US = 900;
-const int STEPS_PER_SHEET = 400; // Calibrated steps for 1 sheet feed
 int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
 LiquidCrystal_I2C paperLcd(PAPER_LCD_ADDRESS, PAPER_LCD_COLUMNS, PAPER_LCD_ROWS);
@@ -95,28 +96,33 @@ bool paperLevelIsHigh(int bayIndex) {
   return digitalRead(PAPER_LEVEL_SENSOR_PINS[bayIndex]) == PAPER_LEVEL_HIGH_LEVEL;
 }
 
-bool waitForPaperExit(int bayIndex) {
+bool feedOneSheet(int bayIndex) {
   if (bayIndex < 0 || bayIndex >= MOTOR_COUNT) return false;
 
   const int sensorPin = PAPER_EXIT_SENSOR_PINS[bayIndex];
-  const unsigned long startedAt = millis();
+  const unsigned long clearStartedAt = millis();
 
-  // Do not count a sheet until the outlet is clear at the start.
+  // A blocked beam at the start indicates a jam or a sheet left at the exit.
   while (digitalRead(sensorPin) == PAPER_EXIT_BLOCKED_LEVEL) {
-    if (millis() - startedAt >= PAPER_EXIT_CLEAR_TIMEOUT_MS) return false;
+    if (millis() - clearStartedAt >= PAPER_EXIT_CLEAR_TIMEOUT_MS) return false;
   }
 
-  const unsigned long blockedWaitStartedAt = millis();
-  while (digitalRead(sensorPin) != PAPER_EXIT_BLOCKED_LEVEL) {
-    if (millis() - blockedWaitStartedAt >= PAPER_EXIT_TIMEOUT_MS) return false;
-  }
+  bool paperDetected = false;
+  const unsigned long feedStartedAt = millis();
+  for (long step = 0; step < MAX_STEPS_PER_SHEET; step++) {
+    // Keep the motor running while the paper travels toward and through the
+    // exit sensor. The sensor controls when this sheet is considered done.
+    pulseStep(bayIndex);
 
-  // Require the sheet to clear the beam before continuing.
-  const unsigned long clearWaitStartedAt = millis();
-  while (digitalRead(sensorPin) == PAPER_EXIT_BLOCKED_LEVEL) {
-    if (millis() - clearWaitStartedAt >= PAPER_EXIT_CLEAR_TIMEOUT_MS) return false;
+    const bool blocked = digitalRead(sensorPin) == PAPER_EXIT_BLOCKED_LEVEL;
+    if (blocked) paperDetected = true;
+
+    // Count the sheet only after it has interrupted and then cleared the beam.
+    if (paperDetected && !blocked) return true;
+
+    if (millis() - feedStartedAt >= PAPER_EXIT_TIMEOUT_MS) return false;
   }
-  return true;
+  return false;
 }
 
 // Sends software stock state for all configured bays: STATUS:HIGH,HIGH.
@@ -167,12 +173,7 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
 
   int sheetsDispensed = 0;
   for (int s = 0; s < requestedSheets; s++) {
-    // Step motor to feed 1 sheet
-    for (int step = 0; step < STEPS_PER_SHEET; step++) {
-      pulseStep(idx);
-    }
-
-    if (!waitForPaperExit(idx)) {
+    if (!feedOneSheet(idx)) {
       disableDrivers();
       showPaperLcd("Paper error", paperName);
       Serial.println("EMPTY:" + String(bayNum) + ":" + String(sheetsDispensed));

@@ -28,7 +28,13 @@ void drawTftStatusBar() {
     tft.print(uiWifiConnected ? "WIFI OK" : "WIFI --");
   }
 
-  String creditText = "Credits: P" + String((unsigned int)credits);
+  int remainingChangeCents = max(0, activeChangeDueCents - activeChangePaidCents);
+  String creditText;
+  if (currentScreen == SCREEN_RECEIPT && remainingChangeCents > 0) {
+    creditText = "Left: P" + String(remainingChangeCents / 100.0, 2);
+  } else {
+    creditText = "Credits: P" + String((unsigned int)credits);
+  }
   int16_t x1, y1; uint16_t w, h;
   // Keep the credit balance prominent now that the OLED is no longer used.
   // Size 2 fits inside the 26-pixel status bar and remains right-aligned.
