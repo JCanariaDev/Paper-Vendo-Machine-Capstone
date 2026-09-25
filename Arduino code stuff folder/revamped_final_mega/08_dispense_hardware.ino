@@ -7,6 +7,10 @@ const unsigned long BALLPEN_DISPENSE_TIMEOUT_MARGIN_MS = 2500;
 void handleBallpenMessage(String msg) {
   msg.trim();
   if (msg.length() == 0) return;
+  if (msg == "BALLPEN_READY") {
+    ballpenUnoResponsive = true;
+    return;
+  }
   Serial.print("Ballpen Uno: ");
   Serial.println(msg);
 }

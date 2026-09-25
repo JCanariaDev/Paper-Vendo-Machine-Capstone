@@ -57,7 +57,9 @@ const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
 
-const unsigned int STEP_PULSE_DELAY_US = 900;
+// Lower delay means a faster STEP pulse rate. Increase this if the motor skips
+// under load; 500 us is a moderate increase from the previous 900 us setting.
+const unsigned int STEP_PULSE_DELAY_US = 500;
 int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
 long remainingSheets[MOTOR_COUNT] = { -1, -1 };

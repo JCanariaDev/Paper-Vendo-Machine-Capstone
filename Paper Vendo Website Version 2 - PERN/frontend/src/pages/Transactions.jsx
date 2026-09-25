@@ -29,6 +29,7 @@ const statusDetails = (status) => {
   if (status?.startsWith('FAILED')) return { label: status.replaceAll('_', ' '), tone: 'red', icon: AlertCircle };
   if (status === 'PARTIAL_SUCCESS') return { label: 'PARTIAL SUCCESS', tone: 'amber', icon: AlertCircle };
   if (status === 'REFUNDED') return { label: 'REFUNDED', tone: 'emerald', icon: HandCoins };
+  if (status === 'CREDIT_HELD') return { label: 'CREDIT HELD', tone: 'amber', icon: Clock3 };
   if (status === 'COMPLETED_CHANGE_OWED') return { label: 'CHANGE OWED', tone: 'amber', icon: Clock3 };
   if (status === 'COMPLETED') return { label: 'COMPLETED', tone: 'emerald', icon: CheckCircle2 };
   return { label: status || 'PENDING', tone: 'slate', icon: Clock3 };

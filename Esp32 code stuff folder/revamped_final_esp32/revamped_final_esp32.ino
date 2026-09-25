@@ -52,6 +52,9 @@ unsigned long nextFinishRetryAt = 0;
 uint8_t finishRetryCount = 0;
 const unsigned long FINISH_RETRY_INTERVAL_MS = 3000;
 const uint8_t MAX_FINISH_RETRIES = 20;
+int pendingCreditSessionCents = -1;
+unsigned long nextCreditSessionAttemptAt = 0;
+const unsigned long CREDIT_SESSION_RETRY_INTERVAL_MS = 3000;
 
 unsigned long lastStatusUpdate = 0;
 const unsigned long statusInterval = 60000; // machine_status table update
@@ -65,6 +68,8 @@ bool connectToWifi(unsigned long timeoutMs);
 bool printNearbyWifiNetworks();
 void updateMachineStatus();
 void updateStatusKey(const String &key, const String &value);
+bool callRpc(const char* functionName, JsonDocument &request, DynamicJsonDocument &response);
+bool persistCreditSession(int creditCents);
 bool sendOnlineHeartbeat();
 void softResetRuntime();
 bool fetchAndApplyRemoteNetworkConfig();
@@ -349,12 +354,31 @@ void updateStatusKey(const String &key, const String &value) {
 
 }
 
+bool persistCreditSession(int creditCents) {
+  if (!ensureWifi()) return false;
+  DynamicJsonDocument request(256), response(512);
+  request["p_credit_cents"] = creditCents;
+  if (!callRpc("machine_update_credit_session", request, response)) return false;
+  pendingCreditSessionCents = -1;
+  return true;
+}
+
+void processPendingCreditSession() {
+  if (pendingCreditSessionCents < 0 || millis() < nextCreditSessionAttemptAt) return;
+  if (!persistCreditSession(pendingCreditSessionCents)) {
+    nextCreditSessionAttemptAt = millis() + CREDIT_SESSION_RETRY_INTERVAL_MS;
+  }
+}
+
 void handleCreditUpdate(String message) {
   int separator = message.indexOf(':');
   if (separator < 0) return;
   int credits = message.substring(separator + 1).toInt();
   if (credits < 0) return;
   updateStatusKey("current_credits", String(credits));
+  pendingCreditSessionCents = credits * 100;
+  nextCreditSessionAttemptAt = 0;
+  persistCreditSession(pendingCreditSessionCents);
 }
 
 bool sendOnlineHeartbeat() {
@@ -576,7 +600,7 @@ void reserveCart(const String &message) {
     start = end + 1;
   }
   DynamicJsonDocument response(4096);
-  if (!callRpc("machine_reserve_transaction", request, response)) return;
+  if (!callRpc("machine_reserve_transaction_with_session", request, response)) return;
   JsonObject result = response[0];
   if (result.isNull()) { sendError("EMPTY_RESERVATION"); return; }
 
@@ -811,6 +835,7 @@ void loop() {
 
   ensureWifi();
 
+  processPendingCreditSession();
   processPendingFinish();
 
   if (millis() - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {

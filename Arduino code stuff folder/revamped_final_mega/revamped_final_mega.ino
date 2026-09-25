@@ -129,6 +129,13 @@ bool diagTftOk = false;
 bool diagTouchOk = false;
 bool hopperManualRunning = false;
 unsigned long hopperManualStartedAt = 0;
+bool paperUnoResponsive = false;
+bool ballpenUnoResponsive = false;
+String hardwareFaultMessage = "";
+unsigned long controllerCheckStartedAt = 0;
+unsigned long nextHardwareFaultBeepAt = 0;
+const unsigned long CONTROLLER_READY_GRACE_MS = 10000;
+const unsigned long HARDWARE_FAULT_BEEP_INTERVAL_MS = 3000;
 
 enum IndicatorState { INDICATOR_READY, INDICATOR_ACTIVE, INDICATOR_ERROR };
 IndicatorState indicatorState = INDICATOR_READY;
@@ -187,6 +194,7 @@ void parsePenBay(String msg);
 void parseMachineOptions(String msg);
 void runDiagnostics();
 void printHardwareStatus();
+void monitorControllerHealth();
 void executeDispensePlan(String message);
 void beginReservedTransaction(String message);
 void finishUiAfterTransaction(String message);
@@ -307,6 +315,7 @@ void setup() {
   UNO_SERIAL.setTimeout(500);
   BALLPEN_SERIAL.setTimeout(500);
   Serial.println("--- REVAMPED SMART PAPER VENDO FIRMWARE (OPTION A) STARTING ---");
+  controllerCheckStartedAt = millis();
 
   tftUiBegin();
   diagTftOk = true;
@@ -427,6 +436,8 @@ void loop() {
     String msg = BALLPEN_SERIAL.readStringUntil('\n');
     handleBallpenMessage(msg);
   }
+
+  monitorControllerHealth();
 
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');

@@ -123,7 +123,7 @@ CREATE TABLE sales_transactions (
     tr_number TEXT GENERATED ALWAYS AS ('TR-' || LPAD(transaction_number::text, 5, '0')) STORED,
     machine_id TEXT NOT NULL DEFAULT 'paper-vendo-01',
     status TEXT NOT NULL DEFAULT 'RESERVED'
-      CHECK (status IN ('RESERVED', 'CHANGE_PAID', 'COMPLETED', 'CANCELLED', 'FAILED_CHANGE', 'FAILED_DISPENSE', 'PARTIAL_SUCCESS', 'REFUNDED', 'COMPLETED_CHANGE_OWED')),
+      CHECK (status IN ('CREDIT_HELD', 'RESERVED', 'CHANGE_PAID', 'COMPLETED', 'CANCELLED', 'FAILED_CHANGE', 'FAILED_DISPENSE', 'PARTIAL_SUCCESS', 'REFUNDED', 'COMPLETED_CHANGE_OWED')),
     credit_received_cents INTEGER NOT NULL CHECK (credit_received_cents >= 0),
     subtotal_cents INTEGER NOT NULL CHECK (subtotal_cents >= 0),
     change_due_cents INTEGER NOT NULL CHECK (change_due_cents >= 0),
@@ -325,6 +325,59 @@ GRANT ALL ON TABLE machine_online_status TO anon, authenticated, service_role;
 -- Stored Procedures: Reservation, Change, Completion & Bay Management
 -- ------------------------------------------------------------------------------
 
+-- Persist inserted credits before checkout. A single open session is reused
+-- when checkout reserves the cart, preventing duplicate TR records.
+CREATE OR REPLACE FUNCTION machine_update_credit_session(p_credit_cents INTEGER)
+RETURNS TABLE(transaction_id UUID, tr_number TEXT, session_status TEXT, credit_received_cents INTEGER)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_tx sales_transactions%ROWTYPE;
+BEGIN
+    SELECT * INTO v_tx
+      FROM sales_transactions
+     WHERE machine_id = 'paper-vendo-01'
+       AND status = 'CREDIT_HELD'
+     ORDER BY created_at DESC
+     LIMIT 1
+     FOR UPDATE;
+
+    IF p_credit_cents <= 0 THEN
+        IF FOUND THEN
+            UPDATE sales_transactions
+               SET status = 'CANCELLED',
+                   subtotal_cents = 0,
+                   change_due_cents = credit_received_cents,
+                   failure_reason = 'Power loss or session reset before checkout; credits await administrator release',
+                   completed_at = NOW()
+             WHERE id = v_tx.id;
+            RETURN QUERY SELECT v_tx.id, v_tx.tr_number, 'CANCELLED'::TEXT, v_tx.credit_received_cents;
+        END IF;
+        RETURN;
+    END IF;
+
+    IF FOUND THEN
+        UPDATE sales_transactions
+           SET credit_received_cents = p_credit_cents,
+               subtotal_cents = 0,
+               change_due_cents = p_credit_cents
+         WHERE id = v_tx.id
+         RETURNING * INTO v_tx;
+    ELSE
+        INSERT INTO sales_transactions (
+            machine_id, status, credit_received_cents, subtotal_cents,
+            change_due_cents, change_paid_cents, change_plan
+        )
+        VALUES ('paper-vendo-01', 'CREDIT_HELD', p_credit_cents, 0,
+                p_credit_cents, 0, '[]'::jsonb)
+        RETURNING * INTO v_tx;
+    END IF;
+
+    RETURN QUERY SELECT v_tx.id, v_tx.tr_number, v_tx.status, v_tx.credit_received_cents;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION machine_update_credit_session(INTEGER) TO anon, authenticated;
+
 -- Reserve Transaction
 CREATE OR REPLACE FUNCTION machine_reserve_transaction(p_credit_cents INTEGER, p_lines JSONB)
 RETURNS TABLE(transaction_id UUID, tr_number TEXT, subtotal_cents INTEGER, change_due_cents INTEGER, dispense_plan JSONB)
@@ -354,6 +407,7 @@ DECLARE
     v_dispense_plan JSONB := '[]'::jsonb;
     v_tx UUID := gen_random_uuid();
     v_tr_number TEXT;
+    v_reuse_credit_session BOOLEAN := FALSE;
 BEGIN
     SELECT COALESCE(maximum_ballpens_per_transaction, 5)
       INTO v_max_ballpens
@@ -439,9 +493,33 @@ BEGIN
         END IF;
     END LOOP;
 
-    INSERT INTO sales_transactions (id, credit_received_cents, subtotal_cents, change_due_cents, change_plan)
-    VALUES (v_tx, p_credit_cents, v_subtotal, v_change, v_change_plan)
-    RETURNING sales_transactions.tr_number INTO v_tr_number;
+    -- Reuse the TR created when the first coin was inserted. This converts the
+    -- persistent credit session into the normal reserved transaction.
+    SELECT id INTO v_tx
+      FROM sales_transactions
+     WHERE machine_id = 'paper-vendo-01'
+       AND status = 'CREDIT_HELD'
+     ORDER BY created_at DESC
+     LIMIT 1
+     FOR UPDATE;
+
+    v_reuse_credit_session := FOUND;
+    IF v_reuse_credit_session THEN
+        UPDATE sales_transactions
+           SET status = 'RESERVED',
+               credit_received_cents = p_credit_cents,
+               subtotal_cents = v_subtotal,
+               change_due_cents = v_change,
+               change_plan = v_change_plan,
+               failure_reason = NULL,
+               completed_at = NULL
+         WHERE id = v_tx
+         RETURNING sales_transactions.tr_number INTO v_tr_number;
+    ELSE
+        INSERT INTO sales_transactions (id, credit_received_cents, subtotal_cents, change_due_cents, change_plan)
+        VALUES (v_tx, p_credit_cents, v_subtotal, v_change, v_change_plan)
+        RETURNING sales_transactions.tr_number INTO v_tr_number;
+    END IF;
 
     -- Record transaction lines
     FOR v_line IN SELECT value FROM jsonb_array_elements(p_lines) LOOP
@@ -482,6 +560,63 @@ BEGIN
 END;
 $$;
 
+-- Checkout wrapper that reuses the open CREDIT_HELD TR while retaining the
+-- existing reservation validation and inventory locking logic.
+CREATE OR REPLACE FUNCTION machine_reserve_transaction_with_session(p_credit_cents INTEGER, p_lines JSONB)
+RETURNS TABLE(transaction_id UUID, tr_number TEXT, subtotal_cents INTEGER, change_due_cents INTEGER, dispense_plan JSONB)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_session_id UUID;
+    v_reserved RECORD;
+    v_session_tr TEXT;
+BEGIN
+    SELECT id, tr_number INTO v_session_id, v_session_tr
+      FROM sales_transactions
+     WHERE machine_id = 'paper-vendo-01'
+       AND status = 'CREDIT_HELD'
+     ORDER BY created_at DESC
+     LIMIT 1
+     FOR UPDATE;
+
+    SELECT * INTO v_reserved
+      FROM machine_reserve_transaction(p_credit_cents, p_lines);
+
+    IF v_session_id IS NULL THEN
+        RETURN QUERY SELECT v_reserved.transaction_id, v_reserved.tr_number,
+                            v_reserved.subtotal_cents, v_reserved.change_due_cents,
+                            v_reserved.dispense_plan;
+        RETURN;
+    END IF;
+
+    UPDATE sales_transactions
+       SET status = 'RESERVED',
+           credit_received_cents = p_credit_cents,
+           subtotal_cents = v_reserved.subtotal_cents,
+           change_due_cents = v_reserved.change_due_cents,
+           change_plan = (SELECT change_plan FROM sales_transactions WHERE id = v_reserved.transaction_id),
+           failure_reason = NULL,
+           completed_at = NULL
+     WHERE id = v_session_id;
+
+    UPDATE machine_logs
+       SET transaction_id = v_session_id,
+           tr_number = v_session_tr
+     WHERE transaction_id = v_reserved.transaction_id;
+
+    UPDATE sales_transaction_lines
+       SET transaction_id = v_session_id
+     WHERE transaction_id = v_reserved.transaction_id;
+
+    DELETE FROM sales_transactions WHERE id = v_reserved.transaction_id;
+
+    RETURN QUERY SELECT v_session_id, v_session_tr,
+                        v_reserved.subtotal_cents, v_reserved.change_due_cents,
+                        v_reserved.dispense_plan;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION machine_reserve_transaction_with_session(INTEGER, JSONB) TO anon, authenticated;
+
 -- Mark Change Paid
 CREATE OR REPLACE FUNCTION machine_mark_change_paid(p_transaction_id UUID, p_change_paid_cents INTEGER)
 RETURNS VOID LANGUAGE plpgsql AS $$
@@ -519,11 +654,15 @@ BEGIN
         RETURN QUERY SELECT v_tx.tr_number, v_tx.status, v_tx.change_paid_cents;
         RETURN;
     END IF;
-    IF v_tx.status NOT IN ('COMPLETED_CHANGE_OWED', 'FAILED_DISPENSE', 'FAILED_CHANGE', 'CANCELLED') THEN
+    IF v_tx.status NOT IN ('CREDIT_HELD', 'COMPLETED_CHANGE_OWED', 'PARTIAL_SUCCESS', 'FAILED_DISPENSE', 'FAILED_CHANGE', 'CANCELLED') THEN
         RAISE EXCEPTION 'Transaction % has no outstanding change to release', v_tx.tr_number;
     END IF;
 
-    v_status := CASE WHEN v_tx.status = 'COMPLETED_CHANGE_OWED' THEN 'COMPLETED' ELSE v_tx.status END;
+    v_status := CASE
+        WHEN v_tx.status = 'COMPLETED_CHANGE_OWED' THEN 'COMPLETED'
+        WHEN v_tx.status = 'CREDIT_HELD' THEN 'REFUNDED'
+        ELSE v_tx.status
+    END;
     UPDATE sales_transactions
        SET status = v_status,
            change_paid_cents = change_due_cents,
@@ -534,7 +673,9 @@ BEGIN
     VALUES ('INFO', 'DASHBOARD', 'CHANGE_RELEASED',
             'Remaining change was handed to the customer', p_transaction_id, v_tx.tr_number,
             jsonb_build_object('change_due_cents', v_tx.change_due_cents,
-                               'previously_paid_cents', v_tx.change_paid_cents));
+                               'previously_paid_cents', v_tx.change_paid_cents,
+                               'unused_credits_cents', GREATEST(0, v_tx.change_due_cents - v_tx.change_paid_cents),
+                               'release_type', 'MANUAL_HANDOUT'));
 
     RETURN QUERY SELECT v_tx.tr_number, v_status, v_tx.change_due_cents;
 END;
@@ -696,6 +837,18 @@ BEGIN
            failure_reason = v_reason,
            completed_at = NOW() 
      WHERE id = p_transaction_id;
+
+    IF v_tx.change_due_cents > v_paid THEN
+        INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
+        VALUES ('WARNING', 'MEGA', 'CHANGE_OWED',
+                'Unused customer credits were recorded for release', p_transaction_id, v_tx.tr_number,
+                jsonb_build_object(
+                  'change_due_cents', v_tx.change_due_cents,
+                  'change_paid_cents', v_paid,
+                  'unused_credits_cents', v_tx.change_due_cents - v_paid,
+                  'release_status', 'PENDING'
+                ));
+    END IF;
      
     RETURN QUERY SELECT v_tx.tr_number, v_final_status, v_tx.change_due_cents, v_paid;
 END;

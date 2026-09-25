@@ -191,8 +191,41 @@ async function getTransactionLines(supabase) {
     .from('sales_transaction_lines')
     .select('*, sales_transactions!inner(id, tr_number, status, credit_received_cents, subtotal_cents, change_due_cents, change_paid_cents, refund_paid_cents, failure_reason, created_at, completed_at)');
   if (error) throw error;
-  return (data || [])
+  const lines = (data || [])
     .map(flattenTransactionLine)
+    .sort((a, b) => new Date(b.transaction_date) - new Date(a.transaction_date));
+
+  // A credit session exists before checkout and has no product lines yet.
+  // Expose it as a synthetic sales-history line so admins can release the
+  // customer's unused credits after a power loss or controller reset.
+  const { data: sessions, error: sessionError } = await supabase
+    .from('sales_transactions')
+    .select('id, tr_number, status, credit_received_cents, subtotal_cents, change_due_cents, change_paid_cents, refund_paid_cents, failure_reason, created_at, completed_at')
+    .in('status', ['CREDIT_HELD', 'CANCELLED'])
+    .eq('subtotal_cents', 0)
+    .order('created_at', { ascending: false });
+  if (sessionError) throw sessionError;
+
+  const lineTransactionIds = new Set(lines.map((line) => line.transaction_id));
+  const sessionLines = (sessions || [])
+    .filter((session) => !lineTransactionIds.has(session.id))
+    .map((session) => flattenTransactionLine({
+      id: `credit-session-${session.id}`,
+      item_type: 'credit',
+      product_id: 0,
+      product_name: 'Unused Credits',
+      paper_size: null,
+      physical_channel: 0,
+      units_requested: 0,
+      sheets_per_unit_snapshot: 1,
+      qty_requested: 0,
+      qty_dispensed: 0,
+      unit_price_cents: 0,
+      line_status: session.status,
+      sales_transactions: session
+    }));
+
+  return [...lines, ...sessionLines]
     .sort((a, b) => new Date(b.transaction_date) - new Date(a.transaction_date));
 }
 

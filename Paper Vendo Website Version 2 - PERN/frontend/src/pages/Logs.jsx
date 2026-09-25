@@ -24,21 +24,30 @@ export default function Logs() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [lastUpdated, setLastUpdated] = useState(null);
 
-  const fetchLogs = async () => {
-    setLoading(true);
+  const fetchLogs = async ({ showLoading = true } = {}) => {
+    if (showLoading) setLoading(true);
     try {
       const response = await axios.get('/api/machine/logs?limit=500');
       setLogs(response.data || []);
       setError('');
+      setLastUpdated(new Date());
     } catch (err) {
       setError(err.response?.data?.message || 'Could not retrieve machine logs.');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
   useEffect(() => { fetchLogs(); }, []);
+
+  useEffect(() => {
+    const refreshTimer = window.setInterval(() => {
+      fetchLogs({ showLoading: false }).catch(() => {});
+    }, 10000);
+    return () => window.clearInterval(refreshTimer);
+  }, []);
 
   useEffect(() => {
     const transaction = new URLSearchParams(location.search).get('transaction');
@@ -64,9 +73,12 @@ export default function Logs() {
             <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Transaction, controller, and database events.</p>
           </div>
         </div>
-        <button onClick={fetchLogs} className="inline-flex items-center justify-center gap-2 h-11 px-4 rounded-xl bg-primary-500 text-white font-bold text-sm hover:bg-primary-600 transition-colors">
+        <div className="flex items-center gap-3">
+          <span className="hidden text-xs font-semibold text-slate-400 sm:inline">{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Auto-refreshing every 10s'}</span>
+          <button onClick={() => fetchLogs({ showLoading: true })} className="inline-flex items-center justify-center gap-2 h-11 px-4 rounded-xl bg-primary-500 text-white font-bold text-sm hover:bg-primary-600 transition-colors">
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
-        </button>
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-col md:flex-row gap-4">

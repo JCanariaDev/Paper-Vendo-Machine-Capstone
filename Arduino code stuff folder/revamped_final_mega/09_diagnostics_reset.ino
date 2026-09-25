@@ -24,6 +24,43 @@ void printHardwareStatus() {
   Serial.println(indicatorState == INDICATOR_READY ? "READY (green)" : indicatorState == INDICATOR_ACTIVE ? "ACTIVE (blue)" : "ERROR (red)");
   Serial.print("Hopper relay D22: "); Serial.println(digitalRead(CHANGE_HOPPER_MOTOR_PIN) == HOPPER_RELAY_ON ? "ON" : "OFF");
   Serial.print("Hopper sensor D23: "); Serial.println(digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW ? "LOW / blocked" : "HIGH / clear");
+  Serial.print("Paper Uno: "); Serial.println(paperUnoResponsive ? "RESPONSIVE" : "NOT CONFIRMED");
+  Serial.print("Ballpen Uno: "); Serial.println(ballpenUnoResponsive ? "RESPONSIVE" : "NOT CONFIRMED");
+}
+
+void monitorControllerHealth() {
+  if (millis() - controllerCheckStartedAt < CONTROLLER_READY_GRACE_MS) return;
+
+  String missing = "";
+  if (!paperUnoResponsive) missing = "Paper Uno disconnected";
+  if (!ballpenUnoResponsive) {
+    if (missing.length()) missing += " / ";
+    missing += "Ballpen Uno disconnected";
+  }
+
+  if (missing.length()) {
+    if (hardwareFaultMessage != missing) {
+      hardwareFaultMessage = missing;
+      setCoinAcceptance(false);
+      currentScreen = SCREEN_IDLE;
+      redrawCurrentScreen();
+      nextHardwareFaultBeepAt = 0;
+    }
+    if (millis() >= nextHardwareFaultBeepAt) {
+      setMachineIndicator(INDICATOR_ERROR, true);
+      UNO_SERIAL.println("STATUS?");
+      BALLPEN_SERIAL.println("STATUS?");
+      nextHardwareFaultBeepAt = millis() + HARDWARE_FAULT_BEEP_INTERVAL_MS;
+    }
+    return;
+  }
+
+  if (hardwareFaultMessage.length()) {
+    hardwareFaultMessage = "";
+    setCoinAcceptance(credits < maximumCreditsAllowed && !orderInProgress);
+    refreshMachineAvailability(false);
+    redrawCurrentScreen();
+  }
 }
 
 void softResetMachineState() {

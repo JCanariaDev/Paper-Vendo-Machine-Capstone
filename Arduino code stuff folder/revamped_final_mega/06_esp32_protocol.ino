@@ -94,6 +94,7 @@ void executeDispensePlan(String message) {
 
   // -- STEP 1: GUARANTEED PRODUCT-FIRST PHYSICAL DISPENSING --
   String results = "";
+  bool dispenseFailed = false;
   int start = 0;
   while (start < encodedPlan.length()) {
     if (millis() - planStartedAt >= DISPENSE_PLAN_TIMEOUT_MS) {
@@ -122,6 +123,8 @@ void executeDispensePlan(String message) {
       actualOutput = dispensePenFromUno(channel, expectedOutput);
     }
 
+    if (actualOutput < expectedOutput) dispenseFailed = true;
+
     if (dispenseResultSummary.length()) dispenseResultSummary += "\n";
     String resultLabel = actualOutput >= expectedOutput ? "OK " : "FAILED ";
     String resultType = type == "pen" ? "Ballpen" : "Paper";
@@ -134,10 +137,21 @@ void executeDispensePlan(String message) {
     start = end + 1;
   }
 
-  // -- STEP 2: NON-BLOCKING COIN HOPPER CHANGE ATTEMPT --
+  // -- STEP 2: RELEASE CHANGE ONLY AFTER A COMPLETE PHYSICAL DISPENSE --
+  // Failed or partial orders must not leave the customer waiting on a hopper
+  // timeout. Their remaining change is reported as owed for manual release.
   if (millis() - planStartedAt >= DISPENSE_PLAN_TIMEOUT_MS) {
     Serial.println("Skipping change release after dispense plan timeout.");
     activeChangePaidCents = 0;
+  } else if (dispenseFailed && activeChangeDueCents > 0) {
+    Serial.println("Skipping automatic change release after failed/partial dispense; change remains owed.");
+    activeChangePaidCents = 0;
+    tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
+    tft.setTextSize(2);
+    tft.setTextColor(COL_ORANGE);
+    printCentered("Change Pending", tft.width() / 2, 130);
+    tft.setTextSize(1);
+    printCentered("Please claim change from an admin", tft.width() / 2, 165);
   } else if (activeChangeDueCents > 0) {
     tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
     tft.setTextSize(2);
