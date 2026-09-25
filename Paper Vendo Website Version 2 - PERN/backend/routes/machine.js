@@ -834,6 +834,39 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     }
   });
 
+  router.post('/paper', authorizeRoles('superadmin'), async (req, res) => {
+    const { brand_name, paper_size, cost_per_unit, sheets_per_unit = 1, stock_pads = 0 } = req.body;
+    try {
+      const { data, error } = await supabase.from('paper_inventory').insert({
+        brand_name: String(brand_name || '').trim(),
+        paper_size: String(paper_size || '').trim(),
+        cost_per_unit_cents: Math.round(Number(cost_per_unit) * 100),
+        sheets_per_unit: asInt(sheets_per_unit, 1),
+        stock_pads: asInt(stock_pads, 0),
+        location_status: 'In stock',
+        active: true
+      }).select().single();
+      if (error) throw error;
+      return res.status(201).json({ message: 'Paper product added to the catalog.', data });
+    } catch (err) {
+      console.error('Error adding paper product:', err);
+      return res.status(400).json({ message: err.code === '23505' ? 'That paper brand and size already exists.' : 'Failed to add paper product.' });
+    }
+  });
+
+  router.patch('/paper/:id/archive', authorizeRoles('superadmin'), async (req, res) => {
+    try {
+      const { data: bay } = await supabase.from('paper_compartments').select('compartment_number').eq('assigned_product_id', asInt(req.params.id)).gt('current_pad_stock', 0).maybeSingle();
+      if (bay) return res.status(409).json({ message: `Remove the product from Paper Bay ${bay.compartment_number} before archiving it.` });
+      const { data, error } = await supabase.from('paper_inventory').update({ active: false, location_status: 'Out of stock', updated_at: new Date().toISOString() }).eq('id', asInt(req.params.id)).select().single();
+      if (error) throw error;
+      return res.status(200).json({ message: 'Paper product archived. Historical records were preserved.', data });
+    } catch (err) {
+      console.error('Error archiving paper product:', err);
+      return res.status(400).json({ message: 'Failed to archive paper product.' });
+    }
+  });
+
   // Master Pen Product Update
   router.put('/pen/:id', authorizeRoles('superadmin'), async (req, res) => {
     const { id } = req.params;
@@ -857,6 +890,37 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     } catch (err) {
       console.error('Error updating pen inventory:', err);
       return res.status(500).json({ message: 'Failed to update pen inventory.' });
+    }
+  });
+
+  router.post('/pen', authorizeRoles('superadmin'), async (req, res) => {
+    const { item_name, cost_per_unit, storage_stock_pieces = 0 } = req.body;
+    try {
+      const { data, error } = await supabase.from('ballpen_inventory').insert({
+        item_name: String(item_name || '').trim(),
+        cost_per_unit_cents: Math.round(Number(cost_per_unit) * 100),
+        storage_stock_pieces: asInt(storage_stock_pieces, 0),
+        location_status: 'In stock',
+        active: true
+      }).select().single();
+      if (error) throw error;
+      return res.status(201).json({ message: 'Ballpen product added to the catalog.', data });
+    } catch (err) {
+      console.error('Error adding ballpen product:', err);
+      return res.status(400).json({ message: err.code === '23505' ? 'That ballpen name already exists.' : 'Failed to add ballpen product.' });
+    }
+  });
+
+  router.patch('/pen/:id/archive', authorizeRoles('superadmin'), async (req, res) => {
+    try {
+      const { data: bay } = await supabase.from('ballpen_compartments').select('compartment_number').eq('assigned_product_id', asInt(req.params.id)).gt('current_piece_stock', 0).maybeSingle();
+      if (bay) return res.status(409).json({ message: `Remove the product from Ballpen Bay ${bay.compartment_number} before archiving it.` });
+      const { data, error } = await supabase.from('ballpen_inventory').update({ active: false, location_status: 'Out of stock', updated_at: new Date().toISOString() }).eq('id', asInt(req.params.id)).select().single();
+      if (error) throw error;
+      return res.status(200).json({ message: 'Ballpen product archived. Historical records were preserved.', data });
+    } catch (err) {
+      console.error('Error archiving ballpen product:', err);
+      return res.status(400).json({ message: 'Failed to archive ballpen product.' });
     }
   });
 

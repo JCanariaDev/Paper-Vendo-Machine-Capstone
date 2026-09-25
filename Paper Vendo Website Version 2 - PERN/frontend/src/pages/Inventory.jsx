@@ -4,7 +4,7 @@ import { useAuth } from '../App';
 import { 
   Search, Edit3, CheckCircle, AlertCircle, X, Layers, 
   Package, RefreshCw, HelpCircle, ArrowRightLeft, ShieldCheck, 
-  Cpu, Activity, PlusCircle, Check
+  Cpu, Activity, PlusCircle, Check, Archive, RotateCcw
 } from 'lucide-react';
 
 export default function Inventory() {
@@ -18,6 +18,7 @@ export default function Inventory() {
   
   // Modals
   const [editingMasterItem, setEditingMasterItem] = useState(null); // 'paper' or 'pen'
+  const [isCreatingMaster, setIsCreatingMaster] = useState(false);
   const [editingBay, setEditingBay] = useState(null); // { type: 'paper' | 'pen', bay: object }
   const [formData, setFormData] = useState({});
   const [bayFormData, setBayFormData] = useState({
@@ -55,12 +56,49 @@ export default function Inventory() {
 
   const openMasterEditModal = (type, item) => {
     setEditingMasterItem(type);
+    setIsCreatingMaster(false);
     setFormData({ ...item });
+  };
+
+  const openMasterAddModal = (type) => {
+    setEditingMasterItem(type);
+    setIsCreatingMaster(true);
+    setFormData(type === 'paper'
+      ? { brand_name: '', paper_size: '', sheets_per_unit: 1, cost_per_unit: 1, stock_pads: 0, active: true }
+      : { item_name: '', cost_per_unit: 1, storage_stock_pieces: 0, active: true }
+    );
   };
 
   const closeMasterEditModal = () => {
     setEditingMasterItem(null);
+    setIsCreatingMaster(false);
     setFormData({});
+  };
+
+  const toggleMasterActive = async (type, item) => {
+    const label = type === 'paper' ? `${item.brand_name} ${item.paper_size}` : item.item_name;
+    if (item.active !== false) {
+      if (!window.confirm(`Archive ${label}? Its sales, refill, and machine log history will be preserved.`)) return;
+      try {
+        await axios.patch(`/api/machine/${type}/${item.id}/archive`);
+        await fetchInventory();
+      } catch (err) {
+        alert(err.response?.data?.message || 'Unable to archive this product.');
+      }
+      return;
+    }
+
+    if (!window.confirm(`Restore ${label} to the active catalog?`)) return;
+    try {
+      await axios.put(`/api/machine/${type}/${item.id}`, {
+        ...item,
+        active: true,
+        location_status: item.assigned_bay ? 'In compartment' : 'In stock'
+      });
+      await fetchInventory();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Unable to restore this product.');
+    }
   };
 
   const openBayModal = (type, bay) => {
@@ -94,9 +132,17 @@ export default function Inventory() {
     setSubmitting(true);
     try {
       if (editingMasterItem === 'paper') {
-        await axios.put(`/api/machine/paper/${formData.id}`, formData);
+        if (isCreatingMaster) {
+          await axios.post('/api/machine/paper', formData);
+        } else {
+          await axios.put(`/api/machine/paper/${formData.id}`, formData);
+        }
       } else {
-        await axios.put(`/api/machine/pen/${formData.id}`, formData);
+        if (isCreatingMaster) {
+          await axios.post('/api/machine/pen', formData);
+        } else {
+          await axios.put(`/api/machine/pen/${formData.id}`, formData);
+        }
       }
       await fetchInventory();
       closeMasterEditModal();
@@ -386,23 +432,37 @@ export default function Inventory() {
                 When you refill a machine bay, whole PADs are transferred from storage into the active compartment.
               </p>
             </div>
+            {user?.role !== 'staff' && (
+              <button
+                onClick={() => openMasterAddModal('paper')}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-primary-500 px-3.5 py-2.5 text-xs font-bold text-white shadow-lg shadow-primary-500/20 transition hover:bg-primary-600"
+              >
+                <PlusCircle className="h-4 w-4" />
+                Add paper
+              </button>
+            )}
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
             {filteredPaper.map((item) => {
               const isInBay = item.location_status === 'In compartment';
+              const isActive = item.active !== false;
               return (
-                <article key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-primary-300 hover:bg-primary-50/30 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-primary-500/50 dark:hover:bg-primary-500/[0.05]">
+                <article key={item.id} className={`rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-primary-300 hover:bg-primary-50/30 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-primary-500/50 dark:hover:bg-primary-500/[0.05] ${!isActive ? 'opacity-65' : ''}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-start gap-2.5">
-                      <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${isInBay ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                      <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${!isActive ? 'bg-slate-400' : isInBay ? 'bg-emerald-500' : 'bg-slate-300'}`} />
                       <div className="min-w-0">
                         <h3 className="truncate text-base font-extrabold text-slate-800 dark:text-white">{item.brand_name}</h3>
                         <p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">{item.paper_size}</p>
                       </div>
                     </div>
-                    {user?.role !== 'staff' && <button onClick={() => openMasterEditModal('paper', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title="Edit Pricing & Storage Pads"><Edit3 className="h-4 w-4" /></button>}
+                    {user?.role !== 'staff' && <div className="flex items-center gap-1">
+                      <button onClick={() => openMasterEditModal('paper', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title="Edit paper product"><Edit3 className="h-4 w-4" /></button>
+                      <button onClick={() => toggleMasterActive('paper', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title={isActive ? 'Archive paper product' : 'Restore paper product'}>{isActive ? <Archive className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}</button>
+                    </div>}
                   </div>
+                  {!isActive && <span className="mt-3 inline-flex rounded-full bg-slate-200 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:bg-white/[0.08] dark:text-slate-300">Archived · history preserved</span>}
                   <div className="mt-4 grid grid-cols-3 gap-2 border-t border-slate-200/80 pt-3 dark:border-white/[0.07]">
                     <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Sheets / pad</p><p className="mt-1 text-sm font-extrabold text-primary-600 dark:text-primary-300">{item.sheets_per_unit}</p></div>
                     <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Price</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">₱{item.cost_per_unit}</p></div>
@@ -423,23 +483,34 @@ export default function Inventory() {
           <div className="flex items-center justify-between mb-6">
             <h2 className="font-display font-bold text-xl text-slate-800 dark:text-white flex items-center gap-2">
               <span>Master Ballpen Inventory</span>
-              <span className="text-xs bg-blue-500/10 text-blue-500 px-2.5 py-0.5 rounded-full font-sans font-bold">
-                Pieces Management
-              </span>
+              <span className="text-xs bg-blue-500/10 text-blue-500 px-2.5 py-0.5 rounded-full font-sans font-bold">Pieces Management</span>
             </h2>
+            {user?.role !== 'staff' && (
+              <button
+                onClick={() => openMasterAddModal('pen')}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-blue-500 px-3.5 py-2.5 text-xs font-bold text-white shadow-lg shadow-blue-500/20 transition hover:bg-blue-600"
+              >
+                <PlusCircle className="h-4 w-4" />
+                Add ballpen
+              </button>
+            )}
           </div>
 
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-            {filteredPen.map((item) => (
-              <article key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-blue-300 hover:bg-blue-50/30 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-blue-500/50 dark:hover:bg-blue-500/[0.05]">
+            {filteredPen.map((item) => {
+              const isActive = item.active !== false;
+              return (
+              <article key={item.id} className={`rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-blue-300 hover:bg-blue-50/30 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-blue-500/50 dark:hover:bg-blue-500/[0.05] ${!isActive ? 'opacity-65' : ''}`}>
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-start gap-2.5"><span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-blue-500" /><div className="min-w-0"><h3 className="truncate text-base font-extrabold text-slate-800 dark:text-white">{item.item_name}</h3><p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Ballpen product</p></div></div>
-                  {user?.role !== 'staff' && <button onClick={() => openMasterEditModal('pen', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title="Edit Pricing & Storage Pieces"><Edit3 className="h-4 w-4" /></button>}
+                  <div className="flex min-w-0 items-start gap-2.5"><span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${isActive ? 'bg-blue-500' : 'bg-slate-400'}`} /><div className="min-w-0"><h3 className="truncate text-base font-extrabold text-slate-800 dark:text-white">{item.item_name}</h3><p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Ballpen product</p></div></div>
+                  {user?.role !== 'staff' && <div className="flex items-center gap-1"><button onClick={() => openMasterEditModal('pen', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title="Edit ballpen product"><Edit3 className="h-4 w-4" /></button><button onClick={() => toggleMasterActive('pen', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title={isActive ? 'Archive ballpen product' : 'Restore ballpen product'}>{isActive ? <Archive className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}</button></div>}
                 </div>
+                {!isActive && <span className="mt-3 inline-flex rounded-full bg-slate-200 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:bg-white/[0.08] dark:text-slate-300">Archived · history preserved</span>}
                 <div className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-200/80 pt-3 dark:border-white/[0.07]"><div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cost / piece</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">₱{item.cost_per_unit}</p></div><div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Storage</p><p className="mt-1 inline-flex items-center gap-1 text-sm font-extrabold text-slate-800 dark:text-white"><Package className="h-3.5 w-3.5 text-blue-500" />{item.storage_stock_pieces} pcs</p></div></div>
                 <div className="mt-3 flex items-center justify-between gap-2"><span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Location</span>{item.assigned_bay ? <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/20 bg-blue-500/10 px-2.5 py-1 text-xs font-bold text-blue-500"><CheckCircle className="h-3 w-3" />Bay {item.assigned_bay} · {item.current_bay_stock} pcs</span> : <span className="rounded-full bg-slate-200/70 px-2.5 py-1 text-xs font-bold text-slate-500 dark:bg-white/[0.05]">In Storage</span>}</div>
               </article>
-            ))}
+            );
+            })}
           </div>
         </div>
 
@@ -708,10 +779,10 @@ export default function Inventory() {
             <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-white/[0.06]">
               <div>
                 <h3 className="font-display font-bold text-lg text-slate-800 dark:text-white">
-                  Edit Master {editingMasterItem === 'paper' ? 'Paper Product' : 'Ballpen Product'}
+                  {isCreatingMaster ? 'Add' : 'Edit'} Master {editingMasterItem === 'paper' ? 'Paper Product' : 'Ballpen Product'}
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Update price per unit, sheets allocation, and master storage quantity.
+                  {isCreatingMaster ? 'Create a catalog product without changing existing sales history.' : 'Update product details or restore an archived catalog product.'}
                 </p>
               </div>
               <button onClick={closeMasterEditModal} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white">
@@ -820,6 +891,18 @@ export default function Inventory() {
                 </div>
               )}
 
+              {!isCreatingMaster && (
+                <label className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 dark:border-white/[0.08] dark:bg-white/[0.04]">
+                  <span>
+                    <span className="block text-xs font-bold text-slate-700 dark:text-slate-200">Catalog status</span>
+                    <span className="block text-[11px] text-slate-400">Archived products remain available in historical records.</span>
+                  </span>
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${formData.active === false ? 'bg-slate-200 text-slate-500 dark:bg-white/[0.08] dark:text-slate-300' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'}`}>
+                    {formData.active === false ? 'Archived' : 'Active'}
+                  </span>
+                </label>
+              )}
+
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-white/[0.06]">
                 <button
                   type="button"
@@ -833,7 +916,7 @@ export default function Inventory() {
                   disabled={submitting}
                   className="px-5 py-2.5 rounded-xl bg-primary-500 hover:bg-primary-600 text-white text-xs font-bold shadow-lg shadow-primary-500/20 disabled:opacity-50"
                 >
-                  {submitting ? 'Saving...' : 'Save Changes'}
+                  {submitting ? 'Saving...' : isCreatingMaster ? 'Add Product' : 'Save Changes'}
                 </button>
               </div>
             </form>
