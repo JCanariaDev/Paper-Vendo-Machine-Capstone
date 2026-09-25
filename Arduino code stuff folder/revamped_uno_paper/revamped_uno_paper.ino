@@ -52,7 +52,6 @@ const int PAPER_LEVEL_HIGH_LEVEL = LOW;
 // an empty pad; the 20-second limit is only a final jam/sensor safety stop.
 const unsigned long PAPER_NO_STOCK_CONFIRM_MS = 15000;
 const unsigned long PAPER_EXIT_TIMEOUT_MS = 20000;
-const unsigned long PAPER_EXIT_CLEAR_TIMEOUT_MS = 800;
 const long MAX_STEPS_PER_SHEET = 12000;
 const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
@@ -103,14 +102,10 @@ bool feedOneSheet(int bayIndex) {
   if (bayIndex < 0 || bayIndex >= MOTOR_COUNT) return false;
 
   const int sensorPin = PAPER_EXIT_SENSOR_PINS[bayIndex];
-  const unsigned long clearStartedAt = millis();
-
-  // A blocked beam at the start indicates a jam or a sheet left at the exit.
-  while (digitalRead(sensorPin) == PAPER_EXIT_BLOCKED_LEVEL) {
-    if (millis() - clearStartedAt >= PAPER_EXIT_CLEAR_TIMEOUT_MS) return false;
-  }
-
-  bool paperDetected = false;
+  // If a sheet is already covering the exit sensor when feeding starts, keep
+  // running the motor and push that sheet through instead of treating it as an
+  // immediate failure. The 20-second timeout remains the final jam/sensor stop.
+  bool paperDetected = digitalRead(sensorPin) == PAPER_EXIT_BLOCKED_LEVEL;
   bool noStockCheckReported = false;
   const unsigned long feedStartedAt = millis();
   for (long step = 0; step < MAX_STEPS_PER_SHEET; step++) {
