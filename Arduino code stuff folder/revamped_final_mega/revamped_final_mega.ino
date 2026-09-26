@@ -308,6 +308,11 @@ int cartRowY(int i) {
 // ================= DIAGNOSTICS =================
 // ================= SETUP =================
 void setup() {
+  // Configure reset inputs before any peripheral startup. Reset must remain
+  // available even if a display or external controller is disconnected.
+  pinMode(HW_RESET_BTN_PIN, INPUT_PULLUP);
+  pinMode(SW_RESET_BTN_PIN, INPUT_PULLUP);
+
   Serial.begin(115200);
   CLOUD_SERIAL.begin(9600); // UART to ESP32 (Pins 18/19)
   UNO_SERIAL.begin(9600);   // UART to Arduino Uno (Pins 16/17)
@@ -321,9 +326,6 @@ void setup() {
   diagTftOk = true;
 
   setMachineIndicator(INDICATOR_ACTIVE, true);
-
-  pinMode(HW_RESET_BTN_PIN, INPUT_PULLUP);
-  pinMode(SW_RESET_BTN_PIN, INPUT_PULLUP);
 
   pinMode(COIN_PIN, INPUT_PULLUP);
   pinMode(COIN_INHIBIT_PIN, OUTPUT);
@@ -353,9 +355,7 @@ void loop() {
     hwResetDebounceUntil = now + 1000;
     Serial.println("HW RESET BUTTON (A8): triggering watchdog reboot...");
     Serial.flush();
-    setMachineIndicator(INDICATOR_ERROR, false);
-    BALLPEN_SERIAL.println("BEEP:500:200");
-    delay(200);
+    // Do not depend on TFT, LEDs, buzzer, or another controller here.
     noInterrupts();
     wdt_enable(WDTO_15MS);
     while (true) {}

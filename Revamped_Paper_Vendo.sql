@@ -334,10 +334,10 @@ DECLARE
     v_tx sales_transactions%ROWTYPE;
 BEGIN
     SELECT * INTO v_tx
-      FROM sales_transactions
+      FROM sales_transactions AS st
      WHERE machine_id = 'paper-vendo-01'
        AND status = 'CREDIT_HELD'
-     ORDER BY created_at DESC
+     ORDER BY st.created_at DESC
      LIMIT 1
      FOR UPDATE;
 
@@ -496,10 +496,10 @@ BEGIN
     -- Reuse the TR created when the first coin was inserted. This converts the
     -- persistent credit session into the normal reserved transaction.
     SELECT id INTO v_tx
-      FROM sales_transactions
+      FROM sales_transactions AS st
      WHERE machine_id = 'paper-vendo-01'
        AND status = 'CREDIT_HELD'
-     ORDER BY created_at DESC
+     ORDER BY st.created_at DESC
      LIMIT 1
      FOR UPDATE;
 
@@ -570,11 +570,11 @@ DECLARE
     v_reserved RECORD;
     v_session_tr TEXT;
 BEGIN
-    SELECT id, tr_number INTO v_session_id, v_session_tr
-      FROM sales_transactions
-     WHERE machine_id = 'paper-vendo-01'
-       AND status = 'CREDIT_HELD'
-     ORDER BY created_at DESC
+    SELECT st.id, st.tr_number INTO v_session_id, v_session_tr
+      FROM sales_transactions AS st
+     WHERE st.machine_id = 'paper-vendo-01'
+       AND st.status = 'CREDIT_HELD'
+     ORDER BY st.created_at DESC
      LIMIT 1
      FOR UPDATE;
 
@@ -593,7 +593,9 @@ BEGIN
            credit_received_cents = p_credit_cents,
            subtotal_cents = v_reserved.subtotal_cents,
            change_due_cents = v_reserved.change_due_cents,
-           change_plan = (SELECT change_plan FROM sales_transactions WHERE id = v_reserved.transaction_id),
+           change_plan = (SELECT st.change_plan
+                            FROM sales_transactions AS st
+                           WHERE st.id = v_reserved.transaction_id),
            failure_reason = NULL,
            completed_at = NULL
      WHERE id = v_session_id;

@@ -59,6 +59,7 @@ int dispensePenFromUno(int channel, int quantity) {
 
   BALLPEN_SERIAL.println("STOP");
   Serial.println("Ballpen Uno dispense timeout; STOP sent.");
+  tftUiShowError("Ballpen Uno disconnected");
   return 0;
 }
 

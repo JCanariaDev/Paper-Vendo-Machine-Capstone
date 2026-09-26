@@ -147,7 +147,6 @@ void handleCartTouch(int x, int y) {
 }
 
 void tftUiLoop() {
-  if (hardwareFaultMessage.length()) return;
   unsigned long now = millis();
   if (now < touchDebounceUntil) return;
   if (!ts.touched()) return;

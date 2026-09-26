@@ -61,10 +61,10 @@ DECLARE
   v_session_tr TEXT;
   v_reserved RECORD;
 BEGIN
-  SELECT id, tr_number INTO v_session_id, v_session_tr
-    FROM sales_transactions
-   WHERE machine_id = 'paper-vendo-01' AND status = 'CREDIT_HELD'
-   ORDER BY created_at DESC LIMIT 1 FOR UPDATE;
+  SELECT st.id, st.tr_number INTO v_session_id, v_session_tr
+    FROM sales_transactions AS st
+   WHERE st.machine_id = 'paper-vendo-01' AND st.status = 'CREDIT_HELD'
+   ORDER BY st.created_at DESC LIMIT 1 FOR UPDATE;
 
   SELECT * INTO v_reserved
     FROM machine_reserve_transaction(p_credit_cents, p_lines);
@@ -80,7 +80,9 @@ BEGIN
      SET status = 'RESERVED', credit_received_cents = p_credit_cents,
          subtotal_cents = v_reserved.subtotal_cents,
          change_due_cents = v_reserved.change_due_cents,
-         change_plan = (SELECT change_plan FROM sales_transactions WHERE id = v_reserved.transaction_id),
+         change_plan = (SELECT st.change_plan
+                          FROM sales_transactions AS st
+                         WHERE st.id = v_reserved.transaction_id),
          failure_reason = NULL, completed_at = NULL
    WHERE id = v_session_id;
 

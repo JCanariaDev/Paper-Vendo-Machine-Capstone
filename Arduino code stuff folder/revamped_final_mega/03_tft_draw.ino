@@ -338,10 +338,6 @@ void drawReceiptScreen() {
 }
 
 void redrawCurrentScreen() {
-  if (hardwareFaultMessage.length()) {
-    drawStatusScreen("Hardware disconnected", hardwareFaultMessage);
-    return;
-  }
   switch (currentScreen) {
     case SCREEN_IDLE:        drawIdleScreen();        break;
     case SCREEN_MAIN:        drawMainScreen();        break;

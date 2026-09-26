@@ -204,6 +204,7 @@ int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName)
     }
   }
   Serial.println("Paper Uno response timeout; no NEMA17 completion received.");
+  tftUiShowError("Paper Uno disconnected");
   return 0; // Timeout
 }
 

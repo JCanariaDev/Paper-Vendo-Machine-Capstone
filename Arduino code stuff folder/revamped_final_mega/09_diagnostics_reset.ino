@@ -31,42 +31,21 @@ void printHardwareStatus() {
 void monitorControllerHealth() {
   if (millis() - controllerCheckStartedAt < CONTROLLER_READY_GRACE_MS) return;
 
-  String missing = "";
-  if (!paperUnoResponsive) missing = "Paper Uno disconnected";
-  if (!ballpenUnoResponsive) {
-    if (missing.length()) missing += " / ";
-    missing += "Ballpen Uno disconnected";
-  }
-
-  if (missing.length()) {
-    if (hardwareFaultMessage != missing) {
-      hardwareFaultMessage = missing;
-      setCoinAcceptance(false);
-      currentScreen = SCREEN_IDLE;
-      redrawCurrentScreen();
-      nextHardwareFaultBeepAt = 0;
-    }
-    if (millis() >= nextHardwareFaultBeepAt) {
-      setMachineIndicator(INDICATOR_ERROR, true);
-      UNO_SERIAL.println("STATUS?");
-      BALLPEN_SERIAL.println("STATUS?");
-      nextHardwareFaultBeepAt = millis() + HARDWARE_FAULT_BEEP_INTERVAL_MS;
-    }
-    return;
-  }
-
-  if (hardwareFaultMessage.length()) {
-    hardwareFaultMessage = "";
-    setCoinAcceptance(credits < maximumCreditsAllowed && !orderInProgress);
-    refreshMachineAvailability(false);
-    redrawCurrentScreen();
-  }
+  // Controller availability is checked when its own dispense command runs.
+  // A missing optional controller must not prevent the Mega from booting,
+  // accepting credits, or keeping the TFT usable.
+  static unsigned long nextStatusPoll = 0;
+  if (millis() < nextStatusPoll) return;
+  if (!paperUnoResponsive) UNO_SERIAL.println("STATUS?");
+  if (!ballpenUnoResponsive) BALLPEN_SERIAL.println("STATUS?");
+  nextStatusPoll = millis() + 3000;
 }
 
 void softResetMachineState() {
   Serial.println("SOFT RESET: returning machine logic to idle state.");
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   hopperManualRunning = false;
+  // This command is best-effort: reset must work even if Ballpen Uno is absent.
   BALLPEN_SERIAL.println("STOP");
 
   noInterrupts();
@@ -98,7 +77,6 @@ void softResetMachineState() {
   CLOUD_SERIAL.println("CREDIT:0");
   CLOUD_SERIAL.println("SOFT_RESET");
   CLOUD_SERIAL.println("STATUS?");
-  delay(300);
   CLOUD_SERIAL.println("GET_CATALOG");
   UNO_SERIAL.println("STATUS?");
   BALLPEN_SERIAL.println("STATUS?");
