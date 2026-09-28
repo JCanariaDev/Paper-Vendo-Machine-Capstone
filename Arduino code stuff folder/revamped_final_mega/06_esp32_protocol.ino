@@ -164,9 +164,9 @@ void executeDispensePlan(String message) {
     tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
     tft.setTextSize(2);
     tft.setTextColor(COL_ORANGE);
-    printCentered("Change Pending", tft.width() / 2, 130);
+    printCentered("Finalizing...", tft.width() / 2, 130);
     tft.setTextSize(1);
-    printCentered("Please claim change from an admin", tft.width() / 2, 165);
+    printCentered("Change will be shown on the receipt", tft.width() / 2, 165);
   } else if (activeChangeDueCents > 0) {
     tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
     tft.setTextSize(2);

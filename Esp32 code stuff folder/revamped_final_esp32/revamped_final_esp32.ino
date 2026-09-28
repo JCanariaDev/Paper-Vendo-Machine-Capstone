@@ -659,7 +659,7 @@ void reserveCart(const String &message) {
   }
   DynamicJsonDocument response(4096);
   const unsigned long reserveStartedAt = millis();
-  if (!callRpc("machine_reserve_transaction_with_session", request, response, 12000)) return;
+  if (!callRpc("machine_reserve_transaction_with_session", request, response, 30000)) return;
   Serial.printf("Checkout reservation completed in %lu ms.\n", millis() - reserveStartedAt);
   JsonObject result = response[0];
   if (result.isNull()) {

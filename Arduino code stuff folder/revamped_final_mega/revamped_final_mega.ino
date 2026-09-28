@@ -67,7 +67,9 @@ const int CHANGE_HOPPER_SENSOR_PIN = 23;
 const unsigned long CHANGE_COIN_TIMEOUT_MS  = 5000;
 const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
-const unsigned long CHECKOUT_RESERVATION_TIMEOUT_MS = 16000;
+// Emergency fallback only. Normal checkout has time to survive a slow
+// Supabase wake-up without stranding the customer on the summary screen.
+const unsigned long CHECKOUT_RESERVATION_TIMEOUT_MS = 45000;
 // Paper Uno reports a confirmed result promptly; avoid a long dead wait if its
 // UART cable/controller is unavailable.
 // Must cover the Paper Uno's 20-second sensor/jam safety window. A normal
