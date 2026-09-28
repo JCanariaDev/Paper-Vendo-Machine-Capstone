@@ -3,7 +3,7 @@
  * 
  * Periodically monitors the `machine_online_status` table in Supabase.
  * If the ESP32 has not posted a heartbeat within the configured timeout window
- * (default: 10 seconds), the watchdog automatically transitions the machine status
+ * (default: 30 seconds), the watchdog automatically transitions the machine status
  * in Supabase to 'Offline'.
  */
 
@@ -14,8 +14,8 @@ export function startMachineWatchdog(supabase) {
     clearInterval(watchdogTimer);
   }
 
-  const timeoutSeconds = Number.parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS || '10', 10);
-  const timeoutMs = (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? timeoutSeconds : 10) * 1000;
+  const timeoutSeconds = Number.parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS || '30', 10);
+  const timeoutMs = (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? timeoutSeconds : 30) * 1000;
   const checkIntervalMs = 3000; // Check every 3 seconds
 
   console.log(`[Watchdog] Machine online watchdog started (Timeout: ${timeoutMs / 1000}s, Check Interval: ${checkIntervalMs / 1000}s)`);

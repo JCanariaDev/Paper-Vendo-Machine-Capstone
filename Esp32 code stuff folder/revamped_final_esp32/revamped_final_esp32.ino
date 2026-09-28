@@ -405,6 +405,9 @@ bool sendOnlineHeartbeat() {
     return false;
   }
 
+  // Keep a failed heartbeat from blocking the main loop during a weak Wi-Fi connection.
+  http.setTimeout(3000);
+
   http.addHeader("apikey", SUPABASE_ANON_KEY);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
   http.addHeader("Content-Type", "application/json");
