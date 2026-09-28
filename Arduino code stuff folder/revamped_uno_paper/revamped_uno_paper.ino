@@ -52,7 +52,6 @@ const int PAPER_LEVEL_HIGH_LEVEL = LOW;
 // an empty pad; the 20-second limit is only a final jam/sensor safety stop.
 const unsigned long PAPER_NO_STOCK_CONFIRM_MS = 15000;
 const unsigned long PAPER_EXIT_TIMEOUT_MS = 20000;
-const long MAX_STEPS_PER_SHEET = 12000;
 const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
@@ -110,7 +109,10 @@ bool feedOneSheet(int bayIndex) {
   bool paperDetected = digitalRead(sensorPin) == PAPER_EXIT_BLOCKED_LEVEL;
   bool noStockCheckReported = false;
   const unsigned long feedStartedAt = millis();
-  for (long step = 0; step < MAX_STEPS_PER_SHEET; step++) {
+  // Run continuously until the exit sensor sees and then clears a sheet.
+  // A fixed step limit could expire before the paper reached the sensor,
+  // especially with a slower or loaded NEMA17 mechanism.
+  while (millis() - feedStartedAt < PAPER_EXIT_TIMEOUT_MS) {
     // Keep the motor running while the paper travels toward and through the
     // exit sensor. The sensor controls when this sheet is considered done.
     pulseStep(bayIndex);

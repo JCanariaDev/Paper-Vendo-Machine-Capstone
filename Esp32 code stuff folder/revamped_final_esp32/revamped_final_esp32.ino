@@ -52,6 +52,12 @@ unsigned long nextFinishRetryAt = 0;
 uint8_t finishRetryCount = 0;
 const unsigned long FINISH_RETRY_INTERVAL_MS = 3000;
 const uint8_t MAX_FINISH_RETRIES = 20;
+bool awaitingFinishAck = false;
+String lastFinishedMessage;
+unsigned long lastFinishedSentAt = 0;
+uint8_t finishAckAttempts = 0;
+const unsigned long FINISH_ACK_RETRY_INTERVAL_MS = 500;
+const uint8_t MAX_FINISH_ACK_ATTEMPTS = 10;
 int pendingCreditSessionCents = -1;
 unsigned long nextCreditSessionAttemptAt = 0;
 const unsigned long CREDIT_SESSION_RETRY_INTERVAL_MS = 3000;
@@ -746,6 +752,21 @@ bool submitFinishTransaction(const String &transactionId,
 }
 
 void processPendingFinish() {
+  if (awaitingFinishAck) {
+    if (millis() - lastFinishedSentAt < FINISH_ACK_RETRY_INTERVAL_MS) return;
+    if (finishAckAttempts >= MAX_FINISH_ACK_ATTEMPTS) {
+      recordSystemEvent("ERROR", "ESP32", "FINISHED_DELIVERY_UNCONFIRMED",
+                        "Transaction finished in the database but Mega did not acknowledge the TFT completion message",
+                        "machine_finish_transaction", 0);
+      awaitingFinishAck = false;
+      return;
+    }
+    MEGA_SERIAL.println(lastFinishedMessage);
+    lastFinishedSentAt = millis();
+    finishAckAttempts++;
+    return;
+  }
+
   if (!pendingFinish || millis() < nextFinishRetryAt) return;
 
   finishRetryCount++;
@@ -768,9 +789,13 @@ void processPendingFinish() {
                               status,
                               dueCents,
                               paidCents)) {
-    MEGA_SERIAL.println("FINISHED:" + pendingFinishTransactionId + ":" +
-                       trNumber + ":" + status + ":" +
-                       String(dueCents) + ":" + String(paidCents));
+    lastFinishedMessage = "FINISHED:" + pendingFinishTransactionId + ":" +
+                          trNumber + ":" + status + ":" +
+                          String(dueCents) + ":" + String(paidCents);
+    MEGA_SERIAL.println(lastFinishedMessage);
+    lastFinishedSentAt = millis();
+    finishAckAttempts = 1;
+    awaitingFinishAck = true;
     pendingFinish = false;
     finishRetryCount = 0;
     nextFinishRetryAt = 0;
@@ -842,6 +867,14 @@ void handleMegaMessage(String message) {
   else if (message.startsWith("RESERVE:")) reserveCart(message);
   else if (message.startsWith("CHANGE_OK:")) changePaid(message);
   else if (message.startsWith("CHANGE_FAIL:")) cancelReservation(message);
+  else if (message.startsWith("FINISHED_ACK:")) {
+    const String transactionId = message.substring(13);
+    if (awaitingFinishAck && transactionId == pendingFinishTransactionId) {
+      awaitingFinishAck = false;
+      lastFinishedMessage = "";
+      finishAckAttempts = 0;
+    }
+  }
   else if (message.startsWith("FINISH:")) finishTransaction(message);
   else if (message.startsWith("BAY_EMPTY:")) updatePaperBayPresence(message);
   else if (message.startsWith("HARDWARE_EVENT:")) {

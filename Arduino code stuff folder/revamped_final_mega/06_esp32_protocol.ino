@@ -230,6 +230,7 @@ void finishUiAfterTransaction(String message) {
   // Switch to non-blocking Receipt Screen with CONFIRM button
   currentScreen = SCREEN_RECEIPT;
   drawReceiptScreen();
+  CLOUD_SERIAL.println("FINISHED_ACK:" + activeTransactionId);
 }
 
 void handleCloudCommand(String msg) {
