@@ -316,6 +316,12 @@ int cartRowY(int i) {
 // ================= DIAGNOSTICS =================
 // ================= SETUP =================
 void setup() {
+  // Clear any watchdog state left by a previous reset before initializing
+  // peripherals. The watchdog is enabled only for the hardware reset button.
+  const uint8_t resetCause = MCUSR;
+  MCUSR = 0;
+  wdt_disable();
+
   // Configure reset inputs before any peripheral startup. Reset must remain
   // available even if a display or external controller is disconnected.
   pinMode(HW_RESET_BTN_PIN, INPUT_PULLUP);
@@ -327,6 +333,9 @@ void setup() {
   BALLPEN_SERIAL.begin(9600); // UART to Ballpen Uno (Pins 14/15)
   UNO_SERIAL.setTimeout(500);
   BALLPEN_SERIAL.setTimeout(500);
+  if (resetCause != 0) {
+    CLOUD_SERIAL.println("MEGA_RESET_CAUSE:" + String(resetCause, HEX));
+  }
   Serial.println("--- REVAMPED SMART PAPER VENDO FIRMWARE (OPTION A) STARTING ---");
   controllerCheckStartedAt = millis();
 

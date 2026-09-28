@@ -861,6 +861,13 @@ void handleMegaMessage(String message) {
       "Mega cancelled checkout while waiting for reservation",
       "machine_reserve_transaction_with_session", 408);
   }
+  else if (message.startsWith("MEGA_RESET_CAUSE:")) {
+    const String cause = message.substring(17);
+    recordSystemEvent(
+      "ERROR", "MEGA", "MEGA_RESET",
+      "Mega restarted; reset cause code " + cause,
+      "", 0);
+  }
   else if (message == "GET_CATALOG") syncLiveCatalogToMega();
   else if (message == "STATUS?") sendWifiStatus();
   else if (message == "SOFT_RESET") softResetRuntime();
