@@ -16,28 +16,28 @@ DECLARE
   v_tx sales_transactions%ROWTYPE;
 BEGIN
   SELECT * INTO v_tx
-    FROM sales_transactions
-   WHERE machine_id = 'paper-vendo-01' AND status = 'CREDIT_HELD'
-   ORDER BY created_at DESC LIMIT 1 FOR UPDATE;
+    FROM sales_transactions AS st
+   WHERE st.machine_id = 'paper-vendo-01' AND st.status = 'CREDIT_HELD'
+   ORDER BY st.created_at DESC LIMIT 1 FOR UPDATE;
 
   IF p_credit_cents <= 0 THEN
     IF FOUND THEN
-      UPDATE sales_transactions
+      UPDATE sales_transactions AS st
          SET status = 'CANCELLED', subtotal_cents = 0,
-             change_due_cents = credit_received_cents,
+             change_due_cents = v_tx.credit_received_cents,
              failure_reason = 'Session reset before checkout; credits await administrator release',
              completed_at = NOW()
-       WHERE id = v_tx.id;
+       WHERE st.id = v_tx.id;
       RETURN QUERY SELECT v_tx.id, v_tx.tr_number, 'CANCELLED'::TEXT, v_tx.credit_received_cents;
     END IF;
     RETURN;
   END IF;
 
   IF FOUND THEN
-    UPDATE sales_transactions
+    UPDATE sales_transactions AS st
        SET credit_received_cents = p_credit_cents, subtotal_cents = 0,
            change_due_cents = p_credit_cents
-     WHERE id = v_tx.id
+     WHERE st.id = v_tx.id
      RETURNING * INTO v_tx;
   ELSE
     INSERT INTO sales_transactions (machine_id, status, credit_received_cents,
@@ -86,11 +86,13 @@ BEGIN
          failure_reason = NULL, completed_at = NULL
    WHERE id = v_session_id;
 
-  UPDATE machine_logs SET transaction_id = v_session_id, tr_number = v_session_tr
-   WHERE transaction_id = v_reserved.transaction_id;
-  UPDATE sales_transaction_lines SET transaction_id = v_session_id
-   WHERE transaction_id = v_reserved.transaction_id;
-  DELETE FROM sales_transactions WHERE id = v_reserved.transaction_id;
+  UPDATE machine_logs AS ml
+     SET transaction_id = v_session_id, tr_number = v_session_tr
+   WHERE ml.transaction_id = v_reserved.transaction_id;
+  UPDATE sales_transaction_lines AS stl SET transaction_id = v_session_id
+   WHERE stl.transaction_id = v_reserved.transaction_id;
+  DELETE FROM sales_transactions AS st
+   WHERE st.id = v_reserved.transaction_id;
 
   RETURN QUERY SELECT v_session_id, v_session_tr,
                       v_reserved.subtotal_cents, v_reserved.change_due_cents,

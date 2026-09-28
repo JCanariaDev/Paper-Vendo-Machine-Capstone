@@ -391,32 +391,32 @@ DECLARE
 BEGIN
     SELECT * INTO v_tx
       FROM sales_transactions AS st
-     WHERE machine_id = 'paper-vendo-01'
-       AND status = 'CREDIT_HELD'
+      WHERE st.machine_id = 'paper-vendo-01'
+       AND st.status = 'CREDIT_HELD'
      ORDER BY st.created_at DESC
      LIMIT 1
      FOR UPDATE;
 
     IF p_credit_cents <= 0 THEN
         IF FOUND THEN
-            UPDATE sales_transactions
+            UPDATE sales_transactions AS st
                SET status = 'CANCELLED',
                    subtotal_cents = 0,
-                   change_due_cents = credit_received_cents,
+                   change_due_cents = v_tx.credit_received_cents,
                    failure_reason = 'Power loss or session reset before checkout; credits await administrator release',
                    completed_at = NOW()
-             WHERE id = v_tx.id;
+             WHERE st.id = v_tx.id;
             RETURN QUERY SELECT v_tx.id, v_tx.tr_number, 'CANCELLED'::TEXT, v_tx.credit_received_cents;
         END IF;
         RETURN;
     END IF;
 
     IF FOUND THEN
-        UPDATE sales_transactions
+        UPDATE sales_transactions AS st
            SET credit_received_cents = p_credit_cents,
                subtotal_cents = 0,
                change_due_cents = p_credit_cents
-         WHERE id = v_tx.id
+         WHERE st.id = v_tx.id
          RETURNING * INTO v_tx;
     ELSE
         INSERT INTO sales_transactions (
@@ -463,7 +463,6 @@ DECLARE
     v_dispense_plan JSONB := '[]'::jsonb;
     v_tx UUID := gen_random_uuid();
     v_tr_number TEXT;
-    v_reuse_credit_session BOOLEAN := FALSE;
 BEGIN
     SELECT COALESCE(maximum_ballpens_per_transaction, 5)
       INTO v_max_ballpens
@@ -549,33 +548,11 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- Reuse the TR created when the first coin was inserted. This converts the
-    -- persistent credit session into the normal reserved transaction.
-    SELECT id INTO v_tx
-      FROM sales_transactions AS st
-     WHERE machine_id = 'paper-vendo-01'
-       AND status = 'CREDIT_HELD'
-     ORDER BY st.created_at DESC
-     LIMIT 1
-     FOR UPDATE;
-
-    v_reuse_credit_session := FOUND;
-    IF v_reuse_credit_session THEN
-        UPDATE sales_transactions
-           SET status = 'RESERVED',
-               credit_received_cents = p_credit_cents,
-               subtotal_cents = v_subtotal,
-               change_due_cents = v_change,
-               change_plan = v_change_plan,
-               failure_reason = NULL,
-               completed_at = NULL
-         WHERE id = v_tx
-         RETURNING sales_transactions.tr_number INTO v_tr_number;
-    ELSE
-        INSERT INTO sales_transactions (id, credit_received_cents, subtotal_cents, change_due_cents, change_plan)
-        VALUES (v_tx, p_credit_cents, v_subtotal, v_change, v_change_plan)
-        RETURNING sales_transactions.tr_number INTO v_tr_number;
-    END IF;
+    -- Always create a separate temporary reservation here. The session wrapper
+    -- below safely transfers its lines and logs to the existing CREDIT_HELD TR.
+    INSERT INTO sales_transactions (id, credit_received_cents, subtotal_cents, change_due_cents, change_plan)
+    VALUES (v_tx, p_credit_cents, v_subtotal, v_change, v_change_plan)
+    RETURNING sales_transactions.tr_number INTO v_tr_number;
 
     -- Record transaction lines
     FOR v_line IN SELECT value FROM jsonb_array_elements(p_lines) LOOP
@@ -656,14 +633,14 @@ BEGIN
            completed_at = NULL
      WHERE id = v_session_id;
 
-    UPDATE machine_logs
+    UPDATE machine_logs AS ml
        SET transaction_id = v_session_id,
            tr_number = v_session_tr
-     WHERE transaction_id = v_reserved.transaction_id;
+     WHERE ml.transaction_id = v_reserved.transaction_id;
 
-    UPDATE sales_transaction_lines
+    UPDATE sales_transaction_lines AS stl
        SET transaction_id = v_session_id
-     WHERE transaction_id = v_reserved.transaction_id;
+     WHERE stl.transaction_id = v_reserved.transaction_id;
 
     DELETE FROM sales_transactions WHERE id = v_reserved.transaction_id;
 
@@ -767,11 +744,11 @@ BEGIN
         RETURN;
     END IF;
 
-    UPDATE sales_transactions
-       SET refund_paid_cents = refund_paid_cents + v_amount,
+    UPDATE sales_transactions AS st
+       SET refund_paid_cents = v_tx.refund_paid_cents + v_amount,
            status = 'REFUNDED',
            completed_at = COALESCE(completed_at, NOW())
-     WHERE id = p_transaction_id;
+     WHERE st.id = p_transaction_id;
 
     INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
     VALUES ('INFO', 'DASHBOARD', 'FAILED_DISPENSE_REFUND_RECORDED',
