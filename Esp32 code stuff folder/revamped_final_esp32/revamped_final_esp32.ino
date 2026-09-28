@@ -68,7 +68,8 @@ bool connectToWifi(unsigned long timeoutMs);
 bool printNearbyWifiNetworks();
 void updateMachineStatus();
 void updateStatusKey(const String &key, const String &value);
-bool callRpc(const char* functionName, JsonDocument &request, DynamicJsonDocument &response);
+bool callRpc(const char* functionName, JsonDocument &request,
+             DynamicJsonDocument &response, unsigned long timeoutMs = 5000);
 bool persistCreditSession(int creditCents);
 bool sendOnlineHeartbeat();
 void softResetRuntime();
@@ -420,7 +421,8 @@ bool sendOnlineHeartbeat() {
   return true;
 }
 
-bool callRpc(const char* functionName, JsonDocument &request, DynamicJsonDocument &response) {
+bool callRpc(const char* functionName, JsonDocument &request,
+             DynamicJsonDocument &response, unsigned long timeoutMs) {
   if (!ensureWifi()) {
     sendError("WIFI_OFFLINE");
     return false;
@@ -438,7 +440,7 @@ bool callRpc(const char* functionName, JsonDocument &request, DynamicJsonDocumen
   // Reservation/finish requests are on the customer's critical path. Fail
   // promptly and use the existing retry flow instead of blocking for a long
   // network timeout.
-  http.setTimeout(5000);
+  http.setTimeout(timeoutMs);
   http.addHeader("apikey", SUPABASE_ANON_KEY);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
   http.addHeader("Content-Type", "application/json");
@@ -611,7 +613,9 @@ void reserveCart(const String &message) {
     start = end + 1;
   }
   DynamicJsonDocument response(4096);
-  if (!callRpc("machine_reserve_transaction_with_session", request, response)) return;
+  const unsigned long reserveStartedAt = millis();
+  if (!callRpc("machine_reserve_transaction_with_session", request, response, 12000)) return;
+  Serial.printf("Checkout reservation completed in %lu ms.\n", millis() - reserveStartedAt);
   JsonObject result = response[0];
   if (result.isNull()) { sendError("EMPTY_RESERVATION"); return; }
 

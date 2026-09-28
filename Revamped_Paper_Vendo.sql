@@ -306,6 +306,15 @@ GRANT SELECT, UPDATE ON machine_options TO anon, authenticated, service_role;
 
 CREATE INDEX idx_revamped_tx_created ON sales_transactions(created_at DESC);
 CREATE INDEX idx_revamped_tx_lines ON sales_transaction_lines(item_type, product_id);
+CREATE INDEX idx_sales_transactions_credit_session
+    ON sales_transactions(machine_id, status, created_at DESC)
+    WHERE status = 'CREDIT_HELD';
+CREATE INDEX idx_sales_transaction_lines_transaction
+    ON sales_transaction_lines(transaction_id);
+CREATE INDEX idx_paper_compartments_product
+    ON paper_compartments(assigned_product_id);
+CREATE INDEX idx_ballpen_compartments_product
+    ON ballpen_compartments(assigned_product_id);
 
 -- ------------------------------------------------------------------------------
 -- Seed Initial Data

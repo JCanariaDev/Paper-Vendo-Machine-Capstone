@@ -1,6 +1,16 @@
 -- Persistent credit sessions.
 -- Run this once against an existing database. It does not delete sales data.
 
+CREATE INDEX IF NOT EXISTS idx_sales_transactions_credit_session
+    ON sales_transactions(machine_id, status, created_at DESC)
+    WHERE status = 'CREDIT_HELD';
+CREATE INDEX IF NOT EXISTS idx_sales_transaction_lines_transaction
+    ON sales_transaction_lines(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_paper_compartments_product
+    ON paper_compartments(assigned_product_id);
+CREATE INDEX IF NOT EXISTS idx_ballpen_compartments_product
+    ON ballpen_compartments(assigned_product_id);
+
 ALTER TABLE sales_transactions DROP CONSTRAINT IF EXISTS sales_transactions_status_check;
 ALTER TABLE sales_transactions
   ADD CONSTRAINT sales_transactions_status_check CHECK (
