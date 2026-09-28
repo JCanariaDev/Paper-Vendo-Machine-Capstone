@@ -131,10 +131,15 @@ bool hopperManualRunning = false;
 unsigned long hopperManualStartedAt = 0;
 bool paperUnoResponsive = false;
 bool ballpenUnoResponsive = false;
+bool paperUnoDisconnectObserved = false;
+bool ballpenUnoDisconnectObserved = false;
+unsigned long lastPaperUnoResponseAt = 0;
+unsigned long lastBallpenUnoResponseAt = 0;
 String hardwareFaultMessage = "";
 unsigned long controllerCheckStartedAt = 0;
 unsigned long nextHardwareFaultBeepAt = 0;
 const unsigned long CONTROLLER_READY_GRACE_MS = 10000;
+const unsigned long CONTROLLER_RESPONSE_TIMEOUT_MS = 9000;
 const unsigned long HARDWARE_FAULT_BEEP_INTERVAL_MS = 3000;
 
 enum IndicatorState { INDICATOR_READY, INDICATOR_ACTIVE, INDICATOR_ERROR };

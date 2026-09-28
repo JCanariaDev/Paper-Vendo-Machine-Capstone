@@ -100,10 +100,12 @@ void handleUnoMessage(String msg) {
   msg.trim();
   if (msg == "UNO_PAPER_READY") {
     paperUnoResponsive = true;
+    lastPaperUnoResponseAt = millis();
     return;
   }
   if (msg.startsWith("STATUS:")) {
     paperUnoResponsive = true;
+    lastPaperUnoResponseAt = millis();
     // Format: STATUS:HIGH,HIGH,... for the configured paper bays
     // Uno reports the last synchronized software stock state.
     String list = msg.substring(7);

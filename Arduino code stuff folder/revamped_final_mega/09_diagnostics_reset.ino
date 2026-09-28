@@ -34,10 +34,36 @@ void monitorControllerHealth() {
   // Controller availability is checked when its own dispense command runs.
   // A missing optional controller must not prevent the Mega from booting,
   // accepting credits, or keeping the TFT usable.
+  const unsigned long now = millis();
+  if (lastPaperUnoResponseAt > 0 &&
+      now - lastPaperUnoResponseAt > CONTROLLER_RESPONSE_TIMEOUT_MS) {
+    paperUnoResponsive = false;
+  }
+  if (lastBallpenUnoResponseAt > 0 &&
+      now - lastBallpenUnoResponseAt > CONTROLLER_RESPONSE_TIMEOUT_MS) {
+    ballpenUnoResponsive = false;
+  }
+
   static unsigned long nextStatusPoll = 0;
   if (millis() < nextStatusPoll) return;
-  if (!paperUnoResponsive) UNO_SERIAL.println("STATUS?");
-  if (!ballpenUnoResponsive) BALLPEN_SERIAL.println("STATUS?");
+  UNO_SERIAL.println("STATUS?");
+  BALLPEN_SERIAL.println("STATUS?");
+
+  if (!paperUnoResponsive) {
+    CLOUD_SERIAL.println("HARDWARE_EVENT:PAPER_UNO:DISCONNECTED");
+    paperUnoDisconnectObserved = true;
+  } else if (paperUnoDisconnectObserved) {
+    CLOUD_SERIAL.println("HARDWARE_EVENT:PAPER_UNO:CONNECTED");
+    paperUnoDisconnectObserved = false;
+  }
+
+  if (!ballpenUnoResponsive) {
+    CLOUD_SERIAL.println("HARDWARE_EVENT:BALLPEN_UNO:DISCONNECTED");
+    ballpenUnoDisconnectObserved = true;
+  } else if (ballpenUnoDisconnectObserved) {
+    CLOUD_SERIAL.println("HARDWARE_EVENT:BALLPEN_UNO:CONNECTED");
+    ballpenUnoDisconnectObserved = false;
+  }
   nextStatusPoll = millis() + 3000;
 }
 

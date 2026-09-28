@@ -363,6 +363,17 @@ bool persistCreditSession(int creditCents) {
   return true;
 }
 
+bool recordHardwareEvent(const String &component, const String &state) {
+  if (!ensureWifi()) return false;
+  DynamicJsonDocument request(384), response(256);
+  request["p_component"] = component;
+  request["p_state"] = state;
+  request["p_message"] = component + (state == "DISCONNECTED"
+    ? " is disconnected"
+    : " reconnected");
+  return callRpc("machine_record_hardware_event", request, response);
+}
+
 void processPendingCreditSession() {
   if (pendingCreditSessionCents < 0 || millis() < nextCreditSessionAttemptAt) return;
   if (!persistCreditSession(pendingCreditSessionCents)) {
@@ -784,6 +795,17 @@ void handleMegaMessage(String message) {
   else if (message.startsWith("CHANGE_FAIL:")) cancelReservation(message);
   else if (message.startsWith("FINISH:")) finishTransaction(message);
   else if (message.startsWith("BAY_EMPTY:")) updatePaperBayPresence(message);
+  else if (message.startsWith("HARDWARE_EVENT:")) {
+    const int first = message.indexOf(':');
+    const int second = message.indexOf(':', first + 1);
+    if (second > first) {
+      const String component = message.substring(first + 1, second);
+      const String state = message.substring(second + 1);
+      if (!recordHardwareEvent(component, state)) {
+        Serial.println("Hardware event log pending: " + component + " " + state);
+      }
+    }
+  }
   else if (message == "GET_CATALOG") syncLiveCatalogToMega();
   else if (message == "STATUS?") sendWifiStatus();
   else if (message == "SOFT_RESET") softResetRuntime();

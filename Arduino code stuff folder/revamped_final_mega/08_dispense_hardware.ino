@@ -9,6 +9,7 @@ void handleBallpenMessage(String msg) {
   if (msg.length() == 0) return;
   if (msg == "BALLPEN_READY") {
     ballpenUnoResponsive = true;
+    lastBallpenUnoResponseAt = millis();
     return;
   }
   Serial.print("Ballpen Uno: ");

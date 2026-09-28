@@ -139,6 +139,54 @@ BEGIN
 END;
 $$;
 
+-- Record Paper/Ballpen controller availability transitions. Repeated polling
+-- of the same state is ignored by comparing the latest event for that part.
+CREATE OR REPLACE FUNCTION machine_record_hardware_event(
+  p_component TEXT,
+  p_state TEXT,
+  p_message TEXT DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public AS $$
+DECLARE
+  v_event_type TEXT;
+  v_previous_event TEXT;
+BEGIN
+  IF p_component IS NULL OR p_component = '' THEN
+    RAISE EXCEPTION 'Hardware component is required';
+  END IF;
+  IF p_state NOT IN ('DISCONNECTED', 'CONNECTED') THEN
+    RAISE EXCEPTION 'Unsupported hardware state: %', p_state;
+  END IF;
+
+  v_event_type := CASE WHEN p_state = 'DISCONNECTED'
+                       THEN 'HARDWARE_DISCONNECTED'
+                       ELSE 'HARDWARE_RECONNECTED' END;
+
+  SELECT ml.event_type INTO v_previous_event
+    FROM machine_logs AS ml
+   WHERE ml.event_type IN ('HARDWARE_DISCONNECTED', 'HARDWARE_RECONNECTED')
+     AND ml.metadata->>'component' = p_component
+   ORDER BY ml.created_at DESC
+   LIMIT 1;
+
+  IF v_previous_event = v_event_type THEN RETURN; END IF;
+
+  INSERT INTO machine_logs (level, source, event_type, message, metadata)
+  VALUES (
+    CASE WHEN p_state = 'DISCONNECTED' THEN 'ERROR' ELSE 'INFO' END,
+    'MEGA', v_event_type,
+    COALESCE(p_message, p_component || CASE WHEN p_state = 'DISCONNECTED'
+                                             THEN ' is disconnected'
+                                             ELSE ' reconnected' END),
+    jsonb_build_object('component', p_component, 'state', p_state)
+  );
+END;
+$$;
+
 GRANT EXECUTE ON FUNCTION machine_update_credit_session(INTEGER) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_reserve_transaction_with_session(INTEGER, JSONB) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_release_change(UUID) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION machine_record_hardware_event(TEXT, TEXT, TEXT) TO anon, authenticated;
