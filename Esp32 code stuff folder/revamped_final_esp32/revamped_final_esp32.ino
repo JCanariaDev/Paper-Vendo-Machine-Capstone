@@ -375,6 +375,21 @@ bool recordHardwareEvent(const String &component, const String &state) {
   return callRpc("machine_record_hardware_event", request, response);
 }
 
+bool recordSystemEvent(const String &level, const String &source,
+                       const String &eventType, const String &message,
+                       const String &rpcFunction, int httpCode) {
+  if (!ensureWifi()) return false;
+  DynamicJsonDocument request(768), response(256);
+  request["p_level"] = level;
+  request["p_source"] = source;
+  request["p_event_type"] = eventType;
+  request["p_message"] = message;
+  JsonObject metadata = request.createNestedObject("p_metadata");
+  metadata["rpc_function"] = rpcFunction;
+  metadata["http_code"] = httpCode;
+  return callRpc("machine_record_system_event", request, response, 3000);
+}
+
 void processPendingCreditSession() {
   if (pendingCreditSessionCents < 0 || millis() < nextCreditSessionAttemptAt) return;
   if (!persistCreditSession(pendingCreditSessionCents)) {
@@ -437,6 +452,11 @@ bool callRpc(const char* functionName, JsonDocument &request,
   HTTPClient http;
   const String url = String(SUPABASE_URL) + "/rest/v1/rpc/" + functionName;
   if (!http.begin(client, url)) {
+    if (String(functionName) == "machine_reserve_transaction_with_session") {
+      recordSystemEvent("ERROR", "ESP32", "CHECKOUT_RESERVATION_FAILED",
+                        "Checkout reservation could not start HTTPS request",
+                        functionName, -1000);
+    }
     sendError("HTTPS_START_FAILED");
     return false;
   }
@@ -464,7 +484,18 @@ bool callRpc(const char* functionName, JsonDocument &request,
     reason.replace(':', '-');
     reason.replace('\n', ' ');
     if (reason.length() > 90) reason = reason.substring(0, 90);
-    sendError("DATABASE_REJECTED:" + reason);
+    const bool reservationFailure = String(functionName) == "machine_reserve_transaction_with_session";
+    if (reservationFailure) {
+      recordSystemEvent(
+        "ERROR", "ESP32", "CHECKOUT_RESERVATION_FAILED",
+        "Checkout reservation failed: " + reason,
+        functionName, code);
+    }
+    if (reservationFailure && code <= 0) {
+      sendError("CHECKOUT_TIMEOUT");
+    } else {
+      sendError("DATABASE_REJECTED:" + reason);
+    }
     return false;
   }
   if (payload.length() == 0) {
@@ -472,6 +503,11 @@ bool callRpc(const char* functionName, JsonDocument &request,
     return true;
   }
   if (deserializeJson(response, payload)) {
+    if (String(functionName) == "machine_reserve_transaction_with_session") {
+      recordSystemEvent("ERROR", "ESP32", "CHECKOUT_RESERVATION_FAILED",
+                        "Checkout reservation returned invalid database data",
+                        functionName, code);
+    }
     sendError("DATABASE_RESPONSE_INVALID");
     return false;
   }
@@ -620,7 +656,13 @@ void reserveCart(const String &message) {
   if (!callRpc("machine_reserve_transaction_with_session", request, response, 12000)) return;
   Serial.printf("Checkout reservation completed in %lu ms.\n", millis() - reserveStartedAt);
   JsonObject result = response[0];
-  if (result.isNull()) { sendError("EMPTY_RESERVATION"); return; }
+  if (result.isNull()) {
+    recordSystemEvent("ERROR", "ESP32", "CHECKOUT_RESERVATION_FAILED",
+                      "Checkout reservation returned no transaction",
+                      "machine_reserve_transaction_with_session", 200);
+    sendError("EMPTY_RESERVATION");
+    return;
+  }
 
   String txId = result["transaction_id"].as<String>();
   String trNumber = result["tr_number"].as<String>();
@@ -813,6 +855,12 @@ void handleMegaMessage(String message) {
       }
     }
   }
+  else if (message == "CHECKOUT_TIMEOUT") {
+    recordSystemEvent(
+      "ERROR", "MEGA", "CHECKOUT_TIMEOUT",
+      "Mega cancelled checkout while waiting for reservation",
+      "machine_reserve_transaction_with_session", 408);
+  }
   else if (message == "GET_CATALOG") syncLiveCatalogToMega();
   else if (message == "STATUS?") sendWifiStatus();
   else if (message == "SOFT_RESET") softResetRuntime();
@@ -826,9 +874,12 @@ void handleMegaMessage(String message) {
 void softResetRuntime() {
   wifiConnected = false;
   lastHeartbeatAt = 0;
+  lastOnlineHeartbeatAt = 0;
   lastStatusUpdate = 0;
   lastWiFiCheck = 0;
   disconnectedSince = 0;
+  // Tell the Mega/TFT immediately; the reconnect attempt can take several seconds.
+  MEGA_SERIAL.println("WIFISTATE:CONNECTING");
   sendWifiStatus();
   wifiConnected = connectToWifi(10000);
   sendWifiStatus();

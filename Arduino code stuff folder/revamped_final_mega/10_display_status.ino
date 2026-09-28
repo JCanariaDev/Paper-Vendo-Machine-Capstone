@@ -8,10 +8,14 @@ void updateLCD() {
 }
 
 void showError(String m) {
+  if (m.startsWith("CHECKOUT_TIMEOUT")) {
+    m = "Checkout timed out";
+  }
   setMachineIndicator(INDICATOR_ERROR, true);
   tftUiShowError(m);
   if (orderInProgress) {
     orderInProgress = false;
+    checkoutStartedAt = 0;
     setCoinAcceptance(true);
     cartCount = 0;
     currentScreen = SCREEN_MAIN;

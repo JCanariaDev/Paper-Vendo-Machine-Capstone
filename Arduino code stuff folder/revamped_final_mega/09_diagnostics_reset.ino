@@ -81,6 +81,7 @@ void softResetMachineState() {
 
   isProcessing = false;
   orderInProgress = false;
+  checkoutStartedAt = 0;
   activeTransactionId = "";
   activeTrNumber = "";
   activeTransactionStatus = "";
@@ -99,7 +100,8 @@ void softResetMachineState() {
   refreshMachineAvailability(true);
   updateLCD();
   tftUiSetCredits();
-  redrawCurrentScreen();
+  // Show the reset/reconnect state immediately instead of leaving stale Wi-Fi text.
+  tftUiSetWifiStatus(WIFI_STATUS_CONNECTING);
   CLOUD_SERIAL.println("CREDIT:0");
   CLOUD_SERIAL.println("SOFT_RESET");
   CLOUD_SERIAL.println("STATUS?");

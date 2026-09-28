@@ -29,6 +29,7 @@ void startOrder() {
   activeChangeDueCents = 0;
   activeChangePaidCents = 0;
   currentScreen = SCREEN_SUMMARY;
+  checkoutStartedAt = millis();
   drawSummaryScreen();
 
   String encodedLines = "";
@@ -37,6 +38,20 @@ void startOrder() {
     encodedLines += cart[i].type + "," + String(cart[i].id) + "," + String(cart[i].qty);
   }
   CLOUD_SERIAL.println("RESERVE:" + String((unsigned long)credits * 100UL) + ":" + encodedLines);
+}
+
+void monitorCheckoutTimeout() {
+  // The summary screen is waiting for the ESP32 reservation response. If the
+  // gateway or database is unavailable, never leave the customer stranded.
+  if (!orderInProgress || currentScreen != SCREEN_SUMMARY ||
+      activeTransactionId.length() > 0 || checkoutStartedAt == 0) {
+    return;
+  }
+
+  if (millis() - checkoutStartedAt < CHECKOUT_RESERVATION_TIMEOUT_MS) return;
+
+  CLOUD_SERIAL.println("CHECKOUT_TIMEOUT");
+  showError("Checkout timed out");
 }
 
 void executeDispensePlan(String message) {
@@ -199,6 +214,7 @@ void finishUiAfterTransaction(String message) {
 
   credits = 0;
   orderInProgress = false;
+  checkoutStartedAt = 0;
   setCoinAcceptance(true);
   cartCount = 0;
   updateLCD();

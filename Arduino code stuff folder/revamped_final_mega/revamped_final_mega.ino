@@ -67,6 +67,7 @@ const int CHANGE_HOPPER_SENSOR_PIN = 23;
 const unsigned long CHANGE_COIN_TIMEOUT_MS  = 5000;
 const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
+const unsigned long CHECKOUT_RESERVATION_TIMEOUT_MS = 16000;
 // Paper Uno reports a confirmed result promptly; avoid a long dead wait if its
 // UART cable/controller is unavailable.
 // Must cover the Paper Uno's 20-second sensor/jam safety window. A normal
@@ -117,6 +118,7 @@ volatile uint16_t minimumBallpensPerTransaction = 1;
 volatile uint16_t maximumBallpensPerTransaction = 5;
 volatile bool coinPulseReceived = false;
 bool isProcessing = false;
+unsigned long checkoutStartedAt = 0;
 String activeTransactionId = "";
 String activeTrNumber = "";          // Human-readable TR Record Number (e.g. "TR-00001")
 String activeTransactionStatus = ""; // Final backend result shown on the receipt screen
@@ -203,6 +205,7 @@ void monitorControllerHealth();
 void executeDispensePlan(String message);
 void beginReservedTransaction(String message);
 void finishUiAfterTransaction(String message);
+void monitorCheckoutTimeout();
 
 // ================= CATALOG =================
 struct CatalogItem {
@@ -374,6 +377,7 @@ void loop() {
   }
 
   tftUiLoop();
+  monitorCheckoutTimeout();
 
   if (currentScreen == SCREEN_IDLE && wifiStatus == WIFI_STATUS_CONNECTING) {
     if (millis() - lastSpinnerUpdate > 200) {
