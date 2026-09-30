@@ -22,6 +22,7 @@ DROP TABLE IF EXISTS admins CASCADE;
 
 -- Drop all existing RPC functions so signature changes are applied cleanly
 DROP FUNCTION IF EXISTS machine_reserve_transaction(INTEGER, JSONB) CASCADE;
+DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB, INTEGER, BOOLEAN) CASCADE;
 DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB) CASCADE;
 DROP FUNCTION IF EXISTS machine_mark_change_paid(UUID, INTEGER) CASCADE;
@@ -634,8 +635,9 @@ BEGIN
 END;
 $$;
 
--- Checkout wrapper that reuses the open CREDIT_HELD TR while retaining the
--- existing reservation validation and inventory locking logic.
+-- Checkout wrapper that reuses the open CREDIT_HELD TR. A stale RESERVED
+-- transaction is closed before a new checkout so a failed/aborted customer
+-- session cannot bottleneck the next customer.
 CREATE OR REPLACE FUNCTION machine_reserve_transaction_with_session(p_credit_cents INTEGER, p_lines JSONB)
 RETURNS TABLE(transaction_id UUID, tr_number TEXT, subtotal_cents INTEGER, change_due_cents INTEGER, dispense_plan JSONB)
 LANGUAGE plpgsql AS $$
@@ -643,6 +645,7 @@ DECLARE
     v_session_id UUID;
     v_reserved RECORD;
     v_session_tr TEXT;
+    v_existing RECORD;
 BEGIN
     SELECT st.id, st.tr_number INTO v_session_id, v_session_tr
       FROM sales_transactions AS st
@@ -651,6 +654,54 @@ BEGIN
      ORDER BY st.created_at DESC
      LIMIT 1
      FOR UPDATE;
+
+    -- A previous controller reset or failed dispense can leave a RESERVED
+    -- transaction behind after the customer-facing flow has ended. Keep its
+    -- record for audit/refund handling, but release its stock reservations.
+    -- Only reservations older than the response watchdog are auto-closed.
+    SELECT st.id
+      INTO v_existing
+      FROM sales_transactions AS st
+     WHERE st.machine_id = 'paper-vendo-01'
+       AND st.status = 'RESERVED'
+       AND st.created_at < NOW() - INTERVAL '30 seconds'
+     ORDER BY st.created_at DESC
+     LIMIT 1
+     FOR UPDATE;
+
+    IF FOUND THEN
+        FOR v_reserved IN
+            SELECT stl.item_type, stl.qty_requested, stl.physical_channel
+              FROM sales_transaction_lines AS stl
+             WHERE stl.transaction_id = v_existing.id
+        LOOP
+            IF v_reserved.item_type = 'pen' THEN
+                UPDATE ballpen_compartments
+                   SET reserved_piece_stock = GREATEST(0, reserved_piece_stock - v_reserved.qty_requested),
+                       updated_at = NOW()
+                 WHERE dispenser_channel = (
+                     v_reserved.physical_channel
+                 );
+            END IF;
+        END LOOP;
+
+        UPDATE change_inventory AS ci
+           SET reserved_coin_count = GREATEST(
+                   0,
+                   ci.reserved_coin_count - COALESCE((coin->>'count')::INTEGER, 0)
+               ),
+               updated_at = NOW()
+          FROM jsonb_array_elements(
+              (SELECT st.change_plan FROM sales_transactions AS st WHERE st.id = v_existing.id)
+          ) AS coin
+         WHERE ci.hopper_channel = (coin->>'hopper_channel')::INTEGER;
+
+        UPDATE sales_transactions AS st
+           SET status = 'CANCELLED',
+               failure_reason = 'Previous checkout expired before dispensing; reservations released for next customer',
+               completed_at = NOW()
+         WHERE st.id = v_existing.id;
+    END IF;
 
     SELECT * INTO v_reserved
       FROM machine_reserve_transaction(p_credit_cents, p_lines);
@@ -828,7 +879,8 @@ $$;
 CREATE OR REPLACE FUNCTION machine_finish_transaction(
     p_transaction_id UUID, 
     p_results JSONB, 
-    p_change_paid_cents INTEGER DEFAULT 0
+    p_change_paid_cents INTEGER DEFAULT 0,
+    p_change_release_timed_out BOOLEAN DEFAULT FALSE
 )
 RETURNS TABLE(tr_number TEXT, final_status TEXT, change_due_cents INTEGER, change_paid_cents INTEGER)
 LANGUAGE plpgsql AS $$
@@ -894,7 +946,10 @@ BEGIN
          WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
     END LOOP;
 
-    IF v_any_success AND v_any_failure THEN
+    IF p_change_release_timed_out THEN
+        v_final_status := 'PARTIAL_SUCCESS';
+        v_reason := COALESCE(v_reason || '; ', '') || 'Change release exceeded the 30-second confirmation limit';
+    ELSIF v_any_success AND v_any_failure THEN
         v_final_status := 'PARTIAL_SUCCESS';
         v_reason := COALESCE(v_reason, 'Some products dispensed successfully while other products failed');
     ELSIF NOT v_all_success THEN
@@ -922,7 +977,8 @@ BEGIN
                   'change_due_cents', v_tx.change_due_cents,
                   'change_paid_cents', v_paid,
                   'unused_credits_cents', v_tx.change_due_cents - v_paid,
-                  'release_status', 'PENDING'
+                  'release_status', 'PENDING',
+                  'release_timed_out', p_change_release_timed_out
                 ));
     END IF;
      
@@ -1156,7 +1212,7 @@ GRANT EXECUTE ON FUNCTION machine_record_hardware_event(TEXT, TEXT, TEXT) TO ano
 GRANT EXECUTE ON FUNCTION machine_record_system_event(TEXT, TEXT, TEXT, TEXT, UUID, TEXT, JSONB) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION machine_record_failed_dispense_refund(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_cancel_reserved_transaction(UUID, TEXT) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION machine_finish_transaction(UUID, JSONB, INTEGER) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION machine_finish_transaction(UUID, JSONB, INTEGER, BOOLEAN) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) TO anon, authenticated;
 

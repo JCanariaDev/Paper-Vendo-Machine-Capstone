@@ -10,6 +10,7 @@ void handleReceiptTouch(int x, int y) {
     activeTransactionStatus = "";
     activeChangeDueCents = 0;
     activeChangePaidCents = 0;
+    setTransactionStage(TRANSACTION_IDLE);
     currentScreen = SCREEN_IDLE;
     drawIdleScreen();
   }

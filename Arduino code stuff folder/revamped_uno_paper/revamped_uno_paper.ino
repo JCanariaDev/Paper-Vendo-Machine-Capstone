@@ -17,7 +17,8 @@
     - Bay 2: STEP Pin D4,  DIR Pin D5
     - Common ENABLE Pin:   Pin D10 (Active LOW)
 
-  2x Paper Exit IR Sensors (INPUT_PULLUP: HIGH = beam clear, LOW = paper passing):
+  2x Paper Exit IR Sensors (INPUT_PULLUP wiring: HIGH = paper detected,
+      LOW = paper cleared):
     - Bay 1 Exit Sensor:   Pin D11
     - Bay 2 Exit Sensor:   Pin D12
 
@@ -44,7 +45,9 @@ const int ENABLE_PIN             = 10; // Common active LOW
 // One IR sensor is installed at the paper exit of each bay.
 // The sensor confirms that a sheet actually crossed the outlet.
 const int PAPER_EXIT_SENSOR_PINS[MOTOR_COUNT] = { 11, 12 };
-const int PAPER_EXIT_BLOCKED_LEVEL = LOW;
+// This sensor reports HIGH while paper blocks/detects the beam and LOW after
+// the paper clears the exit. The feed logic stops only after both events.
+const int PAPER_EXIT_BLOCKED_LEVEL = HIGH;
 const int PAPER_LEVEL_SENSOR_PINS[MOTOR_COUNT] = { 6, 7 };
 const int PAPER_LEVEL_HIGH_LEVEL = LOW;
 // The motor feeds continuously until the exit beam is interrupted and then

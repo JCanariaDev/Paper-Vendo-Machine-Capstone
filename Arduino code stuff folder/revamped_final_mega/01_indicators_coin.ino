@@ -41,8 +41,16 @@ void setCoinAcceptance(bool allowed) {
   coinAcceptorEnabled = allowed;
   bool relayChanged = digitalRead(COIN_INHIBIT_PIN) != targetLevel;
   digitalWrite(COIN_INHIBIT_PIN, targetLevel);
-  // Do not restart the settling delay after every counted pulse in a coin burst.
-  if (relayChanged) ignoreCoinPulsesUntil = millis() + 600;
+  // Do not suppress the first real coin after enabling the acceptor. The old
+  // settle delay caused the first pulse of a multi-pulse coin to be dropped,
+  // making a 5-peso coin look like 1 peso on the first insertion. Relay noise
+  // is handled by the pulse debounce in coinInterrupt().
+  if (relayChanged && allowed) {
+    // An old cutoff timer must not suppress the first coin after re-enabling.
+    ignoreCoinPulsesUntil = 0;
+  } else if (relayChanged && !allowed) {
+    ignoreCoinPulsesUntil = millis() + 600;
+  }
 }
 
 void coinInterrupt() {
@@ -56,10 +64,10 @@ void coinInterrupt() {
   if (now < ignoreCoinPulsesUntil) return;
 
   static unsigned long lastPulse = 0;
-  // 50ms debounce: filters electrical noise while still capturing all pulse bursts
+  // Short debounce: filters contact noise while capturing fast pulse bursts
   // from ?1 (1 pulse), ?5 (5 pulses), ?10 (10 pulses), ?20 (20 pulses)
   // Coin acceptors typically send pulses 50-80ms apart within a burst.
-  if (now - lastPulse > 50) {
+  if (now - lastPulse >= COIN_PULSE_DEBOUNCE_MS) {
     credits++;            // Count every pulse — including the remainder of a multi-peso coin
     coinPulseReceived = true;
     lastCoinBurstTime = now;  // Track when the last pulse arrived
@@ -73,4 +81,5 @@ void coinInterrupt() {
     }
   }
 }
+
 

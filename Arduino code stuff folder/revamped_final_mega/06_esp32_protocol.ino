@@ -28,8 +28,9 @@ void startOrder() {
   activeTransactionStatus = "";
   activeChangeDueCents = 0;
   activeChangePaidCents = 0;
+  changeReleaseTimedOut = false;
   currentScreen = SCREEN_SUMMARY;
-  checkoutStartedAt = millis();
+  setTransactionStage(TRANSACTION_RESERVING);
   drawSummaryScreen();
 
   String encodedLines = "";
@@ -40,22 +41,18 @@ void startOrder() {
   CLOUD_SERIAL.println("RESERVE:" + String((unsigned long)credits * 100UL) + ":" + encodedLines);
 }
 
-void monitorCheckoutTimeout() {
-  // The summary screen is waiting for the ESP32 reservation response. If the
-  // gateway or database is unavailable, never leave the customer stranded.
-  if (!orderInProgress || currentScreen != SCREEN_SUMMARY ||
-      activeTransactionId.length() > 0 || checkoutStartedAt == 0) {
+void executeDispensePlan(String message) {
+  if (!orderInProgress || transactionStage != TRANSACTION_RESERVING) {
+    Serial.println("Ignoring stale dispense plan received outside reservation stage.");
     return;
   }
 
-  if (millis() - checkoutStartedAt < CHECKOUT_RESERVATION_TIMEOUT_MS) return;
-
-  CLOUD_SERIAL.println("CHECKOUT_TIMEOUT");
-  showError("Checkout timed out");
-}
-
-void executeDispensePlan(String message) {
-  const unsigned long DISPENSE_PLAN_TIMEOUT_MS = 45000;
+  // A paper request can contain several sheets, and Paper Uno allows up to
+  // 20 seconds per sheet while waiting for the exit sensor. The old 45-second
+  // whole-plan limit could abort a valid multi-sheet order while the Uno was
+  // still dispensing. Keep a generous final safety limit, while each device
+  // still has its own shorter timeout and reports partial output accurately.
+  const unsigned long DISPENSE_PLAN_TIMEOUT_MS = 180000UL;
   const unsigned long planStartedAt = millis();
 
   // Format: PLAN:<tx_id>:<tr_number>:<subtotal_cents>:<change_due_cents>:<encodedPlan>
@@ -93,6 +90,7 @@ void executeDispensePlan(String message) {
   activeChangeDueCents = changeDueCents;
   activeChangePaidCents = 0;
   orderTotalCost = subtotalCents / 100.0;
+  setTransactionStage(TRANSACTION_DISPENSING);
 
   // Render Status Bar (displays TR Number on top-left)
   drawTftStatusBar();
@@ -152,22 +150,15 @@ void executeDispensePlan(String message) {
     start = end + 1;
   }
 
-  // -- STEP 2: RELEASE CHANGE ONLY AFTER A COMPLETE PHYSICAL DISPENSE --
-  // Failed or partial orders must not leave the customer waiting on a hopper
-  // timeout. Their remaining change is reported as owed for manual release.
+  // -- STEP 2: ALWAYS ATTEMPT CHANGE RELEASE AFTER PHYSICAL DISPENSING --
+  // A failed or partial item dispense must not trap the customer's remaining
+  // credits. The item result is still recorded as failed/partial, while the
+  // hopper gets a chance to release the change that remains due.
   if (millis() - planStartedAt >= DISPENSE_PLAN_TIMEOUT_MS) {
     Serial.println("Skipping change release after dispense plan timeout.");
     activeChangePaidCents = 0;
-  } else if (dispenseFailed && activeChangeDueCents > 0) {
-    Serial.println("Skipping automatic change release after failed/partial dispense; change remains owed.");
-    activeChangePaidCents = 0;
-    tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(COL_ORANGE);
-    printCentered("Finalizing...", tft.width() / 2, 130);
-    tft.setTextSize(1);
-    printCentered("Change will be shown on the receipt", tft.width() / 2, 165);
   } else if (activeChangeDueCents > 0) {
+    setTransactionStage(TRANSACTION_RELEASING_CHANGE);
     tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
     tft.setTextSize(2);
     tft.setTextColor(COL_WHITE);
@@ -179,7 +170,70 @@ void executeDispensePlan(String message) {
   }
 
   // -- STEP 3: NOTIFY ESP32 CLOUD GATEWAY --
-  CLOUD_SERIAL.println("FINISH:" + activeTransactionId + ":" + results + ":" + String(activeChangePaidCents));
+  CLOUD_SERIAL.println("FINISH:" + activeTransactionId + ":" + results + ":" +
+                       String(activeChangePaidCents) + ":" +
+                       String(changeReleaseTimedOut ? 1 : 0));
+
+  setTransactionStage(TRANSACTION_FINALIZING);
+
+  // The hopper is optional. If it is disconnected, do not leave the machine
+  // waiting for a FINISHED response forever after the 20-second hopper wait.
+  // The ESP32 can still retry the database finish in the background.
+  if (changeReleaseTimedOut) {
+    localFinishFallbackActive = true;
+    localFinishFallbackTransactionId = activeTransactionId;
+    credits = 0;
+    orderInProgress = false;
+    setCoinAcceptance(true);
+    cartCount = 0;
+    activeTransactionStatus = "PARTIAL_SUCCESS";
+    currentScreen = SCREEN_RECEIPT;
+    setTransactionStage(TRANSACTION_RECEIPT);
+    updateLCD();
+    refreshMachineAvailability(true);
+    drawReceiptScreen();
+    Serial.println("Hopper timeout: continuing locally; remaining change is recorded as owed.");
+  }
+}
+
+void setTransactionStage(TransactionStage stage) {
+  transactionStage = stage;
+  transactionStageStartedAt = millis();
+}
+
+void finalizeTransactionLocally(const String &reason) {
+  if (!orderInProgress) return;
+
+  localFinishFallbackActive = true;
+  localFinishFallbackTransactionId = activeTransactionId;
+  credits = 0;
+  orderInProgress = false;
+  setCoinAcceptance(true);
+  cartCount = 0;
+  activeTransactionStatus = "PARTIAL_SUCCESS";
+  currentScreen = SCREEN_RECEIPT;
+  setTransactionStage(TRANSACTION_RECEIPT);
+  updateLCD();
+  refreshMachineAvailability(true);
+  drawReceiptScreen();
+  Serial.println("Transaction watchdog finalized locally: " + reason);
+  CLOUD_SERIAL.println("STAGE_ERROR:FINALIZATION:" + reason);
+}
+
+void monitorTransactionWatchdog() {
+  if (!orderInProgress) return;
+  const unsigned long elapsed = millis() - transactionStageStartedAt;
+
+  if (transactionStage == TRANSACTION_RESERVING &&
+      elapsed >= CHECKOUT_RESPONSE_TIMEOUT_MS) {
+    Serial.println("Transaction watchdog: checkout response timed out.");
+    CLOUD_SERIAL.println("STAGE_ERROR:CHECKOUT:ESP32_OR_DATABASE_TIMEOUT");
+    showError("Checkout response timeout");
+    setTransactionStage(TRANSACTION_IDLE);
+  } else if (transactionStage == TRANSACTION_FINALIZING &&
+             elapsed >= FINALIZATION_STAGE_TIMEOUT_MS) {
+    finalizeTransactionLocally("ESP32_FINISH_ACK_TIMEOUT");
+  }
 }
 
 void beginReservedTransaction(String message) {
@@ -198,6 +252,16 @@ void finishUiAfterTransaction(String message) {
   int p4 = message.indexOf(':', p3 + 1);
   int p5 = message.indexOf(':', p4 + 1);
 
+  // A late backend response for a transaction already finalized locally after
+  // a hopper timeout must not overwrite the next customer's screen state.
+  if (p2 > 0) {
+    String finishedTransactionId = message.substring(p1 + 1, p2);
+    if (localFinishFallbackActive &&
+        finishedTransactionId == localFinishFallbackTransactionId) {
+      return;
+    }
+  }
+
   String trNum = activeTrNumber;
   String transactionStatus = "COMPLETED";
   int dueCents = activeChangeDueCents;
@@ -214,7 +278,6 @@ void finishUiAfterTransaction(String message) {
 
   credits = 0;
   orderInProgress = false;
-  checkoutStartedAt = 0;
   setCoinAcceptance(true);
   cartCount = 0;
   updateLCD();
@@ -224,6 +287,8 @@ void finishUiAfterTransaction(String message) {
   activeTransactionStatus = transactionStatus;
   activeChangeDueCents = dueCents;
   activeChangePaidCents = paidCents;
+  changeReleaseTimedOut = false;
+  setTransactionStage(TRANSACTION_RECEIPT);
 
   BALLPEN_SERIAL.println("BEEP:1000:300");
 
@@ -235,6 +300,14 @@ void finishUiAfterTransaction(String message) {
 
 void handleCloudCommand(String msg) {
   if (msg.startsWith("RESERVED:")) beginReservedTransaction(msg);
+  else if (msg == "RESERVE_RECEIVED") {
+    // The ESP32 has accepted the request. Restart the reservation watchdog
+    // from this acknowledgement so slow Wi-Fi is not mistaken for UART loss.
+    if (transactionStage == TRANSACTION_RESERVING) {
+      transactionStageStartedAt = millis();
+      Serial.println("ESP32 acknowledged reservation request.");
+    }
+  }
   else if (msg.startsWith("PLAN:")) executeDispensePlan(msg);
   else if (msg.startsWith("FINISHED:")) finishUiAfterTransaction(msg);
   else if (msg.startsWith("ERR:")) showError(msg.substring(4));
@@ -245,6 +318,7 @@ void handleCloudCommand(String msg) {
   // -------------------------------------------------------------
   else if (msg.startsWith("WIFI:")) {
     bool connected = msg.substring(5) == "1";
+    Serial.println(connected ? "ESP32 WiFi status: CONNECTED" : "ESP32 WiFi status: DISCONNECTED");
     tftUiSetWifiConnected(connected);
   }
   else if (msg == "WIFISTATE:CONNECTING") {

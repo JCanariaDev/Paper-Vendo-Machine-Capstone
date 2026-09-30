@@ -18,6 +18,7 @@ const int STEPS_PER_REVOLUTION = 2048;
 const int HALF_TURN_STEPS = STEPS_PER_REVOLUTION / 2;
 const int MOTOR_SPEED_RPM = 10;
 const int SENSOR_WAIT_MS = 3000;
+const int SENSOR_CLEAR_WAIT_MS = 1500;
 
 const int STEPPER_IN1_PIN = 3;
 const int STEPPER_IN2_PIN = 4;
@@ -96,17 +97,34 @@ bool waitForSensor() {
   return sensorDetected();
 }
 
+bool waitForSensorClear() {
+  const unsigned long startedAt = millis();
+  while (millis() - startedAt < SENSOR_CLEAR_WAIT_MS) {
+    if (readStopCommand()) return false;
+    if (!sensorDetected()) return true;
+    delay(5);
+  }
+  return !sensorDetected();
+}
+
 bool dispenseOnePen() {
-  if (sensorDetected()) return false;
+  // Do not start a new cycle while the previous pen is still blocking the
+  // sensor. This prevents the second item from being rejected immediately.
+  if (!waitForSensorClear()) return false;
   if (!moveInterruptible(HALF_TURN_STEPS)) return false;
 
   bool detected = waitForSensor();
   if (stopRequested) return false;
 
-  delay(100); // Let the pen clear the sensor, without delaying the next item.
-  bool returned = moveInterruptible(-HALF_TURN_STEPS);
+  // Confirm the pen has left the sensor before returning the mechanism to its
+  // starting position. The return uses the same forward direction so the pen
+  // is not pulled back into a crevice.
+  bool cleared = detected && waitForSensorClear();
+  if (stopRequested) return false;
+  delay(100);
+  bool returned = cleared && moveInterruptible(HALF_TURN_STEPS);
   disableMotor();
-  return detected && returned;
+  return detected && cleared && returned;
 }
 
 void dispensePens(int channel, int quantity) {

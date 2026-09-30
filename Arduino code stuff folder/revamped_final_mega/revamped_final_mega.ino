@@ -19,8 +19,8 @@
 // =============================================================
 //
 // -- DIGITAL I/O ----------------------------------------------
-//  D2   COIN_PIN            Coin acceptor pulse input (INPUT_PULLUP, INT0)
-//  D6   COIN_INHIBIT_PIN    Coin acceptor INHIBIT line (OUTPUT, active HIGH)
+//  D2   COIN_PIN            Coin acceptor pulse input (INPUT_PULLUP, INT4)
+//  D3   COIN_INHIBIT_PIN    Coin acceptor relay signal (OUTPUT, active HIGH)
 //  D14  BALLPEN_SERIAL TX3  -> Ballpen Uno RX (D0)
 //  D15  BALLPEN_SERIAL RX3  <- Ballpen Uno TX (D1)
 //  D16  TX2 (Serial2)       -> Arduino Uno RX (Pin D0) at 5V logic
@@ -45,10 +45,10 @@
 
 // --- PINS (existing) ---
 const int COIN_PIN = 2;
-const int COIN_INHIBIT_PIN = 6; // Pin D6: Drives Coin Acceptor Relay
+const int COIN_INHIBIT_PIN = 3; // Pin D3: Drives Coin Acceptor Relay
 // EXACT HARDWARE CALIBRATION:
-// Pin D6 HIGH -> Relay LED OFF -> 12V ON (Coin Acceptor Powered ON)
-// Pin D6 LOW  -> Relay LED ON  -> 12V CUT (Coin Acceptor Powered OFF / Rejects Coins)
+// Pin D3 HIGH -> Relay LED OFF -> 12V ON (Coin Acceptor Powered ON)
+// Pin D3 LOW  -> Relay LED ON  -> 12V CUT (Coin Acceptor Powered OFF / Rejects Coins)
 int coinRelayOnLevel  = HIGH;   // HIGH = Power ON
 int coinRelayOffLevel = LOW;    // LOW  = Power OFF (Cut at >= 30 credits)
 volatile uint16_t maximumCreditsAllowed = 30;
@@ -58,18 +58,18 @@ volatile bool coinAcceptorEnabled = true;         // Software gate for coin puls
 volatile bool pendingCoinAcceptorOff = false;     // Relay cut is queued, waiting for burst to finish
 volatile unsigned long lastCoinBurstTime = 0;     // Timestamp of most recent valid coin pulse
 const unsigned long COIN_BURST_SILENCE_MS = 350;  // Wait 350ms of silence before physically cutting relay
+const unsigned long COIN_PULSE_DEBOUNCE_MS = 15;  // Accept fast multi-pulse coin trains
 
 const int HW_RESET_BTN_PIN = A8;
 const int SW_RESET_BTN_PIN = A9;
 
 const int CHANGE_HOPPER_MOTOR_PIN  = 22;
 const int CHANGE_HOPPER_SENSOR_PIN = 23;
-const unsigned long CHANGE_COIN_TIMEOUT_MS  = 5000;
+// Stop waiting for hopper confirmation after 30 seconds. The transaction is
+// still finalized and marked partial if the full change was not verified.
+const unsigned long CHANGE_COIN_TIMEOUT_MS  = 20000;
 const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
-// Emergency fallback only. Normal checkout has time to survive a slow
-// Supabase wake-up without stranding the customer on the summary screen.
-const unsigned long CHECKOUT_RESERVATION_TIMEOUT_MS = 45000;
 // Paper Uno reports a confirmed result promptly; avoid a long dead wait if its
 // UART cable/controller is unavailable.
 // Must cover the Paper Uno's 20-second sensor/jam safety window. A normal
@@ -120,12 +120,33 @@ volatile uint16_t minimumBallpensPerTransaction = 1;
 volatile uint16_t maximumBallpensPerTransaction = 5;
 volatile bool coinPulseReceived = false;
 bool isProcessing = false;
-unsigned long checkoutStartedAt = 0;
 String activeTransactionId = "";
 String activeTrNumber = "";          // Human-readable TR Record Number (e.g. "TR-00001")
 String activeTransactionStatus = ""; // Final backend result shown on the receipt screen
 int activeChangeDueCents = 0;        // Total change owed to user
 int activeChangePaidCents = 0;       // Total change physically released by hopper
+bool changeReleaseTimedOut = false;
+bool localFinishFallbackActive = false;
+String localFinishFallbackTransactionId = "";
+
+enum TransactionStage {
+  TRANSACTION_IDLE,
+  TRANSACTION_RESERVING,
+  TRANSACTION_DISPENSING,
+  TRANSACTION_RELEASING_CHANGE,
+  TRANSACTION_FINALIZING,
+  TRANSACTION_RECEIPT
+};
+
+TransactionStage transactionStage = TRANSACTION_IDLE;
+unsigned long transactionStageStartedAt = 0;
+// The checkout response watchdog only prevents the TFT from waiting forever.
+// Inventory cleanup is handled by the database when an old failed checkout is
+// encountered; this is not a customer-facing inventory reservation timeout.
+const unsigned long CHECKOUT_RESPONSE_TIMEOUT_MS = 30000;
+const unsigned long FINALIZATION_STAGE_TIMEOUT_MS = 12000;
+unsigned long lastWifiStatusRequestAt = 0;
+const unsigned long WIFI_STATUS_REQUEST_INTERVAL_MS = 2000;
 String selectedPaperBrand = "Budget";
 
 // --- DIAGNOSTICS STATE ---
@@ -207,7 +228,9 @@ void monitorControllerHealth();
 void executeDispensePlan(String message);
 void beginReservedTransaction(String message);
 void finishUiAfterTransaction(String message);
-void monitorCheckoutTimeout();
+void setTransactionStage(TransactionStage stage);
+void monitorTransactionWatchdog();
+void finalizeTransactionLocally(const String &reason);
 
 // ================= CATALOG =================
 struct CatalogItem {
@@ -388,7 +411,6 @@ void loop() {
   }
 
   tftUiLoop();
-  monitorCheckoutTimeout();
 
   if (currentScreen == SCREEN_IDLE && wifiStatus == WIFI_STATUS_CONNECTING) {
     if (millis() - lastSpinnerUpdate > 200) {
@@ -446,6 +468,15 @@ void loop() {
     handleCloudCommand(msg);
   }
 
+  // Periodically request the ESP32 status so the TFT can recover if the
+  // ESP32's boot-time Wi-Fi message was sent before the Mega was listening.
+  if (millis() - lastWifiStatusRequestAt >= WIFI_STATUS_REQUEST_INTERVAL_MS) {
+    lastWifiStatusRequestAt = millis();
+    CLOUD_SERIAL.println("STATUS?");
+  }
+
+  monitorTransactionWatchdog();
+
   if (UNO_SERIAL.available()) {
     String msg = UNO_SERIAL.readStringUntil('\n');
     msg.trim();
@@ -469,11 +500,11 @@ void loop() {
     else if (cmd == "ESP_RESET") CLOUD_SERIAL.println("ESP_RESET");
     else if (cmd == "COIN ON" || cmd == "ACCEPTOR ON") {
       setCoinAcceptance(true);
-      Serial.print("MANUAL COIN ACCEPTOR: Power ON. Pin D6 level = ");
+      Serial.print("MANUAL COIN ACCEPTOR: Power ON. Pin D3 level = ");
       Serial.println(digitalRead(COIN_INHIBIT_PIN) == HIGH ? "HIGH (5V)" : "LOW (0V)");
     } else if (cmd == "COIN OFF" || cmd == "ACCEPTOR OFF") {
       setCoinAcceptance(false);
-      Serial.print("MANUAL COIN ACCEPTOR: Power OFF (Cut). Pin D6 level = ");
+      Serial.print("MANUAL COIN ACCEPTOR: Power OFF (Cut). Pin D3 level = ");
       Serial.println(digitalRead(COIN_INHIBIT_PIN) == HIGH ? "HIGH (5V)" : "LOW (0V)");
     } else if (cmd == "COIN INVERT") {
       int tmp = coinRelayOnLevel;
@@ -485,11 +516,11 @@ void loop() {
     } else if (cmd == "COIN 1") {
       ignoreCoinPulsesUntil = millis() + 600;
       digitalWrite(COIN_INHIBIT_PIN, HIGH);
-      Serial.println("DIRECT PIN D6 -> HIGH (5V)");
+      Serial.println("DIRECT PIN D3 -> HIGH (5V)");
     } else if (cmd == "COIN 0") {
       ignoreCoinPulsesUntil = millis() + 600;
       digitalWrite(COIN_INHIBIT_PIN, LOW);
-      Serial.println("DIRECT PIN D6 -> LOW (0V)");
+      Serial.println("DIRECT PIN D3 -> LOW (0V)");
     } else if (cmd == "HOPPER ON") {
       digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_ON);
       hopperManualRunning = true;

@@ -7,7 +7,7 @@ void runDiagnostics() {
   Serial.print("Uptime: "); Serial.print(millis() / 1000); Serial.println("s");
   Serial.print("TFT (ILI9341)............ "); Serial.println(diagTftOk ? "OK" : "FAIL");
   Serial.print("Touchscreen (XPT2046)..... "); Serial.println(diagTouchOk ? "OK" : "FAIL");
-  Serial.print("Coin acceptor pin (D2).... "); Serial.println("INPUT_PULLUP + interrupt INT0 configured");
+  Serial.print("Coin acceptor pin (D2).... "); Serial.println("INPUT_PULLUP + external interrupt INT4 configured");
   Serial.println("Serial2 (Pins 16/17) ---> Paper Uno connected at 9600 baud");
   Serial.println("Serial3 (Pins 14/15) ---> Ballpen Uno connected at 9600 baud");
 
@@ -22,6 +22,8 @@ void printHardwareStatus() {
   Serial.print("Order active: "); Serial.println(orderInProgress ? "YES" : "NO");
   Serial.print("Indicator: ");
   Serial.println(indicatorState == INDICATOR_READY ? "READY (green)" : indicatorState == INDICATOR_ACTIVE ? "ACTIVE (blue)" : "ERROR (red)");
+  Serial.print("Coin input D2: "); Serial.println(digitalRead(COIN_PIN) == LOW ? "LOW / pulse" : "HIGH / idle");
+  Serial.print("Coin relay D3: "); Serial.println(digitalRead(COIN_INHIBIT_PIN) == coinRelayOnLevel ? "ON" : "OFF");
   Serial.print("Hopper relay D22: "); Serial.println(digitalRead(CHANGE_HOPPER_MOTOR_PIN) == HOPPER_RELAY_ON ? "ON" : "OFF");
   Serial.print("Hopper sensor D23: "); Serial.println(digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW ? "LOW / blocked" : "HIGH / clear");
   Serial.print("Paper Uno: "); Serial.println(paperUnoResponsive ? "RESPONSIVE" : "NOT CONFIRMED");
@@ -81,12 +83,13 @@ void softResetMachineState() {
 
   isProcessing = false;
   orderInProgress = false;
-  checkoutStartedAt = 0;
   activeTransactionId = "";
   activeTrNumber = "";
   activeTransactionStatus = "";
   activeChangeDueCents = 0;
   activeChangePaidCents = 0;
+  setTransactionStage(TRANSACTION_IDLE);
+  changeReleaseTimedOut = false;
   selectedPaperBrand = "Budget";
   activeCatalogType = "paper";
   cartCount = 0;

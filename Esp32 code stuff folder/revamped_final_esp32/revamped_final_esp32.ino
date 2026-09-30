@@ -3,6 +3,7 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <Esp.h>
+#include <esp_system.h>
 #include <Preferences.h>
 
 // ==============================================================================
@@ -48,6 +49,7 @@ bool pendingFinish = false;
 String pendingFinishTransactionId;
 String pendingFinishResults;
 int pendingFinishChangePaidCents = 0;
+bool pendingFinishChangeTimedOut = false;
 unsigned long nextFinishRetryAt = 0;
 uint8_t finishRetryCount = 0;
 const unsigned long FINISH_RETRY_INTERVAL_MS = 3000;
@@ -84,6 +86,7 @@ bool acknowledgeRemoteNetworkConfig(const String &version);
 bool submitFinishTransaction(const String &transactionId,
                              const String &encodedResults,
                              int changePaidCents,
+                             bool changeTimedOut,
                              String &trNumber,
                              String &status,
                              int &dueCents,
@@ -458,12 +461,14 @@ bool callRpc(const char* functionName, JsonDocument &request,
   HTTPClient http;
   const String url = String(SUPABASE_URL) + "/rest/v1/rpc/" + functionName;
   if (!http.begin(client, url)) {
+    // Tell the Mega immediately. Logging is best-effort and must never keep
+    // the customer-facing transaction waiting for the reservation watchdog.
+    sendError("HTTPS_START_FAILED");
     if (String(functionName) == "machine_reserve_transaction_with_session") {
       recordSystemEvent("ERROR", "ESP32", "CHECKOUT_RESERVATION_FAILED",
                         "Checkout reservation could not start HTTPS request",
                         functionName, -1000);
     }
-    sendError("HTTPS_START_FAILED");
     return false;
   }
   // Reservation/finish requests are on the customer's critical path. Fail
@@ -492,13 +497,17 @@ bool callRpc(const char* functionName, JsonDocument &request,
     if (reason.length() > 90) reason = reason.substring(0, 90);
     const bool reservationFailure = String(functionName) == "machine_reserve_transaction_with_session";
     if (reservationFailure) {
+      // Forward the failure before attempting the diagnostic log. A slow or
+      // unavailable logging request must not look like a reservation hang.
+      if (reservationFailure && code <= 0) {
+        sendError("RESERVATION_NETWORK_ERROR");
+      } else {
+        sendError("DATABASE_REJECTED:" + reason);
+      }
       recordSystemEvent(
         "ERROR", "ESP32", "CHECKOUT_RESERVATION_FAILED",
         "Checkout reservation failed: " + reason,
         functionName, code);
-    }
-    if (reservationFailure && code <= 0) {
-      sendError("CHECKOUT_TIMEOUT");
     } else {
       sendError("DATABASE_REJECTED:" + reason);
     }
@@ -510,11 +519,14 @@ bool callRpc(const char* functionName, JsonDocument &request,
   }
   if (deserializeJson(response, payload)) {
     if (String(functionName) == "machine_reserve_transaction_with_session") {
+      // Send the usable error first; the diagnostic write can be slow.
+      sendError("DATABASE_RESPONSE_INVALID");
       recordSystemEvent("ERROR", "ESP32", "CHECKOUT_RESERVATION_FAILED",
                         "Checkout reservation returned invalid database data",
                         functionName, code);
+    } else {
+      sendError("DATABASE_RESPONSE_INVALID");
     }
-    sendError("DATABASE_RESPONSE_INVALID");
     return false;
   }
   return true;
@@ -636,6 +648,12 @@ void reserveCart(const String &message) {
   if (second < 0) { sendError("BAD_RESERVE_FORMAT"); return; }
   const int creditCents = message.substring(first + 1, second).toInt();
   const String encodedLines = message.substring(second + 1);
+
+  // This acknowledgement is deliberately sent before Wi-Fi/HTTPS work. It
+  // proves that the ESP32 received the request and lets the Mega distinguish
+  // a transport problem from a slow database reservation.
+  MEGA_SERIAL.println("RESERVE_RECEIVED");
+  Serial.println("Reservation request received from Mega.");
   DynamicJsonDocument request(2048);
   request["p_credit_cents"] = creditCents;
   JsonArray lines = request.createNestedArray("p_lines");
@@ -659,7 +677,9 @@ void reserveCart(const String &message) {
   }
   DynamicJsonDocument response(4096);
   const unsigned long reserveStartedAt = millis();
-  if (!callRpc("machine_reserve_transaction_with_session", request, response, 30000)) return;
+  // Keep the reservation request shorter than the Mega's reservation
+  // watchdog so a late PLAN cannot arrive after the Mega has reset the UI.
+  if (!callRpc("machine_reserve_transaction_with_session", request, response, 25000)) return;
   Serial.printf("Checkout reservation completed in %lu ms.\n", millis() - reserveStartedAt);
   JsonObject result = response[0];
   if (result.isNull()) {
@@ -715,6 +735,7 @@ void cancelReservation(const String &message) {
 bool submitFinishTransaction(const String &transactionId,
                              const String &encodedResults,
                              int changePaidCents,
+                             bool changeTimedOut,
                              String &trNumber,
                              String &status,
                              int &dueCents,
@@ -722,6 +743,7 @@ bool submitFinishTransaction(const String &transactionId,
   DynamicJsonDocument request(2048), response(1024);
   request["p_transaction_id"] = transactionId;
   request["p_change_paid_cents"] = changePaidCents;
+  request["p_change_release_timed_out"] = changeTimedOut;
   JsonArray results = request.createNestedArray("p_results");
 
   int start = 0;
@@ -785,6 +807,7 @@ void processPendingFinish() {
   if (submitFinishTransaction(pendingFinishTransactionId,
                               pendingFinishResults,
                               pendingFinishChangePaidCents,
+                              pendingFinishChangeTimedOut,
                               trNumber,
                               status,
                               dueCents,
@@ -815,18 +838,25 @@ void processPendingFinish() {
 }
 
 void finishTransaction(const String &message) {
-  // Format from Mega: FINISH:<tx_id>:<encodedResults>:<change_paid_cents>
+  // Format from Mega: FINISH:<tx_id>:<encodedResults>:<change_paid_cents>:<change_timeout>
   const int first = message.indexOf(':');
   const int second = message.indexOf(':', first + 1);
   if (second < 0) { sendError("BAD_FINISH_FORMAT"); return; }
   const String transactionId = message.substring(first + 1, second);
 
   int third = message.indexOf(':', second + 1);
+  int fourth = third < 0 ? -1 : message.indexOf(':', third + 1);
   String encodedResults;
   int changePaidCents = 0;
+  bool changeTimedOut = false;
   if (third > 0) {
     encodedResults = message.substring(second + 1, third);
-    changePaidCents = message.substring(third + 1).toInt();
+    if (fourth > 0) {
+      changePaidCents = message.substring(third + 1, fourth).toInt();
+      changeTimedOut = message.substring(fourth + 1).toInt() == 1;
+    } else {
+      changePaidCents = message.substring(third + 1).toInt();
+    }
   } else {
     encodedResults = message.substring(second + 1);
   }
@@ -835,6 +865,7 @@ void finishTransaction(const String &message) {
   pendingFinishTransactionId = transactionId;
   pendingFinishResults = encodedResults;
   pendingFinishChangePaidCents = changePaidCents;
+  pendingFinishChangeTimedOut = changeTimedOut;
   finishRetryCount = 0;
   nextFinishRetryAt = 0;
   processPendingFinish();
@@ -877,6 +908,18 @@ void handleMegaMessage(String message) {
   }
   else if (message.startsWith("FINISH:")) finishTransaction(message);
   else if (message.startsWith("BAY_EMPTY:")) updatePaperBayPresence(message);
+  else if (message.startsWith("STAGE_ERROR:")) {
+    const int first = message.indexOf(':');
+    const int second = message.indexOf(':', first + 1);
+    if (second > first) {
+      const String stage = message.substring(first + 1, second);
+      const String reason = message.substring(second + 1);
+      recordSystemEvent(
+        "ERROR", "MEGA", "TRANSACTION_STAGE_TIMEOUT",
+        "Transaction stage " + stage + " failed: " + reason,
+        "", 0);
+    }
+  }
   else if (message.startsWith("HARDWARE_EVENT:")) {
     const int first = message.indexOf(':');
     const int second = message.indexOf(':', first + 1);
@@ -887,12 +930,6 @@ void handleMegaMessage(String message) {
         Serial.println("Hardware event log pending: " + component + " " + state);
       }
     }
-  }
-  else if (message == "CHECKOUT_TIMEOUT") {
-    recordSystemEvent(
-      "ERROR", "MEGA", "CHECKOUT_TIMEOUT",
-      "Mega cancelled checkout while waiting for reservation",
-      "machine_reserve_transaction_with_session", 408);
   }
   else if (message.startsWith("MEGA_RESET_CAUSE:")) {
     const String cause = message.substring(17);
@@ -935,12 +972,23 @@ void setup() {
   delay(500);
   Serial.println("\n--- REVAMPED ESP32 CLOUD GATEWAY STARTING ---");
 
+  const esp_reset_reason_t resetReason = esp_reset_reason();
+  if (resetReason != ESP_RST_POWERON) {
+    Serial.printf("ESP32 reset reason code: %d\n", (int)resetReason);
+  }
+
   MEGA_SERIAL.begin(9600, SERIAL_8N1, MEGA_RX_PIN, MEGA_TX_PIN);
 
   loadSavedWifiCredentials();
   wifiConnected = connectUsingSavedFallbacks();
   sendWifiStatus();
   if (wifiConnected) {
+    if (resetReason != ESP_RST_POWERON) {
+      recordSystemEvent(
+        "ERROR", "ESP32", "ESP32_RESET",
+        "ESP32 restarted; reset reason code " + String((int)resetReason),
+        "", 0);
+    }
     fetchAndApplyRemoteNetworkConfig();
     sendOnlineHeartbeat();
     updateMachineStatus();

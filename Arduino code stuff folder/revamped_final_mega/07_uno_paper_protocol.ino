@@ -201,11 +201,13 @@ int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName)
         int second = response.indexOf(':', 6);
         int count = (second > 0) ? response.substring(second + 1).toInt() : 0;
         Serial.println("Paper Uno reported no confirmed sheet; stock was not cleared.");
+        CLOUD_SERIAL.println("STAGE_ERROR:DISPENSING:PAPER_NO_EXIT_CONFIRMATION");
         return count;
       }
     }
   }
   Serial.println("Paper Uno response timeout; no NEMA17 completion received.");
+  CLOUD_SERIAL.println("STAGE_ERROR:DISPENSING:PAPER_UNO_TIMEOUT");
   tftUiShowError("Paper Uno disconnected");
   return 0; // Timeout
 }

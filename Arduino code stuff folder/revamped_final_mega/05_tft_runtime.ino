@@ -2,6 +2,16 @@
 // Split from revamped_final_mega.ino for readability.
 
 void tftUiBegin() {
+  // Keep both SPI peripherals deselected before either library starts. This
+  // prevents the XPT2046 touch controller from driving the shared SPI bus
+  // during ILI9341 startup.
+  pinMode(TFT_CS, OUTPUT);
+  digitalWrite(TFT_CS, HIGH);
+  pinMode(TOUCH_CS, OUTPUT);
+  digitalWrite(TOUCH_CS, HIGH);
+  pinMode(TFT_DC, OUTPUT);
+  pinMode(TFT_RST, OUTPUT);
+
   tft.begin();
   tft.setRotation(2);
   diagTouchOk = ts.begin();
