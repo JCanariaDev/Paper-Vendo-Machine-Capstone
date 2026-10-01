@@ -29,6 +29,8 @@ void startOrder() {
   activeChangeDueCents = 0;
   activeChangePaidCents = 0;
   changeReleaseTimedOut = false;
+  activeDispenseHadSuccess = false;
+  activeDispenseHadFailure = false;
   currentScreen = SCREEN_SUMMARY;
   setTransactionStage(TRANSACTION_CHECKOUT);
   drawSummaryScreen();
@@ -108,10 +110,12 @@ void executeDispensePlan(String message) {
   // -- STEP 1: GUARANTEED PRODUCT-FIRST PHYSICAL DISPENSING --
   String results = "";
   bool dispenseFailed = false;
+  bool anyOutputDispensed = false;
   int start = 0;
   while (start < encodedPlan.length()) {
     if (millis() - planStartedAt >= DISPENSE_PLAN_TIMEOUT_MS) {
       Serial.println("Dispense plan timeout; submitting partial results.");
+      dispenseFailed = true;
       break;
     }
 
@@ -137,6 +141,7 @@ void executeDispensePlan(String message) {
     }
 
     if (actualOutput < expectedOutput) dispenseFailed = true;
+    if (actualOutput > 0) anyOutputDispensed = true;
 
     if (dispenseResultSummary.length()) dispenseResultSummary += "\n";
     String resultLabel = actualOutput >= expectedOutput ? "OK " : "FAILED ";
@@ -149,20 +154,23 @@ void executeDispensePlan(String message) {
     if (end < 0) break;
     start = end + 1;
   }
+  activeDispenseHadSuccess = anyOutputDispensed;
+  activeDispenseHadFailure = dispenseFailed;
 
-  // -- STEP 2: ALWAYS ATTEMPT CHANGE RELEASE AFTER PHYSICAL DISPENSING --
-  // A failed or partial item dispense must not trap the customer's remaining
-  // credits. The item result is still recorded as failed/partial, while the
-  // hopper gets a chance to release the change that remains due.
+  // -- STEP 2: HANDLE CHANGE AFTER PHYSICAL DISPENSING --
+  // If the hopper is not installed, skip its screen state and motor path.
+  // The unpaid amount is sent to the database as a change-owed record.
   if (millis() - planStartedAt >= DISPENSE_PLAN_TIMEOUT_MS) {
     Serial.println("Skipping change release after dispense plan timeout.");
     activeChangePaidCents = 0;
   } else if (activeChangeDueCents > 0) {
-    setTransactionStage(TRANSACTION_RELEASING_CHANGE);
-    tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(COL_WHITE);
-    printCentered("Releasing Change...", tft.width() / 2, 130);
+    if (CHANGE_HOPPER_ENABLED) {
+      setTransactionStage(TRANSACTION_RELEASING_CHANGE);
+      tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
+      tft.setTextSize(2);
+      tft.setTextColor(COL_WHITE);
+      printCentered("Releasing Change...", tft.width() / 2, 130);
+    }
     int verifiedChange = releaseVerifiedChange(activeChangeDueCents);
     activeChangePaidCents = max(0, verifiedChange);
   } else {
@@ -176,29 +184,23 @@ void executeDispensePlan(String message) {
 
   setTransactionStage(TRANSACTION_FINALIZING);
 
-  // The hopper is optional. If it is disconnected, do not leave the machine
-  // waiting for a FINISHED response forever after the 20-second hopper wait.
-  // The ESP32 can still retry the database finish in the background.
-  if (changeReleaseTimedOut) {
-    localFinishFallbackActive = true;
-    localFinishFallbackTransactionId = activeTransactionId;
-    credits = 0;
-    orderInProgress = false;
-    setCoinAcceptance(false);
-    cartCount = 0;
-    activeTransactionStatus = "PARTIAL_SUCCESS";
-    currentScreen = SCREEN_RECEIPT;
-    setTransactionStage(TRANSACTION_RECEIPT);
-    updateLCD();
-    refreshMachineAvailability(true);
-    drawReceiptScreen();
-    Serial.println("Hopper timeout: continuing locally; remaining change is recorded as owed.");
-  }
 }
 
 void setTransactionStage(TransactionStage stage) {
   transactionStage = stage;
   transactionStageStartedAt = millis();
+}
+
+void logLocalDispenseOutcome() {
+  if (activeDispenseHadFailure) {
+    activeTransactionStatus = activeDispenseHadSuccess
+      ? "PARTIAL_SUCCESS"
+      : "FAILED_DISPENSE";
+  } else {
+    activeTransactionStatus = changeReleaseTimedOut
+      ? "PARTIAL_SUCCESS"
+      : "COMPLETED";
+  }
 }
 
 void finalizeTransactionLocally(const String &reason) {
@@ -210,7 +212,7 @@ void finalizeTransactionLocally(const String &reason) {
   orderInProgress = false;
   setCoinAcceptance(false);
   cartCount = 0;
-  activeTransactionStatus = "PARTIAL_SUCCESS";
+  logLocalDispenseOutcome();
   currentScreen = SCREEN_RECEIPT;
   setTransactionStage(TRANSACTION_RECEIPT);
   updateLCD();
@@ -244,16 +246,16 @@ void finishUiAfterTransaction(String message) {
   int p4 = message.indexOf(':', p3 + 1);
   int p5 = message.indexOf(':', p4 + 1);
 
-  // A late backend response for a transaction already finalized locally after
-  // a hopper timeout must not overwrite the next customer's screen state.
+  // A late backend response may correct the temporary receipt, but must never
+  // overwrite the UI after the customer has moved on to another screen.
   if (p2 > 0) {
     String finishedTransactionId = message.substring(p1 + 1, p2);
     if (localFinishFallbackActive &&
         finishedTransactionId == localFinishFallbackTransactionId) {
-      // The UI already moved on locally, but the ESP32 must be allowed to
-      // drain its queued completion and process the next transaction.
-      CLOUD_SERIAL.println("FINISHED_ACK:" + finishedTransactionId);
-      return;
+      if (activeTransactionId != finishedTransactionId || currentScreen != SCREEN_RECEIPT) {
+        CLOUD_SERIAL.println("FINISHED_ACK:" + finishedTransactionId);
+        return;
+      }
     }
   }
 
@@ -283,6 +285,8 @@ void finishUiAfterTransaction(String message) {
   activeChangeDueCents = dueCents;
   activeChangePaidCents = paidCents;
   changeReleaseTimedOut = false;
+  localFinishFallbackActive = false;
+  localFinishFallbackTransactionId = "";
   setTransactionStage(TRANSACTION_RECEIPT);
 
   BALLPEN_SERIAL.println("BEEP:1000:300");

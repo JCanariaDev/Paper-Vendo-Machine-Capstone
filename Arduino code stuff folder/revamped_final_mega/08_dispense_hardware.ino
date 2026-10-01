@@ -71,6 +71,11 @@ int dispensePenFromUno(int channel, int quantity) {
 int releaseVerifiedChange(int changeCents) {
   changeReleaseTimedOut = false;
   if (changeCents <= 0) return 0;
+  if (!CHANGE_HOPPER_ENABLED) {
+    changeReleaseTimedOut = true;
+    Serial.println("Change hopper disabled; remaining change will be recorded as owed.");
+    return 0;
+  }
   if (digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW) {
     Serial.println("HOPPER WARNING: exit sensor is LOW at start.");
   }

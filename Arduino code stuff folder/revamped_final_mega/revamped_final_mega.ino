@@ -66,8 +66,9 @@ const int SW_RESET_BTN_PIN = A9;
 
 const int CHANGE_HOPPER_MOTOR_PIN  = 22;
 const int CHANGE_HOPPER_SENSOR_PIN = 23;
-// Stop waiting for hopper confirmation after 30 seconds. The transaction is
-// still finalized and marked partial if the full change was not verified.
+// The hopper is intentionally not installed. Keep it disabled so change
+// hardware cannot delay or block product dispensing/finalization.
+const bool CHANGE_HOPPER_ENABLED = false;
 const unsigned long CHANGE_COIN_TIMEOUT_MS  = 20000;
 const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
@@ -127,6 +128,8 @@ String activeTransactionStatus = ""; // Final backend result shown on the receip
 int activeChangeDueCents = 0;        // Total change owed to user
 int activeChangePaidCents = 0;       // Total change physically released by hopper
 bool changeReleaseTimedOut = false;
+bool activeDispenseHadSuccess = false;
+bool activeDispenseHadFailure = false;
 bool localFinishFallbackActive = false;
 String localFinishFallbackTransactionId = "";
 
@@ -535,15 +538,20 @@ void loop() {
       digitalWrite(COIN_INHIBIT_PIN, LOW);
       Serial.println("DIRECT PIN D3 -> LOW (0V)");
     } else if (cmd == "HOPPER ON") {
-      digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_ON);
-      hopperManualRunning = true;
-      hopperManualStartedAt = millis();
+      if (!CHANGE_HOPPER_ENABLED) {
+        Serial.println("Hopper is disabled in firmware.");
+      } else {
+        digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_ON);
+        hopperManualRunning = true;
+        hopperManualStartedAt = millis();
+      }
     } else if (cmd == "HOPPER OFF") {
       digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
       hopperManualRunning = false;
     } else if (cmd.startsWith("HOPPER ")) {
       int coins = cmd.substring(7).toInt();
-      if (coins > 0) releaseVerifiedChange(coins * 100);
+      if (!CHANGE_HOPPER_ENABLED) Serial.println("Hopper is disabled in firmware.");
+      else if (coins > 0) releaseVerifiedChange(coins * 100);
     }
   }
 }

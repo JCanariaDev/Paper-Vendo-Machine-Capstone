@@ -895,15 +895,18 @@ BEGIN
          WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
     END LOOP;
 
-    IF p_change_release_timed_out THEN
-        v_final_status := 'PARTIAL_SUCCESS';
-        v_reason := COALESCE(v_reason || '; ', '') || 'Change release exceeded the 20-second confirmation limit';
-    ELSIF v_any_success AND v_any_failure THEN
+    -- Product sensors determine dispense success. Hopper availability only
+    -- affects the separate change-owed audit; it must not turn a failed item
+    -- into a partial success or block the transaction.
+    IF v_any_success AND v_any_failure THEN
         v_final_status := 'PARTIAL_SUCCESS';
         v_reason := COALESCE(v_reason, 'Some products dispensed successfully while other products failed');
     ELSIF NOT v_all_success THEN
         v_final_status := 'FAILED_DISPENSE';
         v_reason := COALESCE(v_reason, 'Physical dispense sensor did not confirm all requested output');
+    ELSIF p_change_release_timed_out THEN
+        v_final_status := 'PARTIAL_SUCCESS';
+        v_reason := 'Items dispensed successfully; change hopper is disabled or unavailable, so remaining change is owed';
     ELSIF v_paid < v_tx.change_due_cents THEN
         v_final_status := 'COMPLETED_CHANGE_OWED';
         v_reason := 'Unreleased change of PHP ' || TO_CHAR((v_tx.change_due_cents - v_paid) / 100.0, 'FM999,990.00') || ' owed to student';

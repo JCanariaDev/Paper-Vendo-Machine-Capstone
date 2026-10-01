@@ -52,6 +52,9 @@ int pendingFinishChangePaidCents = 0;
 bool pendingFinishChangeTimedOut = false;
 unsigned long nextFinishRetryAt = 0;
 uint8_t finishRetryCount = 0;
+String lastRpcFailureReason = "";
+int lastRpcFailureCode = 0;
+String lastLoggedFinishFailureTransactionId = "";
 const unsigned long FINISH_RETRY_INTERVAL_MS = 3000;
 const uint8_t MAX_FINISH_RETRIES = 20;
 #define FINISH_QUEUE_CAPACITY 8
@@ -528,7 +531,11 @@ bool sendOnlineHeartbeat() {
 bool callRpc(const char* functionName, JsonDocument &request,
              DynamicJsonDocument &response, unsigned long timeoutMs,
              bool reportErrorToMega) {
+  lastRpcFailureReason = "";
+  lastRpcFailureCode = 0;
   if (!ensureWifi()) {
+    lastRpcFailureReason = "Wi-Fi is disconnected";
+    lastRpcFailureCode = -1001;
     if (reportErrorToMega) sendError("WIFI_OFFLINE");
     return false;
   }
@@ -539,6 +546,8 @@ bool callRpc(const char* functionName, JsonDocument &request,
   HTTPClient http;
   const String url = String(SUPABASE_URL) + "/rest/v1/rpc/" + functionName;
   if (!http.begin(client, url)) {
+    lastRpcFailureReason = "HTTPS request could not start";
+    lastRpcFailureCode = -1000;
     // Tell the Mega immediately. Logging is best-effort and must never keep
     // the customer-facing transaction waiting for a checkout watchdog.
     if (reportErrorToMega) sendError("HTTPS_START_FAILED");
@@ -571,6 +580,8 @@ bool callRpc(const char* functionName, JsonDocument &request,
         !errorDoc["message"].isNull()) {
       reason = errorDoc["message"].as<String>();
     }
+    lastRpcFailureReason = reason;
+    lastRpcFailureCode = code;
     reason.replace(':', '-');
     reason.replace('\n', ' ');
     if (reason.length() > 90) reason = reason.substring(0, 90);
@@ -596,6 +607,8 @@ bool callRpc(const char* functionName, JsonDocument &request,
     return true;
   }
   if (deserializeJson(response, payload)) {
+    lastRpcFailureReason = "Database returned invalid JSON";
+    lastRpcFailureCode = code;
     if (String(functionName) == "machine_checkout_transaction_with_session") {
       // Send the usable error first; the diagnostic write can be slow.
       if (reportErrorToMega) sendError("DATABASE_RESPONSE_INVALID");
@@ -833,7 +846,11 @@ bool submitFinishTransaction(const String &transactionId,
   if (!callRpc("machine_finish_transaction", request, response, 5000, false)) return false;
 
   JsonObject res = response[0];
-  if (res.isNull()) return false;
+  if (res.isNull()) {
+    lastRpcFailureReason = "Finish RPC returned no transaction result";
+    lastRpcFailureCode = 200;
+    return false;
+  }
   trNumber = res["tr_number"] | "TR-00000";
   status = res["final_status"] | "COMPLETED";
   dueCents = res["change_due_cents"] | 0;
@@ -867,6 +884,20 @@ void promoteQueuedFinish() {
   nextFinishRetryAt = 0;
 }
 
+void logPendingFinishFailureOnce() {
+  if (lastLoggedFinishFailureTransactionId == pendingFinishTransactionId) return;
+  String reason = lastRpcFailureReason.length()
+    ? lastRpcFailureReason
+    : "Finish RPC response could not be parsed";
+  reason.replace(':', '-');
+  reason.replace('\n', ' ');
+  queueSystemEvent("ERROR", "ESP32", "TRANSACTION_FINALIZATION_FAILED",
+                   "Could not finalize transaction " + pendingFinishTransactionId +
+                   "; retrying database save: " + reason,
+                   "machine_finish_transaction", lastRpcFailureCode);
+  lastLoggedFinishFailureTransactionId = pendingFinishTransactionId;
+}
+
 void processPendingFinish() {
   if (awaitingFinishAck) {
     if (millis() - lastFinishedSentAt < FINISH_ACK_RETRY_INTERVAL_MS) return;
@@ -889,6 +920,9 @@ void processPendingFinish() {
 
   finishRetryCount++;
   if (!ensureWifi()) {
+    lastRpcFailureReason = "Wi-Fi is disconnected";
+    lastRpcFailureCode = -1001;
+    logPendingFinishFailureOnce();
     nextFinishRetryAt = millis() + FINISH_RETRY_INTERVAL_MS;
     return;
   }
@@ -912,6 +946,7 @@ void processPendingFinish() {
                           trNumber + ":" + status + ":" +
                           String(dueCents) + ":" + String(paidCents);
     awaitingFinishTransactionId = pendingFinishTransactionId;
+    lastLoggedFinishFailureTransactionId = "";
     MEGA_SERIAL.println(lastFinishedMessage);
     lastFinishedSentAt = millis();
     finishAckAttempts = 1;
@@ -921,6 +956,8 @@ void processPendingFinish() {
     nextFinishRetryAt = 0;
     return;
   }
+
+  logPendingFinishFailureOnce();
 
   if (finishRetryCount == 1) sendError("FINISH_PENDING");
   if (finishRetryCount >= MAX_FINISH_RETRIES) {
