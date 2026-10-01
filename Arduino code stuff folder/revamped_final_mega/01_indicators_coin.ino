@@ -41,22 +41,24 @@ void setCoinAcceptance(bool allowed) {
   coinAcceptorEnabled = allowed;
   bool relayChanged = digitalRead(COIN_INHIBIT_PIN) != targetLevel;
   digitalWrite(COIN_INHIBIT_PIN, targetLevel);
-  // Do not suppress the first real coin after enabling the acceptor. The old
-  // settle delay caused the first pulse of a multi-pulse coin to be dropped,
-  // making a 5-peso coin look like 1 peso on the first insertion. Relay noise
-  // is handled by the pulse debounce in coinInterrupt().
   if (relayChanged && allowed) {
-    // An old cutoff timer must not suppress the first coin after re-enabling.
-    ignoreCoinPulsesUntil = 0;
+    // Ignore only the short relay-switch transient. The previous 600 ms filter
+    // was long enough to discard valid denomination pulses.
+    ignoreCoinPulsesUntil = millis() + 100;
   } else if (relayChanged && !allowed) {
     ignoreCoinPulsesUntil = millis() + 600;
+  }
+  if (!allowed) {
+    noInterrupts();
+    pendingCoinAcceptorOff = false;
+    interrupts();
   }
 }
 
 void coinInterrupt() {
-  if (orderInProgress) return;
-  // Hard software gate: If acceptor was cut off and not waiting for burst remainder, reject pulse!
-  if (!coinAcceptorEnabled && !pendingCoinAcceptorOff) return;
+  // The deferred cutoff leaves this enabled until the pulse burst settles, so
+  // there is no reason to accept pulses once the software gate is closed.
+  if (orderInProgress || !coinAcceptorEnabled) return;
 
   unsigned long now = millis();
   // Anti-glitch: Ignore power surge / relay transient noise on Pin D2
@@ -68,6 +70,10 @@ void coinInterrupt() {
   // from ?1 (1 pulse), ?5 (5 pulses), ?10 (10 pulses), ?20 (20 pulses)
   // Coin acceptors typically send pulses 50-80ms apart within a burst.
   if (now - lastPulse >= COIN_PULSE_DEBOUNCE_MS) {
+    if (lastPulse == 0 || now - lastPulse > COIN_BURST_SILENCE_MS) {
+      coinBurstPulseCount = 0;
+    }
+    coinBurstPulseCount++;
     credits++;            // Count every pulse — including the remainder of a multi-peso coin
     coinPulseReceived = true;
     lastCoinBurstTime = now;  // Track when the last pulse arrived

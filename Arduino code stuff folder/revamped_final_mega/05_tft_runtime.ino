@@ -23,7 +23,9 @@ void tftUiBegin() {
 
 void tftUiSetCredits() {
   bool hasCredits = credits >= minimumCreditsToStart;
-  if ((currentScreen == SCREEN_IDLE || currentScreen == SCREEN_RECEIPT) && hasCredits) {
+  // A receipt must remain on screen until the customer presses Confirm.
+  // Credit/status updates may refresh the balance, but must not dismiss it.
+  if (currentScreen == SCREEN_IDLE && hasCredits) {
     activeTrNumber = "";
     activeTransactionId = "";
     activeTransactionStatus = "";
@@ -44,6 +46,7 @@ void tftUiSetWifiStatus(int status) {
   bool changed = wifiStatus != status;
   wifiStatus = (WifiStatus)status;
   uiWifiConnected = (status == WIFI_STATUS_CONNECTED);
+  if (!changed) return;
   if (!orderInProgress) refreshMachineAvailability(changed);
   if (currentScreen == SCREEN_IDLE || currentScreen == SCREEN_MAIN) {
     redrawCurrentScreen();

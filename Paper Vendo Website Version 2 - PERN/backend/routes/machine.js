@@ -116,7 +116,6 @@ function flattenPenCompartment(row) {
     item_name: product.item_name || 'Unassigned',
     cost_per_unit: asMoney(product.cost_per_unit_cents),
     current_stock: asInt(row.current_piece_stock),
-    reserved_stock: asInt(row.reserved_piece_stock),
     max_capacity: asInt(row.max_piece_capacity, 100),
     dispenser_channel: row.dispenser_channel,
     physical_status: row.physical_status || 'Good',
@@ -156,6 +155,7 @@ function flattenTransactionLine(line) {
     refund_paid_cents: asInt(transaction.refund_paid_cents),
     failure_reason: transaction.failure_reason,
     transaction_date: transaction.created_at,
+    status_updated_at: transaction.status_updated_at || transaction.created_at,
     completed_at: transaction.completed_at,
     line_status: line.line_status,
     refund_paid: asMoney(transaction.refund_paid_cents)
@@ -189,7 +189,7 @@ async function getInventory(supabase) {
 async function getTransactionLines(supabase) {
   const { data, error } = await supabase
     .from('sales_transaction_lines')
-    .select('*, sales_transactions!inner(id, tr_number, status, credit_received_cents, subtotal_cents, change_due_cents, change_paid_cents, refund_paid_cents, failure_reason, created_at, completed_at)');
+    .select('*, sales_transactions!inner(id, tr_number, status, credit_received_cents, subtotal_cents, change_due_cents, change_paid_cents, refund_paid_cents, failure_reason, created_at, status_updated_at, completed_at)');
   if (error) throw error;
   const lines = (data || [])
     .map(flattenTransactionLine)
@@ -200,7 +200,7 @@ async function getTransactionLines(supabase) {
   // customer's unused credits after a power loss or controller reset.
   const { data: sessions, error: sessionError } = await supabase
     .from('sales_transactions')
-    .select('id, tr_number, status, credit_received_cents, subtotal_cents, change_due_cents, change_paid_cents, refund_paid_cents, failure_reason, created_at, completed_at')
+    .select('id, tr_number, status, credit_received_cents, subtotal_cents, change_due_cents, change_paid_cents, refund_paid_cents, failure_reason, created_at, status_updated_at, completed_at')
     .in('status', ['CREDIT_HELD', 'CANCELLED'])
     .eq('subtotal_cents', 0)
     .order('created_at', { ascending: false });

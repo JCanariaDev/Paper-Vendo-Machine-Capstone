@@ -83,6 +83,7 @@ void parsePenBay(String msg) {
   ballpenCatalog[idx].id    = prodId;
   ballpenCatalog[idx].price = priceCents / 100.0;
   ballpenCatalog[idx].isPaperPresent = (stock > 0); // available if stock > 0
+  ballpenCatalogStock[idx] = stock;
   name.toCharArray(ballpenCatalogNames[idx], 32);
   ballpenCatalog[idx].name = ballpenCatalogNames[idx];
 

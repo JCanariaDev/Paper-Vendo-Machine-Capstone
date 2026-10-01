@@ -39,9 +39,9 @@ const int MEGA_TX_PIN = 17;
 
 bool wifiConnected = false;
 unsigned long lastHeartbeatAt = 0;
-const unsigned long HEARTBEAT_INTERVAL_MS = 1000; // WIFI: status ping to Mega
+const unsigned long HEARTBEAT_INTERVAL_MS = 5000; // Fallback status ping; Mega also polls STATUS?
 unsigned long lastOnlineHeartbeatAt = 0;
-const unsigned long ONLINE_HEARTBEAT_INTERVAL_MS = 1000; // Supabase heartbeat
+const unsigned long ONLINE_HEARTBEAT_INTERVAL_MS = 10000; // Supabase heartbeat
 
 // A finish request must survive a temporary Wi-Fi/API failure.  Keep the
 // payload in RAM and retry it from loop() instead of leaving the Mega waiting.
@@ -54,8 +54,29 @@ unsigned long nextFinishRetryAt = 0;
 uint8_t finishRetryCount = 0;
 const unsigned long FINISH_RETRY_INTERVAL_MS = 3000;
 const uint8_t MAX_FINISH_RETRIES = 20;
+#define FINISH_QUEUE_CAPACITY 8
+struct QueuedFinish {
+  String transactionId;
+  String results;
+  int changePaidCents;
+  bool changeTimedOut;
+};
+QueuedFinish finishQueue[FINISH_QUEUE_CAPACITY];
+uint8_t finishQueueCount = 0;
+#define SYSTEM_EVENT_QUEUE_CAPACITY 4
+struct QueuedSystemEvent {
+  String level;
+  String source;
+  String eventType;
+  String message;
+  String rpcFunction;
+  int httpCode;
+};
+QueuedSystemEvent systemEventQueue[SYSTEM_EVENT_QUEUE_CAPACITY];
+uint8_t systemEventQueueCount = 0;
 bool awaitingFinishAck = false;
 String lastFinishedMessage;
+String awaitingFinishTransactionId;
 unsigned long lastFinishedSentAt = 0;
 uint8_t finishAckAttempts = 0;
 const unsigned long FINISH_ACK_RETRY_INTERVAL_MS = 500;
@@ -63,6 +84,10 @@ const uint8_t MAX_FINISH_ACK_ATTEMPTS = 10;
 int pendingCreditSessionCents = -1;
 unsigned long nextCreditSessionAttemptAt = 0;
 const unsigned long CREDIT_SESSION_RETRY_INTERVAL_MS = 3000;
+bool pendingCurrentCreditsStatus = false;
+String pendingCurrentCreditsValue;
+unsigned long nextCurrentCreditsStatusAttemptAt = 0;
+const unsigned long CURRENT_CREDITS_STATUS_RETRY_INTERVAL_MS = 5000;
 
 unsigned long lastStatusUpdate = 0;
 const unsigned long statusInterval = 60000; // machine_status table update
@@ -75,10 +100,16 @@ const unsigned long WIFI_STUCK_THRESHOLD = 20000;
 bool connectToWifi(unsigned long timeoutMs);
 bool printNearbyWifiNetworks();
 void updateMachineStatus();
-void updateStatusKey(const String &key, const String &value);
+bool updateStatusKey(const String &key, const String &value);
 bool callRpc(const char* functionName, JsonDocument &request,
-             DynamicJsonDocument &response, unsigned long timeoutMs = 5000);
+             DynamicJsonDocument &response, unsigned long timeoutMs = 5000,
+             bool reportErrorToMega = true);
 bool persistCreditSession(int creditCents);
+bool queueSystemEvent(const String &level, const String &source,
+                      const String &eventType, const String &message,
+                      const String &rpcFunction, int httpCode);
+void processPendingSystemEvent();
+void processPendingCurrentCreditsStatus();
 bool sendOnlineHeartbeat();
 void softResetRuntime();
 bool fetchAndApplyRemoteNetworkConfig();
@@ -92,6 +123,9 @@ bool submitFinishTransaction(const String &transactionId,
                              int &dueCents,
                              int &paidCents);
 void processPendingFinish();
+bool enqueueFinish(const String &transactionId, const String &results,
+                  int changePaidCents, bool changeTimedOut);
+void promoteQueuedFinish();
 void loadSavedWifiCredentials();
 void saveWifiCredentials(const String &ssid, const String &password,
                          const String &previousSsid, const String &previousPassword,
@@ -107,8 +141,7 @@ void sendWifiStatus() {
 }
 
 bool ensureWifi() {
-  wifiConnected = (WiFi.status() == WL_CONNECTED);
-  return wifiConnected;
+  return WiFi.status() == WL_CONNECTED;
 }
 
 bool connectToWifi(unsigned long timeoutMs) {
@@ -149,10 +182,14 @@ bool connectToWifi(unsigned long timeoutMs) {
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
     wifiConnected = true;
+    // Report immediately instead of waiting for the caller or the next
+    // heartbeat cycle. This keeps the Mega/TFT synchronized after Wi-Fi joins.
+    sendWifiStatus();
     return true;
   } else {
     Serial.println("\nWiFi connection timed out. Continuing offline.");
     wifiConnected = false;
+    sendWifiStatus();
     return false;
   }
 }
@@ -342,7 +379,7 @@ void updateMachineStatus() {
   updateStatusKey("wifi_signal", strength + " (" + String(rssi) + " dBm)");
 }
 
-void updateStatusKey(const String &key, const String &value) {
+bool updateStatusKey(const String &key, const String &value) {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
@@ -350,6 +387,7 @@ void updateStatusKey(const String &key, const String &value) {
   String url = String(SUPABASE_URL) + "/rest/v1/machine_status?on_conflict=status_key";
 
   if (http.begin(client, url)) {
+    http.setTimeout(2000);
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
     http.addHeader("Content-Type", "application/json");
@@ -360,15 +398,16 @@ void updateStatusKey(const String &key, const String &value) {
       Serial.printf("Status update failed for %s: %d\n", key.c_str(), code);
     }
     http.end();
+    return code >= 200 && code < 300;
   }
-
+  return false;
 }
 
 bool persistCreditSession(int creditCents) {
   if (!ensureWifi()) return false;
   DynamicJsonDocument request(256), response(512);
   request["p_credit_cents"] = creditCents;
-  if (!callRpc("machine_update_credit_session", request, response)) return false;
+  if (!callRpc("machine_update_credit_session", request, response, 3000, false)) return false;
   pendingCreditSessionCents = -1;
   return true;
 }
@@ -396,7 +435,35 @@ bool recordSystemEvent(const String &level, const String &source,
   JsonObject metadata = request.createNestedObject("p_metadata");
   metadata["rpc_function"] = rpcFunction;
   metadata["http_code"] = httpCode;
-  return callRpc("machine_record_system_event", request, response, 3000);
+  return callRpc("machine_record_system_event", request, response, 3000, false);
+}
+
+bool queueSystemEvent(const String &level, const String &source,
+                      const String &eventType, const String &message,
+                      const String &rpcFunction, int httpCode) {
+  if (systemEventQueueCount >= SYSTEM_EVENT_QUEUE_CAPACITY) {
+    Serial.println("System-event queue full; dropping diagnostic event.");
+    return false;
+  }
+  QueuedSystemEvent &event = systemEventQueue[systemEventQueueCount++];
+  event.level = level;
+  event.source = source;
+  event.eventType = eventType;
+  event.message = message;
+  event.rpcFunction = rpcFunction;
+  event.httpCode = httpCode;
+  return true;
+}
+
+void processPendingSystemEvent() {
+  if (systemEventQueueCount == 0 || !ensureWifi()) return;
+  QueuedSystemEvent &event = systemEventQueue[0];
+  if (!recordSystemEvent(event.level, event.source, event.eventType,
+                         event.message, event.rpcFunction, event.httpCode)) return;
+  for (uint8_t i = 1; i < systemEventQueueCount; i++) {
+    systemEventQueue[i - 1] = systemEventQueue[i];
+  }
+  systemEventQueueCount--;
 }
 
 void processPendingCreditSession() {
@@ -406,15 +473,25 @@ void processPendingCreditSession() {
   }
 }
 
+void processPendingCurrentCreditsStatus() {
+  if (!pendingCurrentCreditsStatus || millis() < nextCurrentCreditsStatusAttemptAt) return;
+  if (updateStatusKey("current_credits", pendingCurrentCreditsValue)) {
+    pendingCurrentCreditsStatus = false;
+    return;
+  }
+  nextCurrentCreditsStatusAttemptAt = millis() + CURRENT_CREDITS_STATUS_RETRY_INTERVAL_MS;
+}
+
 void handleCreditUpdate(String message) {
   int separator = message.indexOf(':');
   if (separator < 0) return;
   int credits = message.substring(separator + 1).toInt();
   if (credits < 0) return;
-  updateStatusKey("current_credits", String(credits));
+  pendingCurrentCreditsValue = String(credits);
+  pendingCurrentCreditsStatus = true;
+  nextCurrentCreditsStatusAttemptAt = 0;
   pendingCreditSessionCents = credits * 100;
   nextCreditSessionAttemptAt = 0;
-  persistCreditSession(pendingCreditSessionCents);
 }
 
 bool sendOnlineHeartbeat() {
@@ -429,8 +506,8 @@ bool sendOnlineHeartbeat() {
     return false;
   }
 
-  // Keep a failed heartbeat from blocking the main loop during a weak Wi-Fi connection.
-  http.setTimeout(3000);
+  // The heartbeat is periodic and recoverable; cap its network wait so UART work resumes.
+  http.setTimeout(1500);
 
   http.addHeader("apikey", SUPABASE_ANON_KEY);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
@@ -449,9 +526,10 @@ bool sendOnlineHeartbeat() {
 }
 
 bool callRpc(const char* functionName, JsonDocument &request,
-             DynamicJsonDocument &response, unsigned long timeoutMs) {
+             DynamicJsonDocument &response, unsigned long timeoutMs,
+             bool reportErrorToMega) {
   if (!ensureWifi()) {
-    sendError("WIFI_OFFLINE");
+    if (reportErrorToMega) sendError("WIFI_OFFLINE");
     return false;
   }
   String body;
@@ -462,18 +540,19 @@ bool callRpc(const char* functionName, JsonDocument &request,
   const String url = String(SUPABASE_URL) + "/rest/v1/rpc/" + functionName;
   if (!http.begin(client, url)) {
     // Tell the Mega immediately. Logging is best-effort and must never keep
-    // the customer-facing transaction waiting for the reservation watchdog.
-    sendError("HTTPS_START_FAILED");
-    if (String(functionName) == "machine_reserve_transaction_with_session") {
-      recordSystemEvent("ERROR", "ESP32", "CHECKOUT_RESERVATION_FAILED",
-                        "Checkout reservation could not start HTTPS request",
-                        functionName, -1000);
+    // the customer-facing transaction waiting for a checkout watchdog.
+    if (reportErrorToMega) sendError("HTTPS_START_FAILED");
+    if (String(functionName) == "machine_checkout_transaction_with_session") {
+      queueSystemEvent("ERROR", "ESP32", "CHECKOUT_FAILED",
+                       "Checkout could not start HTTPS request",
+                       functionName, -1000);
     }
     return false;
   }
-  // Reservation/finish requests are on the customer's critical path. Fail
+  // Checkout/finish requests are on the customer's critical path. Fail
   // promptly and use the existing retry flow instead of blocking for a long
   // network timeout.
+  http.setConnectTimeout(timeoutMs);
   http.setTimeout(timeoutMs);
   http.addHeader("apikey", SUPABASE_ANON_KEY);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
@@ -495,21 +574,20 @@ bool callRpc(const char* functionName, JsonDocument &request,
     reason.replace(':', '-');
     reason.replace('\n', ' ');
     if (reason.length() > 90) reason = reason.substring(0, 90);
-    const bool reservationFailure = String(functionName) == "machine_reserve_transaction_with_session";
-    if (reservationFailure) {
+    const bool checkoutFailure = String(functionName) == "machine_checkout_transaction_with_session";
+    if (checkoutFailure) {
       // Forward the failure before attempting the diagnostic log. A slow or
-      // unavailable logging request must not look like a reservation hang.
-      if (reservationFailure && code <= 0) {
-        sendError("RESERVATION_NETWORK_ERROR");
-      } else {
-        sendError("DATABASE_REJECTED:" + reason);
+      // unavailable logging request must not look like a checkout hang.
+      if (reportErrorToMega) {
+        if (code <= 0) sendError("CHECKOUT_NETWORK_ERROR");
+        else sendError("DATABASE_REJECTED:" + reason);
       }
-      recordSystemEvent(
-        "ERROR", "ESP32", "CHECKOUT_RESERVATION_FAILED",
-        "Checkout reservation failed: " + reason,
+      queueSystemEvent(
+        "ERROR", "ESP32", "CHECKOUT_FAILED",
+        "Checkout failed: " + reason,
         functionName, code);
     } else {
-      sendError("DATABASE_REJECTED:" + reason);
+      if (reportErrorToMega) sendError("DATABASE_REJECTED:" + reason);
     }
     return false;
   }
@@ -518,14 +596,14 @@ bool callRpc(const char* functionName, JsonDocument &request,
     return true;
   }
   if (deserializeJson(response, payload)) {
-    if (String(functionName) == "machine_reserve_transaction_with_session") {
+    if (String(functionName) == "machine_checkout_transaction_with_session") {
       // Send the usable error first; the diagnostic write can be slow.
-      sendError("DATABASE_RESPONSE_INVALID");
-      recordSystemEvent("ERROR", "ESP32", "CHECKOUT_RESERVATION_FAILED",
-                        "Checkout reservation returned invalid database data",
-                        functionName, code);
+      if (reportErrorToMega) sendError("DATABASE_RESPONSE_INVALID");
+      queueSystemEvent("ERROR", "ESP32", "CHECKOUT_FAILED",
+                       "Checkout returned invalid database data",
+                       functionName, code);
     } else {
-      sendError("DATABASE_RESPONSE_INVALID");
+      if (reportErrorToMega) sendError("DATABASE_RESPONSE_INVALID");
     }
     return false;
   }
@@ -642,18 +720,18 @@ bool parseCartLine(const String &encoded, JsonArray lines) {
   return true;
 }
 
-void reserveCart(const String &message) {
+void checkoutCart(const String &message) {
   const int first = message.indexOf(':');
   const int second = message.indexOf(':', first + 1);
-  if (second < 0) { sendError("BAD_RESERVE_FORMAT"); return; }
+  if (second < 0) { sendError("BAD_CHECKOUT_FORMAT"); return; }
   const int creditCents = message.substring(first + 1, second).toInt();
   const String encodedLines = message.substring(second + 1);
 
   // This acknowledgement is deliberately sent before Wi-Fi/HTTPS work. It
   // proves that the ESP32 received the request and lets the Mega distinguish
-  // a transport problem from a slow database reservation.
-  MEGA_SERIAL.println("RESERVE_RECEIVED");
-  Serial.println("Reservation request received from Mega.");
+  // a transport problem from a slow checkout request.
+  MEGA_SERIAL.println("CHECKOUT_RECEIVED");
+  Serial.println("Checkout request received from Mega.");
   DynamicJsonDocument request(2048);
   request["p_credit_cents"] = creditCents;
   JsonArray lines = request.createNestedArray("p_lines");
@@ -676,17 +754,17 @@ void reserveCart(const String &message) {
     start = end + 1;
   }
   DynamicJsonDocument response(4096);
-  const unsigned long reserveStartedAt = millis();
-  // Keep the reservation request shorter than the Mega's reservation
-  // watchdog so a late PLAN cannot arrive after the Mega has reset the UI.
-  if (!callRpc("machine_reserve_transaction_with_session", request, response, 25000)) return;
-  Serial.printf("Checkout reservation completed in %lu ms.\n", millis() - reserveStartedAt);
+  const unsigned long checkoutStartedAt = millis();
+  // Keep checkout bounded by the single communication watchdog. Inventory is
+  // validated at checkout but is not held in a reservation counter.
+  if (!callRpc("machine_checkout_transaction_with_session", request, response, 5000)) return;
+  Serial.printf("Checkout completed in %lu ms.\n", millis() - checkoutStartedAt);
   JsonObject result = response[0];
   if (result.isNull()) {
-    recordSystemEvent("ERROR", "ESP32", "CHECKOUT_RESERVATION_FAILED",
-                      "Checkout reservation returned no transaction",
-                      "machine_reserve_transaction_with_session", 200);
-    sendError("EMPTY_RESERVATION");
+    sendError("EMPTY_CHECKOUT");
+    queueSystemEvent("ERROR", "ESP32", "CHECKOUT_FAILED",
+                     "Checkout returned no transaction",
+                     "machine_checkout_transaction_with_session", 200);
     return;
   }
 
@@ -722,16 +800,6 @@ void changePaid(const String &message) {
   callRpc("machine_mark_change_paid", request, response);
 }
 
-void cancelReservation(const String &message) {
-  const int first = message.indexOf(':');
-  const int second = message.indexOf(':', first + 1);
-  if (second < 0) return;
-  DynamicJsonDocument request(512), response(512);
-  request["p_transaction_id"] = message.substring(first + 1, second);
-  request["p_reason"] = message.substring(second + 1);
-  callRpc("machine_cancel_reserved_transaction", request, response);
-}
-
 bool submitFinishTransaction(const String &transactionId,
                              const String &encodedResults,
                              int changePaidCents,
@@ -762,7 +830,7 @@ bool submitFinishTransaction(const String &transactionId,
     start = end + 1;
   }
 
-  if (!callRpc("machine_finish_transaction", request, response)) return false;
+  if (!callRpc("machine_finish_transaction", request, response, 5000, false)) return false;
 
   JsonObject res = response[0];
   if (res.isNull()) return false;
@@ -773,14 +841,41 @@ bool submitFinishTransaction(const String &transactionId,
   return true;
 }
 
+bool enqueueFinish(const String &transactionId, const String &results,
+                   int changePaidCents, bool changeTimedOut) {
+  if (finishQueueCount >= FINISH_QUEUE_CAPACITY) return false;
+  QueuedFinish &job = finishQueue[finishQueueCount++];
+  job.transactionId = transactionId;
+  job.results = results;
+  job.changePaidCents = changePaidCents;
+  job.changeTimedOut = changeTimedOut;
+  return true;
+}
+
+void promoteQueuedFinish() {
+  if (pendingFinish || finishQueueCount == 0) return;
+  pendingFinishTransactionId = finishQueue[0].transactionId;
+  pendingFinishResults = finishQueue[0].results;
+  pendingFinishChangePaidCents = finishQueue[0].changePaidCents;
+  pendingFinishChangeTimedOut = finishQueue[0].changeTimedOut;
+  for (uint8_t i = 1; i < finishQueueCount; i++) {
+    finishQueue[i - 1] = finishQueue[i];
+  }
+  finishQueueCount--;
+  pendingFinish = true;
+  finishRetryCount = 0;
+  nextFinishRetryAt = 0;
+}
+
 void processPendingFinish() {
   if (awaitingFinishAck) {
     if (millis() - lastFinishedSentAt < FINISH_ACK_RETRY_INTERVAL_MS) return;
     if (finishAckAttempts >= MAX_FINISH_ACK_ATTEMPTS) {
-      recordSystemEvent("ERROR", "ESP32", "FINISHED_DELIVERY_UNCONFIRMED",
-                        "Transaction finished in the database but Mega did not acknowledge the TFT completion message",
-                        "machine_finish_transaction", 0);
+      queueSystemEvent("ERROR", "ESP32", "FINISHED_DELIVERY_UNCONFIRMED",
+                       "Transaction finished in the database but Mega did not acknowledge the TFT completion message",
+                       "machine_finish_transaction", 0);
       awaitingFinishAck = false;
+      awaitingFinishTransactionId = "";
       return;
     }
     MEGA_SERIAL.println(lastFinishedMessage);
@@ -789,6 +884,7 @@ void processPendingFinish() {
     return;
   }
 
+  promoteQueuedFinish();
   if (!pendingFinish || millis() < nextFinishRetryAt) return;
 
   finishRetryCount++;
@@ -815,6 +911,7 @@ void processPendingFinish() {
     lastFinishedMessage = "FINISHED:" + pendingFinishTransactionId + ":" +
                           trNumber + ":" + status + ":" +
                           String(dueCents) + ":" + String(paidCents);
+    awaitingFinishTransactionId = pendingFinishTransactionId;
     MEGA_SERIAL.println(lastFinishedMessage);
     lastFinishedSentAt = millis();
     finishAckAttempts = 1;
@@ -828,9 +925,12 @@ void processPendingFinish() {
   if (finishRetryCount == 1) sendError("FINISH_PENDING");
   if (finishRetryCount >= MAX_FINISH_RETRIES) {
     sendError("FINISH_RETRY_FAILED");
-    pendingFinish = false;
+    queueSystemEvent("ERROR", "ESP32", "TRANSACTION_FINALIZATION_RETRYING",
+                     "Transaction completion is still pending after repeated database attempts",
+                     "machine_finish_transaction", 0);
+    Serial.println("Finish remains queued; retrying after a longer backoff.");
     finishRetryCount = 0;
-    nextFinishRetryAt = 0;
+    nextFinishRetryAt = millis() + 15000;
     return;
   }
 
@@ -861,13 +961,24 @@ void finishTransaction(const String &message) {
     encodedResults = message.substring(second + 1);
   }
 
-  pendingFinish = true;
-  pendingFinishTransactionId = transactionId;
-  pendingFinishResults = encodedResults;
-  pendingFinishChangePaidCents = changePaidCents;
-  pendingFinishChangeTimedOut = changeTimedOut;
-  finishRetryCount = 0;
-  nextFinishRetryAt = 0;
+  if (pendingFinish) {
+    if (!enqueueFinish(transactionId, encodedResults, changePaidCents, changeTimedOut)) {
+      sendError("FINISH_QUEUE_FULL");
+      queueSystemEvent("ERROR", "ESP32", "FINISH_QUEUE_FULL",
+                       "Could not queue transaction completion; finish queue is full",
+                       "machine_finish_transaction", 0);
+      return;
+    }
+    Serial.printf("Queued transaction completion. Queue depth: %u\n", finishQueueCount);
+  } else {
+    pendingFinish = true;
+    pendingFinishTransactionId = transactionId;
+    pendingFinishResults = encodedResults;
+    pendingFinishChangePaidCents = changePaidCents;
+    pendingFinishChangeTimedOut = changeTimedOut;
+    finishRetryCount = 0;
+    nextFinishRetryAt = 0;
+  }
   processPendingFinish();
 }
 
@@ -895,14 +1006,14 @@ void updatePaperBayPresence(const String &message) {
 void handleMegaMessage(String message) {
   message.trim();
   if (message.startsWith("CREDIT:")) handleCreditUpdate(message);
-  else if (message.startsWith("RESERVE:")) reserveCart(message);
+  else if (message.startsWith("CHECKOUT:")) checkoutCart(message);
   else if (message.startsWith("CHANGE_OK:")) changePaid(message);
-  else if (message.startsWith("CHANGE_FAIL:")) cancelReservation(message);
   else if (message.startsWith("FINISHED_ACK:")) {
     const String transactionId = message.substring(13);
-    if (awaitingFinishAck && transactionId == pendingFinishTransactionId) {
+    if (awaitingFinishAck && transactionId == awaitingFinishTransactionId) {
       awaitingFinishAck = false;
       lastFinishedMessage = "";
+      awaitingFinishTransactionId = "";
       finishAckAttempts = 0;
     }
   }
@@ -914,7 +1025,7 @@ void handleMegaMessage(String message) {
     if (second > first) {
       const String stage = message.substring(first + 1, second);
       const String reason = message.substring(second + 1);
-      recordSystemEvent(
+      queueSystemEvent(
         "ERROR", "MEGA", "TRANSACTION_STAGE_TIMEOUT",
         "Transaction stage " + stage + " failed: " + reason,
         "", 0);
@@ -933,7 +1044,7 @@ void handleMegaMessage(String message) {
   }
   else if (message.startsWith("MEGA_RESET_CAUSE:")) {
     const String cause = message.substring(17);
-    recordSystemEvent(
+    queueSystemEvent(
       "ERROR", "MEGA", "MEGA_RESET",
       "Mega restarted; reset cause code " + cause,
       "", 0);
@@ -1001,15 +1112,35 @@ void loop() {
     handleMegaMessage(MEGA_SERIAL.readStringUntil('\n'));
   }
 
-  ensureWifi();
+  // Detect connectivity edges here. ensureWifi() only queries the radio, so
+  // request handlers cannot overwrite this transition before it is reported.
+  const bool connectedNow = WiFi.status() == WL_CONNECTED;
+  if (connectedNow != wifiConnected) {
+    wifiConnected = connectedNow;
+    sendWifiStatus();
+    if (wifiConnected) {
+      disconnectedSince = 0;
+      fetchAndApplyRemoteNetworkConfig();
+    } else if (disconnectedSince == 0) {
+      disconnectedSince = millis();
+    }
+  }
 
-  processPendingCreditSession();
-  processPendingFinish();
-
+  // Always service the Mega status request before beginning another HTTP call.
   if (millis() - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatAt = millis();
     sendWifiStatus();
   }
+
+  // Run only one queued credit write per loop pass. The session RPC is the
+  // durable record; current_credits is a best-effort monitor display value.
+  if (pendingCreditSessionCents >= 0 && millis() >= nextCreditSessionAttemptAt) {
+    processPendingCreditSession();
+  } else {
+    processPendingCurrentCreditsStatus();
+  }
+  processPendingFinish();
+  processPendingSystemEvent();
 
   if (wifiConnected && millis() - lastOnlineHeartbeatAt >= ONLINE_HEARTBEAT_INTERVAL_MS) {
     lastOnlineHeartbeatAt = millis();
@@ -1025,12 +1156,6 @@ void loop() {
   if (millis() - lastWiFiCheck > WIFI_CHECK_INTERVAL) {
     lastWiFiCheck = millis();
     bool nowConnected = WiFi.status() == WL_CONNECTED;
-
-    if (nowConnected != wifiConnected) {
-      wifiConnected = nowConnected;
-      sendWifiStatus();
-      if (wifiConnected) fetchAndApplyRemoteNetworkConfig();
-    }
 
     if (!nowConnected) {
       if (disconnectedSince == 0) {

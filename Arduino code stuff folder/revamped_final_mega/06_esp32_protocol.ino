@@ -30,7 +30,7 @@ void startOrder() {
   activeChangePaidCents = 0;
   changeReleaseTimedOut = false;
   currentScreen = SCREEN_SUMMARY;
-  setTransactionStage(TRANSACTION_RESERVING);
+  setTransactionStage(TRANSACTION_CHECKOUT);
   drawSummaryScreen();
 
   String encodedLines = "";
@@ -38,12 +38,12 @@ void startOrder() {
     if (encodedLines.length()) encodedLines += ';';
     encodedLines += cart[i].type + "," + String(cart[i].id) + "," + String(cart[i].qty);
   }
-  CLOUD_SERIAL.println("RESERVE:" + String((unsigned long)credits * 100UL) + ":" + encodedLines);
+  CLOUD_SERIAL.println("CHECKOUT:" + String((unsigned long)credits * 100UL) + ":" + encodedLines);
 }
 
 void executeDispensePlan(String message) {
-  if (!orderInProgress || transactionStage != TRANSACTION_RESERVING) {
-    Serial.println("Ignoring stale dispense plan received outside reservation stage.");
+  if (!orderInProgress || transactionStage != TRANSACTION_CHECKOUT) {
+    Serial.println("Ignoring stale dispense plan received outside checkout stage.");
     return;
   }
 
@@ -184,7 +184,7 @@ void executeDispensePlan(String message) {
     localFinishFallbackTransactionId = activeTransactionId;
     credits = 0;
     orderInProgress = false;
-    setCoinAcceptance(true);
+    setCoinAcceptance(false);
     cartCount = 0;
     activeTransactionStatus = "PARTIAL_SUCCESS";
     currentScreen = SCREEN_RECEIPT;
@@ -208,7 +208,7 @@ void finalizeTransactionLocally(const String &reason) {
   localFinishFallbackTransactionId = activeTransactionId;
   credits = 0;
   orderInProgress = false;
-  setCoinAcceptance(true);
+  setCoinAcceptance(false);
   cartCount = 0;
   activeTransactionStatus = "PARTIAL_SUCCESS";
   currentScreen = SCREEN_RECEIPT;
@@ -224,24 +224,16 @@ void monitorTransactionWatchdog() {
   if (!orderInProgress) return;
   const unsigned long elapsed = millis() - transactionStageStartedAt;
 
-  if (transactionStage == TRANSACTION_RESERVING &&
+  if (transactionStage == TRANSACTION_CHECKOUT &&
       elapsed >= CHECKOUT_RESPONSE_TIMEOUT_MS) {
     Serial.println("Transaction watchdog: checkout response timed out.");
     CLOUD_SERIAL.println("STAGE_ERROR:CHECKOUT:ESP32_OR_DATABASE_TIMEOUT");
-    showError("Checkout response timeout");
+    showError("Checkout unavailable");
     setTransactionStage(TRANSACTION_IDLE);
   } else if (transactionStage == TRANSACTION_FINALIZING &&
              elapsed >= FINALIZATION_STAGE_TIMEOUT_MS) {
     finalizeTransactionLocally("ESP32_FINISH_ACK_TIMEOUT");
   }
-}
-
-void beginReservedTransaction(String message) {
-  // Legacy handler kept for compatibility
-  int first = message.indexOf(':');
-  int second = message.indexOf(':', first + 1);
-  if (first < 0 || second < 0) return;
-  activeTransactionId = message.substring(first + 1, second);
 }
 
 void finishUiAfterTransaction(String message) {
@@ -258,6 +250,9 @@ void finishUiAfterTransaction(String message) {
     String finishedTransactionId = message.substring(p1 + 1, p2);
     if (localFinishFallbackActive &&
         finishedTransactionId == localFinishFallbackTransactionId) {
+      // The UI already moved on locally, but the ESP32 must be allowed to
+      // drain its queued completion and process the next transaction.
+      CLOUD_SERIAL.println("FINISHED_ACK:" + finishedTransactionId);
       return;
     }
   }
@@ -278,7 +273,7 @@ void finishUiAfterTransaction(String message) {
 
   credits = 0;
   orderInProgress = false;
-  setCoinAcceptance(true);
+  setCoinAcceptance(false);
   cartCount = 0;
   updateLCD();
   refreshMachineAvailability(true);
@@ -299,18 +294,29 @@ void finishUiAfterTransaction(String message) {
 }
 
 void handleCloudCommand(String msg) {
-  if (msg.startsWith("RESERVED:")) beginReservedTransaction(msg);
-  else if (msg == "RESERVE_RECEIVED") {
-    // The ESP32 has accepted the request. Restart the reservation watchdog
-    // from this acknowledgement so slow Wi-Fi is not mistaken for UART loss.
-    if (transactionStage == TRANSACTION_RESERVING) {
+  if (msg == "CHECKOUT_RECEIVED") {
+    // The ESP32 has accepted the checkout request. Restart the single
+    // communication watchdog from this acknowledgement.
+    if (transactionStage == TRANSACTION_CHECKOUT) {
       transactionStageStartedAt = millis();
-      Serial.println("ESP32 acknowledged reservation request.");
+      Serial.println("ESP32 acknowledged checkout request.");
     }
   }
   else if (msg.startsWith("PLAN:")) executeDispensePlan(msg);
   else if (msg.startsWith("FINISHED:")) finishUiAfterTransaction(msg);
-  else if (msg.startsWith("ERR:")) showError(msg.substring(4));
+  else if (msg.startsWith("ERR:")) {
+    String error = msg.substring(4);
+    Serial.println("ESP32 error: " + error);
+    if (error == "FINISH_PENDING") {
+      // A finish retry is a background database-sync notice, not a checkout
+      // failure; do not cancel the active order or dismiss its receipt.
+      Serial.println("Transaction completion is queued for database retry.");
+    } else if (error == "FINISH_RETRY_FAILED" || error == "FINISH_QUEUE_FULL") {
+      tftUiShowError("Record sync pending");
+    } else {
+      showError(error);
+    }
+  }
   // -- Dynamic catalog sync from ESP32 --------------------------
   else if (msg.startsWith("PAPER_BAY:")) parsePaperBay(msg);
   else if (msg.startsWith("PEN_BAY:"))   parsePenBay(msg);

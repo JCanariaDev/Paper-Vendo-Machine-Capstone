@@ -57,6 +57,7 @@ volatile bool coinAcceptorEnabled = true;         // Software gate for coin puls
 // Option A: Delayed relay cutoff to capture all pulses from last inserted coin
 volatile bool pendingCoinAcceptorOff = false;     // Relay cut is queued, waiting for burst to finish
 volatile unsigned long lastCoinBurstTime = 0;     // Timestamp of most recent valid coin pulse
+volatile uint16_t coinBurstPulseCount = 0;        // Pulses received for the current denomination burst
 const unsigned long COIN_BURST_SILENCE_MS = 350;  // Wait 350ms of silence before physically cutting relay
 const unsigned long COIN_PULSE_DEBOUNCE_MS = 15;  // Accept fast multi-pulse coin trains
 
@@ -131,7 +132,7 @@ String localFinishFallbackTransactionId = "";
 
 enum TransactionStage {
   TRANSACTION_IDLE,
-  TRANSACTION_RESERVING,
+  TRANSACTION_CHECKOUT,
   TRANSACTION_DISPENSING,
   TRANSACTION_RELEASING_CHANGE,
   TRANSACTION_FINALIZING,
@@ -140,10 +141,9 @@ enum TransactionStage {
 
 TransactionStage transactionStage = TRANSACTION_IDLE;
 unsigned long transactionStageStartedAt = 0;
-// The checkout response watchdog only prevents the TFT from waiting forever.
-// Inventory cleanup is handled by the database when an old failed checkout is
-// encountered; this is not a customer-facing inventory reservation timeout.
-const unsigned long CHECKOUT_RESPONSE_TIMEOUT_MS = 30000;
+// One communication watchdog for the checkout response; it only prevents the
+// TFT from waiting forever when the ESP32/database does not respond.
+const unsigned long CHECKOUT_RESPONSE_TIMEOUT_MS = 12000;
 const unsigned long FINALIZATION_STAGE_TIMEOUT_MS = 12000;
 unsigned long lastWifiStatusRequestAt = 0;
 const unsigned long WIFI_STATUS_REQUEST_INTERVAL_MS = 2000;
@@ -226,11 +226,11 @@ void runDiagnostics();
 void printHardwareStatus();
 void monitorControllerHealth();
 void executeDispensePlan(String message);
-void beginReservedTransaction(String message);
 void finishUiAfterTransaction(String message);
 void setTransactionStage(TransactionStage stage);
 void monitorTransactionWatchdog();
 void finalizeTransactionLocally(const String &reason);
+void startSerialBallpenOrder(int quantity);
 
 // ================= CATALOG =================
 struct CatalogItem {
@@ -424,12 +424,13 @@ void loop() {
     hopperManualRunning = false;
   }
 
-  static uint16_t lastCredits = 65535;
+  static uint16_t lastCredits = 0;
   noInterrupts();
   uint16_t creditSnapshot = credits;
   bool pulseSnapshot = coinPulseReceived;
   bool pendingOff = pendingCoinAcceptorOff;
   unsigned long burstTime = lastCoinBurstTime;
+  uint16_t burstPulseCount = coinBurstPulseCount;
   coinPulseReceived = false;
   interrupts();
 
@@ -450,15 +451,23 @@ void loop() {
   }
 
   if (creditSnapshot != lastCredits) {
-    lastCredits = creditSnapshot;
-    updateLCD();
-    tftUiSetCredits();
-    CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)creditSnapshot));
-    Serial.println("Credits inserted! Total: P" + String((unsigned int)creditSnapshot));
+    // A denomination is represented by a pulse burst. Do not publish the
+    // partial total after the first pulse; wait until the burst is quiet.
+    const bool coinBurstSettled =
+      creditSnapshot == 0 || millis() - burstTime >= COIN_BURST_SILENCE_MS;
+    if (coinBurstSettled) {
+      lastCredits = creditSnapshot;
+      updateLCD();
+      tftUiSetCredits();
+      CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)creditSnapshot));
+      Serial.println("Credits inserted! Total: P" + String((unsigned int)creditSnapshot));
+      Serial.println("Coin burst complete: " + String(burstPulseCount) + " pulse(s), total P" + String((unsigned int)creditSnapshot));
 
-    // Re-enable coin acceptor after each credit update (no WiFi dependency)
-    if (creditSnapshot < maximumCreditsAllowed && !pendingOff && !orderInProgress && uiWifiConnected) {
-      setCoinAcceptance(true);
+      // Coin acceptance is local hardware state. Do not make it depend on a
+      // delayed ESP32 Wi-Fi status message; checkout can enforce Wi-Fi later.
+      if (creditSnapshot < maximumCreditsAllowed && !pendingOff && !orderInProgress) {
+        setCoinAcceptance(true);
+      }
     }
   }
 
@@ -494,7 +503,11 @@ void loop() {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
     cmd.toUpperCase();
-    if (cmd == "DIAG") runDiagnostics();
+    if (cmd == "HELP") {
+      Serial.println("Commands: PEN <quantity>, DIAG, STATUS, SOFT_RESET, ESP_RESET");
+    } else if (cmd.startsWith("PEN ")) {
+      startSerialBallpenOrder(cmd.substring(4).toInt());
+    } else if (cmd == "DIAG") runDiagnostics();
     else if (cmd == "STATUS") printHardwareStatus();
     else if (cmd == "SOFT_RESET") softResetMachineState();
     else if (cmd == "ESP_RESET") CLOUD_SERIAL.println("ESP_RESET");

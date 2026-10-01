@@ -158,7 +158,7 @@ function inferMachineState(machineStatus, latestTx, currentCredits = 0) {
   if (!latestTx) return currentCredits > 0 ? 'inserting_coins' : 'idle';
 
   const { status, created_at, transaction_date } = latestTx;
-  const ageSeconds = (Date.now() - new Date(created_at || transaction_date).getTime()) / 1000;
+  const ageSeconds = (Date.now() - new Date(latestTx.status_updated_at || created_at || transaction_date).getTime()) / 1000;
 
   if (
     ['COMPLETED', 'COMPLETED_CHANGE_OWED', 'PARTIAL_SUCCESS', 'CANCELLED', 'FAILED_DISPENSE', 'FAILED_CHANGE'].includes(status)
@@ -166,10 +166,7 @@ function inferMachineState(machineStatus, latestTx, currentCredits = 0) {
     if (ageSeconds > 30) return 'idle';
     return ['COMPLETED', 'COMPLETED_CHANGE_OWED', 'PARTIAL_SUCCESS'].includes(status) ? 'done' : 'failed';
   }
-  if (status === 'CHANGE_PAID') {
-    return ageSeconds > STALE_TRANSACTION_TIMEOUT_SECONDS ? 'stale' : 'dispensing_change';
-  }
-  if (status === 'RESERVED') {
+  if (status === 'IN_PROGRESS' || status === 'RESERVED') {
     if (ageSeconds > STALE_TRANSACTION_TIMEOUT_SECONDS) return 'stale';
     if (ageSeconds < 10) return 'inserting_coins';
     if (ageSeconds < 25) return 'choosing_item';
@@ -184,8 +181,8 @@ const TX_MAP = {
   COMPLETED:             { label: 'Completed',         color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
   COMPLETED_CHANGE_OWED: { label: 'Done (Change Owed)',color: 'bg-lime-500/10 text-lime-400 border-lime-500/20' },
   PARTIAL_SUCCESS:       { label: 'Partial Success',    color: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
+  IN_PROGRESS:           { label: 'In Progress',       color: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' },
   RESERVED:              { label: 'In Progress',       color: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' },
-  CHANGE_PAID:           { label: 'Change Released',   color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' },
   CANCELLED:             { label: 'Cancelled',         color: 'bg-slate-500/10 text-slate-400 border-slate-500/20' },
   FAILED_DISPENSE:       { label: 'Failed — Dispense', color: 'bg-red-500/10 text-red-400 border-red-500/20' },
   FAILED_CHANGE:         { label: 'Failed — Change',   color: 'bg-orange-500/10 text-orange-400 border-orange-500/20' },
@@ -202,7 +199,8 @@ function groupTransactionLines(lines) {
       grouped.set(transactionId, {
         ...line,
         id: transactionId,
-        created_at: line.transaction_date || line.created_at,
+        created_at: line.status_updated_at || line.transaction_date || line.created_at,
+        status_updated_at: line.status_updated_at,
         items: [],
       });
     }
@@ -330,7 +328,7 @@ export default function MachineMonitor() {
     ? Number(latestTx.change_due || 0).toFixed(2)
     : ((latestTx?.change_due_cents || 0) / 100).toFixed(2);
   const transactionOngoing = currentCredits > 0 || (latestTx &&
-    ['RESERVED', 'CHANGE_PAID'].includes(latestTx.status) &&
+    ['IN_PROGRESS', 'RESERVED'].includes(latestTx.status) &&
     stateId !== 'stale');
   const isDispensing = transactionOngoing && ['dispensing_items', 'dispensing_change'].includes(stateId);
   const transactionStatusMeta = stateId === 'stale'
