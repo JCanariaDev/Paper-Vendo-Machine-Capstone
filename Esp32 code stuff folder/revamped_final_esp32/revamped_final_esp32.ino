@@ -66,7 +66,7 @@ struct QueuedFinish {
 };
 QueuedFinish finishQueue[FINISH_QUEUE_CAPACITY];
 uint8_t finishQueueCount = 0;
-#define SYSTEM_EVENT_QUEUE_CAPACITY 4
+#define SYSTEM_EVENT_QUEUE_CAPACITY 16
 struct QueuedSystemEvent {
   String level;
   String source;
@@ -91,6 +91,27 @@ bool pendingCurrentCreditsStatus = false;
 String pendingCurrentCreditsValue;
 unsigned long nextCurrentCreditsStatusAttemptAt = 0;
 const unsigned long CURRENT_CREDITS_STATUS_RETRY_INTERVAL_MS = 5000;
+bool megaTransactionActive = false;
+bool customerCreditSessionActive = false;
+bool pendingCatalogSync = false;
+bool pendingMachineStatusSync = false;
+bool pendingRemoteNetworkConfigCheck = false;
+bool pendingPaperBayEmpty[2] = { false, false };
+unsigned long nextPaperBayUpdateAt = 0;
+unsigned long nextSystemEventAttemptAt = 0;
+unsigned long nextQueuedEventAttemptAt = 0;
+unsigned long lastCustomerActivityAt = 0;
+const unsigned long NETWORK_CONFIG_IDLE_GRACE_MS = 30000;
+const unsigned long QUEUED_EVENT_RETRY_INTERVAL_MS = 3000;
+
+#define HARDWARE_EVENT_QUEUE_CAPACITY 8
+struct QueuedHardwareEvent {
+  String component;
+  String state;
+};
+QueuedHardwareEvent hardwareEventQueue[HARDWARE_EVENT_QUEUE_CAPACITY];
+uint8_t hardwareEventQueueCount = 0;
+unsigned long nextHardwareEventAttemptAt = 0;
 
 unsigned long lastStatusUpdate = 0;
 const unsigned long statusInterval = 60000; // machine_status table update
@@ -111,6 +132,9 @@ bool persistCreditSession(int creditCents);
 bool queueSystemEvent(const String &level, const String &source,
                       const String &eventType, const String &message,
                       const String &rpcFunction, int httpCode);
+bool queueHardwareEvent(const String &component, const String &state);
+void processPendingHardwareEvent();
+void processPendingPaperBayUpdate();
 void processPendingSystemEvent();
 void processPendingCurrentCreditsStatus();
 bool sendOnlineHeartbeat();
@@ -275,7 +299,8 @@ bool acknowledgeRemoteNetworkConfig(const String &version) {
   client.setInsecure();
   HTTPClient http;
   if (!http.begin(client, String(NETWORK_CONFIG_URL) + "/ack")) return false;
-  http.setTimeout(10000);
+  http.setConnectTimeout(1500);
+  http.setTimeout(2500);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", NETWORK_CONFIG_TOKEN);
   DynamicJsonDocument request(256);
@@ -302,7 +327,8 @@ bool fetchAndApplyRemoteNetworkConfig() {
     Serial.println("Remote WiFi config request could not start.");
     return false;
   }
-  http.setTimeout(10000);
+  http.setConnectTimeout(1500);
+  http.setTimeout(2500);
   http.addHeader("X-Device-Token", NETWORK_CONFIG_TOKEN);
   const int code = http.GET();
   const String payload = http.getString();
@@ -390,6 +416,7 @@ bool updateStatusKey(const String &key, const String &value) {
   String url = String(SUPABASE_URL) + "/rest/v1/machine_status?on_conflict=status_key";
 
   if (http.begin(client, url)) {
+    http.setConnectTimeout(1000);
     http.setTimeout(2000);
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
@@ -410,7 +437,7 @@ bool persistCreditSession(int creditCents) {
   if (!ensureWifi()) return false;
   DynamicJsonDocument request(256), response(512);
   request["p_credit_cents"] = creditCents;
-  if (!callRpc("machine_update_credit_session", request, response, 3000, false)) return false;
+  if (!callRpc("machine_update_credit_session", request, response, 1500, false)) return false;
   pendingCreditSessionCents = -1;
   return true;
 }
@@ -423,7 +450,7 @@ bool recordHardwareEvent(const String &component, const String &state) {
   request["p_message"] = component + (state == "DISCONNECTED"
     ? " is disconnected"
     : " reconnected");
-  return callRpc("machine_record_hardware_event", request, response);
+  return callRpc("machine_record_hardware_event", request, response, 1500, false);
 }
 
 bool recordSystemEvent(const String &level, const String &source,
@@ -438,15 +465,36 @@ bool recordSystemEvent(const String &level, const String &source,
   JsonObject metadata = request.createNestedObject("p_metadata");
   metadata["rpc_function"] = rpcFunction;
   metadata["http_code"] = httpCode;
-  return callRpc("machine_record_system_event", request, response, 3000, false);
+  if (eventType == "MEGA_TRACE") metadata["trace_payload"] = message;
+  return callRpc("machine_record_system_event", request, response, 1500, false);
+}
+
+bool isProtectedSystemEvent(const QueuedSystemEvent &event) {
+  return event.eventType == "MEGA_TRACE" || event.level == "ERROR" ||
+         event.eventType == "CHECKOUT_FAILED" ||
+         event.eventType == "CHECKOUT_WATCHDOG_TIMEOUT" ||
+         event.eventType == "ESP32_RESET" || event.eventType == "MEGA_RESET";
 }
 
 bool queueSystemEvent(const String &level, const String &source,
                       const String &eventType, const String &message,
                       const String &rpcFunction, int httpCode) {
   if (systemEventQueueCount >= SYSTEM_EVENT_QUEUE_CAPACITY) {
-    Serial.println("System-event queue full; dropping diagnostic event.");
-    return false;
+    int discardIndex = -1;
+    for (uint8_t i = 0; i < systemEventQueueCount; i++) {
+      if (!isProtectedSystemEvent(systemEventQueue[i])) {
+        discardIndex = i;
+        break;
+      }
+    }
+    if (discardIndex < 0) {
+      Serial.println("System-event queue full of critical events; diagnostic dropped.");
+      return false;
+    }
+    for (uint8_t i = discardIndex + 1; i < systemEventQueueCount; i++)
+      systemEventQueue[i - 1] = systemEventQueue[i];
+    systemEventQueueCount--;
+    Serial.println("System-event queue full; discarded noncritical event for diagnostic.");
   }
   QueuedSystemEvent &event = systemEventQueue[systemEventQueueCount++];
   event.level = level;
@@ -458,15 +506,85 @@ bool queueSystemEvent(const String &level, const String &source,
   return true;
 }
 
+bool queueHardwareEvent(const String &component, const String &state) {
+  for (uint8_t i = 0; i < hardwareEventQueueCount; i++) {
+    if (hardwareEventQueue[i].component == component &&
+        hardwareEventQueue[i].state == state) return true;
+  }
+  if (hardwareEventQueueCount >= HARDWARE_EVENT_QUEUE_CAPACITY) {
+    Serial.println("Hardware-event queue full; dropping hardware diagnostic.");
+    return false;
+  }
+  QueuedHardwareEvent &event = hardwareEventQueue[hardwareEventQueueCount++];
+  event.component = component;
+  event.state = state;
+  return true;
+}
+
+void processPendingHardwareEvent() {
+  if (hardwareEventQueueCount == 0 || !ensureWifi() ||
+      millis() < nextHardwareEventAttemptAt) return;
+  QueuedHardwareEvent &event = hardwareEventQueue[0];
+  if (!recordHardwareEvent(event.component, event.state)) {
+    nextHardwareEventAttemptAt = millis() + 3000;
+    return;
+  }
+  for (uint8_t i = 1; i < hardwareEventQueueCount; i++) {
+    hardwareEventQueue[i - 1] = hardwareEventQueue[i];
+  }
+  hardwareEventQueueCount--;
+  nextHardwareEventAttemptAt = 0;
+}
+
+void processPendingPaperBayUpdate() {
+  if (millis() < nextPaperBayUpdateAt || !ensureWifi()) return;
+  for (uint8_t i = 0; i < 2; i++) {
+    if (!pendingPaperBayEmpty[i]) continue;
+
+    const int bayNum = i + 1;
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    const String url = String(SUPABASE_URL) +
+      "/rest/v1/paper_compartments?compartment_number=eq." + String(bayNum);
+    bool updated = false;
+    if (http.begin(client, url)) {
+      http.setConnectTimeout(1000);
+      http.setTimeout(1500);
+      http.addHeader("apikey", SUPABASE_ANON_KEY);
+      http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+      http.addHeader("Content-Type", "application/json");
+      const String body = "{\"presence_status\":\"LOW\",\"current_pad_stock\":0,\"updated_at\":\"now()\"}";
+      const int code = http.PATCH(body);
+      updated = code >= 200 && code < 300;
+      http.end();
+    }
+
+    if (updated) {
+      pendingPaperBayEmpty[i] = false;
+      nextPaperBayUpdateAt = 0;
+    } else {
+      nextPaperBayUpdateAt = millis() + QUEUED_EVENT_RETRY_INTERVAL_MS;
+    }
+    return;
+  }
+}
+
 void processPendingSystemEvent() {
-  if (systemEventQueueCount == 0 || !ensureWifi()) return;
+  if (systemEventQueueCount == 0 || !ensureWifi() ||
+      millis() < nextSystemEventAttemptAt) return;
   QueuedSystemEvent &event = systemEventQueue[0];
   if (!recordSystemEvent(event.level, event.source, event.eventType,
-                         event.message, event.rpcFunction, event.httpCode)) return;
+                         event.message, event.rpcFunction, event.httpCode)) {
+    nextSystemEventAttemptAt = millis() + QUEUED_EVENT_RETRY_INTERVAL_MS;
+    return;
+  }
+  Serial.println("Machine log persisted: " + event.eventType);
   for (uint8_t i = 1; i < systemEventQueueCount; i++) {
     systemEventQueue[i - 1] = systemEventQueue[i];
   }
   systemEventQueueCount--;
+  nextSystemEventAttemptAt = 0;
 }
 
 void processPendingCreditSession() {
@@ -490,7 +608,9 @@ void handleCreditUpdate(String message) {
   if (separator < 0) return;
   int credits = message.substring(separator + 1).toInt();
   if (credits < 0) return;
+  customerCreditSessionActive = credits > 0;
   pendingCurrentCreditsValue = String(credits);
+  lastCustomerActivityAt = millis();
   pendingCurrentCreditsStatus = true;
   nextCurrentCreditsStatusAttemptAt = 0;
   pendingCreditSessionCents = credits * 100;
@@ -516,6 +636,7 @@ bool sendOnlineHeartbeat() {
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Prefer", "return=minimal");
+  http.setConnectTimeout(1000);
 
   // The Supabase trigger updates last_heartbeat and updated_at with server time.
   const int code = http.PATCH("{\"status\":\"Online\"}");
@@ -537,6 +658,11 @@ bool callRpc(const char* functionName, JsonDocument &request,
     lastRpcFailureReason = "Wi-Fi is disconnected";
     lastRpcFailureCode = -1001;
     if (reportErrorToMega) sendError("WIFI_OFFLINE");
+    if (String(functionName) == "machine_checkout_transaction_with_session") {
+      queueSystemEvent("ERROR", "ESP32", "CHECKOUT_FAILED",
+                       "Wi-Fi is disconnected before checkout could be sent to the database",
+                       functionName, lastRpcFailureCode);
+    }
     return false;
   }
   String body;
@@ -648,6 +774,8 @@ void syncLiveCatalogToMega() {
   // 1. Fetch Paper Compartments
   String url = String(SUPABASE_URL) + "/rest/v1/paper_compartments?select=compartment_number,assigned_product_id,presence_status,current_pad_stock,paper_inventory(brand_name,paper_size,sheets_per_unit,cost_per_unit_cents)&compartment_number=lte.2&order=compartment_number.asc";
   if (http.begin(client, url)) {
+    http.setConnectTimeout(1000);
+    http.setTimeout(1200);
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
     int code = http.GET();
@@ -675,6 +803,8 @@ void syncLiveCatalogToMega() {
   // 2. Fetch Pen Compartments
   url = String(SUPABASE_URL) + "/rest/v1/ballpen_compartments?select=compartment_number,assigned_product_id,current_piece_stock,ballpen_inventory(item_name,cost_per_unit_cents)&compartment_number=lte.1&order=compartment_number.asc";
   if (http.begin(client, url)) {
+    http.setConnectTimeout(1000);
+    http.setTimeout(1200);
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
     int code = http.GET();
@@ -699,6 +829,8 @@ void syncLiveCatalogToMega() {
   // 3. Fetch machine-wide operating options for the Mega.
   url = String(SUPABASE_URL) + "/rest/v1/machine_options?id=eq.1&select=minimum_credits,maximum_credits,minimum_ballpens_per_transaction,maximum_ballpens_per_transaction";
   if (http.begin(client, url)) {
+    http.setConnectTimeout(1000);
+    http.setTimeout(1200);
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
     int code = http.GET();
@@ -734,9 +866,18 @@ bool parseCartLine(const String &encoded, JsonArray lines) {
 }
 
 void checkoutCart(const String &message) {
+  megaTransactionActive = true;
+  lastCustomerActivityAt = millis();
   const int first = message.indexOf(':');
   const int second = message.indexOf(':', first + 1);
-  if (second < 0) { sendError("BAD_CHECKOUT_FORMAT"); return; }
+  if (second < 0) {
+    megaTransactionActive = false;
+    sendError("BAD_CHECKOUT_FORMAT");
+    queueSystemEvent("ERROR", "ESP32", "CHECKOUT_FAILED",
+                     "Checkout request has an invalid format",
+                     "machine_checkout_transaction_with_session", 0);
+    return;
+  }
   const int creditCents = message.substring(first + 1, second).toInt();
   const String encodedLines = message.substring(second + 1);
 
@@ -753,13 +894,24 @@ void checkoutCart(const String &message) {
   while (start < encodedLines.length()) {
     const int end = encodedLines.indexOf(';', start);
     const String encoded = end < 0 ? encodedLines.substring(start) : encodedLines.substring(start, end);
-    if (!parseCartLine(encoded, lines)) { sendError("BAD_CART_LINE"); return; }
+    if (!parseCartLine(encoded, lines)) {
+      megaTransactionActive = false;
+      sendError("BAD_CART_LINE");
+      queueSystemEvent("ERROR", "ESP32", "CHECKOUT_FAILED",
+                       "Checkout request contains an invalid product line",
+                       "machine_checkout_transaction_with_session", 0);
+      return;
+    }
     const int comma1 = encoded.indexOf(',');
     const int comma2 = encoded.indexOf(',', comma1 + 1);
     if (encoded.substring(0, comma1) == "pen") {
       ballpenUnits += encoded.substring(comma2 + 1).toInt();
       if (ballpenUnits > maximumBallpensPerTransaction) {
+        megaTransactionActive = false;
         sendError("MAX_BALLPENS");
+        queueSystemEvent("WARNING", "ESP32", "CHECKOUT_REJECTED",
+                         "Checkout rejected because ballpen quantity exceeds the configured limit",
+                         "machine_checkout_transaction_with_session", 0);
         return;
       }
     }
@@ -770,10 +922,14 @@ void checkoutCart(const String &message) {
   const unsigned long checkoutStartedAt = millis();
   // Keep checkout bounded by the single communication watchdog. Inventory is
   // validated at checkout but is not held in a reservation counter.
-  if (!callRpc("machine_checkout_transaction_with_session", request, response, 5000)) return;
+  if (!callRpc("machine_checkout_transaction_with_session", request, response, 5000)) {
+    megaTransactionActive = false;
+    return;
+  }
   Serial.printf("Checkout completed in %lu ms.\n", millis() - checkoutStartedAt);
   JsonObject result = response[0];
   if (result.isNull()) {
+    megaTransactionActive = false;
     sendError("EMPTY_CHECKOUT");
     queueSystemEvent("ERROR", "ESP32", "CHECKOUT_FAILED",
                      "Checkout returned no transaction",
@@ -1019,27 +1175,6 @@ void finishTransaction(const String &message) {
   processPendingFinish();
 }
 
-// Mark a bay empty when the Mega reports that its exit-verified stock is exhausted.
-void updatePaperBayPresence(const String &message) {
-  // Format: BAY_EMPTY:<bay_num>
-  int bayNum = message.substring(10).toInt();
-  if (bayNum < 1 || bayNum > 2) return;
-  if (!ensureWifi()) return;
-
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/paper_compartments?compartment_number=eq." + String(bayNum);
-  if (http.begin(client, url)) {
-    http.addHeader("apikey", SUPABASE_ANON_KEY);
-    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
-    http.addHeader("Content-Type", "application/json");
-    String body = "{\"presence_status\":\"LOW\", \"current_pad_stock\":0, \"updated_at\":\"now()\"}";
-    http.PATCH(body);
-    http.end();
-  }
-}
-
 void handleMegaMessage(String message) {
   message.trim();
   if (message.startsWith("CREDIT:")) handleCreditUpdate(message);
@@ -1049,24 +1184,39 @@ void handleMegaMessage(String message) {
     const String transactionId = message.substring(13);
     if (awaitingFinishAck && transactionId == awaitingFinishTransactionId) {
       awaitingFinishAck = false;
+      megaTransactionActive = false;
       lastFinishedMessage = "";
       awaitingFinishTransactionId = "";
       finishAckAttempts = 0;
     }
   }
   else if (message.startsWith("FINISH:")) finishTransaction(message);
-  else if (message.startsWith("BAY_EMPTY:")) updatePaperBayPresence(message);
+  else if (message.startsWith("BAY_EMPTY:")) {
+    const int bayNum = message.substring(10).toInt();
+    if (bayNum >= 1 && bayNum <= 2) pendingPaperBayEmpty[bayNum - 1] = true;
+  }
   else if (message.startsWith("STAGE_ERROR:")) {
     const int first = message.indexOf(':');
     const int second = message.indexOf(':', first + 1);
     if (second > first) {
       const String stage = message.substring(first + 1, second);
       const String reason = message.substring(second + 1);
+      const bool checkoutTimeout = stage == "CHECKOUT";
+      if (checkoutTimeout) megaTransactionActive = false;
       queueSystemEvent(
-        "ERROR", "MEGA", "TRANSACTION_STAGE_TIMEOUT",
-        "Transaction stage " + stage + " failed: " + reason,
-        "", 0);
+        "ERROR", "MEGA",
+        checkoutTimeout ? "CHECKOUT_WATCHDOG_TIMEOUT" : "TRANSACTION_STAGE_TIMEOUT",
+        checkoutTimeout
+          ? "Checkout unavailable: Mega watchdog expired (" + reason + ")"
+          : "Transaction stage " + stage + " failed: " + reason,
+        checkoutTimeout ? "machine_checkout_transaction_with_session" : "", 0);
     }
+  }
+  else if (message.startsWith("DBG:")) {
+    const String traceMessage = message.substring(4);
+    Serial.println("Mega trace received: " + traceMessage);
+    if (!queueSystemEvent("INFO", "MEGA", "MEGA_TRACE", traceMessage, "", 0))
+      Serial.println("Mega trace could not be queued for database logging.");
   }
   else if (message.startsWith("HARDWARE_EVENT:")) {
     const int first = message.indexOf(':');
@@ -1074,19 +1224,19 @@ void handleMegaMessage(String message) {
     if (second > first) {
       const String component = message.substring(first + 1, second);
       const String state = message.substring(second + 1);
-      if (!recordHardwareEvent(component, state)) {
-        Serial.println("Hardware event log pending: " + component + " " + state);
-      }
+      if (!queueHardwareEvent(component, state))
+        Serial.println("Hardware event could not be queued: " + component + " " + state);
     }
   }
   else if (message.startsWith("MEGA_RESET_CAUSE:")) {
+    megaTransactionActive = false;
     const String cause = message.substring(17);
     queueSystemEvent(
       "ERROR", "MEGA", "MEGA_RESET",
       "Mega restarted; reset cause code " + cause,
       "", 0);
   }
-  else if (message == "GET_CATALOG") syncLiveCatalogToMega();
+  else if (message == "GET_CATALOG") pendingCatalogSync = true;
   else if (message == "STATUS?") sendWifiStatus();
   else if (message == "SOFT_RESET") softResetRuntime();
   else if (message == "ESP_RESET") {
@@ -1109,9 +1259,9 @@ void softResetRuntime() {
   wifiConnected = connectToWifi(10000);
   sendWifiStatus();
   if (wifiConnected) {
-    sendOnlineHeartbeat();
-    updateMachineStatus();
-    syncLiveCatalogToMega();
+    lastOnlineHeartbeatAt = 0;
+    pendingMachineStatusSync = true;
+    pendingCatalogSync = true;
   }
 }
 
@@ -1126,28 +1276,33 @@ void setup() {
   }
 
   MEGA_SERIAL.begin(9600, SERIAL_8N1, MEGA_RX_PIN, MEGA_TX_PIN);
+  MEGA_SERIAL.setTimeout(200);
 
   loadSavedWifiCredentials();
   wifiConnected = connectUsingSavedFallbacks();
   sendWifiStatus();
   if (wifiConnected) {
     if (resetReason != ESP_RST_POWERON) {
-      recordSystemEvent(
+      queueSystemEvent(
         "ERROR", "ESP32", "ESP32_RESET",
         "ESP32 restarted; reset reason code " + String((int)resetReason),
         "", 0);
     }
-    fetchAndApplyRemoteNetworkConfig();
-    sendOnlineHeartbeat();
-    updateMachineStatus();
-    syncLiveCatalogToMega();
+    pendingRemoteNetworkConfigCheck = true;
+    pendingMachineStatusSync = true;
+    pendingCatalogSync = true;
   }
 }
 
 void loop() {
-  if (MEGA_SERIAL.available()) {
-    handleMegaMessage(MEGA_SERIAL.readStringUntil('\n'));
+  // Drain UART before doing anything that can wait on Wi-Fi or HTTPS.
+  uint8_t messagesRead = 0;
+  while (MEGA_SERIAL.available() && messagesRead < 24) {
+    String message = MEGA_SERIAL.readStringUntil('\n');
+    if (message.length()) handleMegaMessage(message);
+    messagesRead++;
   }
+  const bool megaHasQueuedMessages = MEGA_SERIAL.available() > 0;
 
   // Detect connectivity edges here. ensureWifi() only queries the radio, so
   // request handlers cannot overwrite this transition before it is reported.
@@ -1157,7 +1312,7 @@ void loop() {
     sendWifiStatus();
     if (wifiConnected) {
       disconnectedSince = 0;
-      fetchAndApplyRemoteNetworkConfig();
+      pendingRemoteNetworkConfigCheck = true;
     } else if (disconnectedSince == 0) {
       disconnectedSince = millis();
     }
@@ -1171,23 +1326,55 @@ void loop() {
 
   // Run only one queued credit write per loop pass. The session RPC is the
   // durable record; current_credits is a best-effort monitor display value.
-  if (pendingCreditSessionCents >= 0 && millis() >= nextCreditSessionAttemptAt) {
+  if (!megaTransactionActive && !megaHasQueuedMessages && pendingCreditSessionCents >= 0 &&
+      millis() >= nextCreditSessionAttemptAt) {
     processPendingCreditSession();
-  } else {
+  } else if (!megaTransactionActive && !customerCreditSessionActive &&
+             !megaHasQueuedMessages) {
     processPendingCurrentCreditsStatus();
   }
   processPendingFinish();
-  processPendingSystemEvent();
 
-  if (wifiConnected && millis() - lastOnlineHeartbeatAt >= ONLINE_HEARTBEAT_INTERVAL_MS) {
+  const bool customerSessionIdle = !megaTransactionActive && !customerCreditSessionActive;
+  if (wifiConnected && !megaHasQueuedMessages &&
+      millis() - lastOnlineHeartbeatAt >= ONLINE_HEARTBEAT_INTERVAL_MS) {
     lastOnlineHeartbeatAt = millis();
     sendOnlineHeartbeat();
   }
 
-  if (wifiConnected && millis() - lastStatusUpdate > statusInterval) {
-    updateMachineStatus();
-    syncLiveCatalogToMega();
+  if (wifiConnected && customerSessionIdle && !megaHasQueuedMessages &&
+      millis() - lastStatusUpdate > statusInterval) {
+    pendingMachineStatusSync = true;
+    pendingCatalogSync = true;
     lastStatusUpdate = millis();
+  }
+
+  // Run at most one noncritical network operation during idle time. UART is
+  // drained first on the next pass, keeping checkout ahead of diagnostics.
+  if (!megaTransactionActive && !megaHasQueuedMessages &&
+      millis() >= nextQueuedEventAttemptAt) {
+    if (hardwareEventQueueCount > 0 && millis() >= nextHardwareEventAttemptAt)
+      processPendingHardwareEvent();
+    else if (systemEventQueueCount > 0 && millis() >= nextSystemEventAttemptAt)
+      processPendingSystemEvent();
+    else if (customerSessionIdle &&
+             (pendingPaperBayEmpty[0] || pendingPaperBayEmpty[1]) &&
+             millis() >= nextPaperBayUpdateAt)
+      processPendingPaperBayUpdate();
+    else if (customerSessionIdle && pendingMachineStatusSync && wifiConnected) {
+      updateMachineStatus();
+      pendingMachineStatusSync = false;
+    }
+    else if (customerSessionIdle && pendingCatalogSync && wifiConnected) {
+      syncLiveCatalogToMega();
+      pendingCatalogSync = false;
+    } else if (customerSessionIdle && pendingRemoteNetworkConfigCheck && wifiConnected &&
+               (lastCustomerActivityAt == 0 ||
+                millis() - lastCustomerActivityAt >= NETWORK_CONFIG_IDLE_GRACE_MS)) {
+      pendingRemoteNetworkConfigCheck = false;
+      fetchAndApplyRemoteNetworkConfig();
+    }
+    nextQueuedEventAttemptAt = millis() + 25;
   }
 
   if (millis() - lastWiFiCheck > WIFI_CHECK_INTERVAL) {
@@ -1208,8 +1395,9 @@ void loop() {
     }
   }
 
-  if (wifiConnected && millis() - lastNetworkConfigCheck >= NETWORK_CONFIG_CHECK_INTERVAL) {
+  if (wifiConnected && customerSessionIdle && !megaHasQueuedMessages &&
+      millis() - lastNetworkConfigCheck >= NETWORK_CONFIG_CHECK_INTERVAL) {
     lastNetworkConfigCheck = millis();
-    fetchAndApplyRemoteNetworkConfig();
+    pendingRemoteNetworkConfigCheck = true;
   }
 }

@@ -2,6 +2,8 @@
 // Split from revamped_final_mega.ino for readability.
 
 void startOrder() {
+  orderTrace = "";
+  checkoutAckReceived = false;
   if (ballpenCartQuantity() > maximumBallpensPerTransaction) {
     tftUiShowError("Max " + String(maximumBallpensPerTransaction) + " ballpens");
     return;
@@ -40,6 +42,7 @@ void startOrder() {
     if (encodedLines.length()) encodedLines += ';';
     encodedLines += cart[i].type + "," + String(cart[i].id) + "," + String(cart[i].qty);
   }
+  trace("CHECKOUT sent");
   CLOUD_SERIAL.println("CHECKOUT:" + String((unsigned long)credits * 100UL) + ":" + encodedLines);
 }
 
@@ -48,6 +51,7 @@ void executeDispensePlan(String message) {
     Serial.println("Ignoring stale dispense plan received outside checkout stage.");
     return;
   }
+  trace("PLAN received");
 
   // A paper request can contain several sheets, and Paper Uno allows up to
   // 20 seconds per sheet while waiting for the exit sensor. The old 45-second
@@ -186,8 +190,8 @@ void executeDispensePlan(String message) {
 
 }
 
-void setTransactionStage(TransactionStage stage) {
-  transactionStage = stage;
+void setTransactionStage(int stage) {
+  transactionStage = static_cast<TransactionStage>(stage);
   transactionStageStartedAt = millis();
 }
 
@@ -229,7 +233,10 @@ void monitorTransactionWatchdog() {
   if (transactionStage == TRANSACTION_CHECKOUT &&
       elapsed >= CHECKOUT_RESPONSE_TIMEOUT_MS) {
     Serial.println("Transaction watchdog: checkout response timed out.");
-    CLOUD_SERIAL.println("STAGE_ERROR:CHECKOUT:ESP32_OR_DATABASE_TIMEOUT");
+    trace("WATCHDOG checkout timeout");
+    flushTrace();
+    CLOUD_SERIAL.println(String("STAGE_ERROR:CHECKOUT:") +
+      (checkoutAckReceived ? "ACK_RECEIVED_NO_PLAN" : "NO_ESP32_ACK"));
     showError("Checkout unavailable");
     setTransactionStage(TRANSACTION_IDLE);
   } else if (transactionStage == TRANSACTION_FINALIZING &&
@@ -239,6 +246,8 @@ void monitorTransactionWatchdog() {
 }
 
 void finishUiAfterTransaction(String message) {
+  trace("FINISHED received");
+  flushTrace();
   // Format: FINISHED:<tx_id>:<tr_number>:<status>:<change_due>:<change_paid>
   int p1 = message.indexOf(':');
   int p2 = message.indexOf(':', p1 + 1);
@@ -303,7 +312,9 @@ void handleCloudCommand(String msg) {
     // communication watchdog from this acknowledgement.
     if (transactionStage == TRANSACTION_CHECKOUT) {
       transactionStageStartedAt = millis();
+      checkoutAckReceived = true;
       Serial.println("ESP32 acknowledged checkout request.");
+      trace("ESP32 ack");
     }
   }
   else if (msg.startsWith("PLAN:")) executeDispensePlan(msg);

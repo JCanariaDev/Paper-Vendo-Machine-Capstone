@@ -31,11 +31,14 @@ void printHardwareStatus() {
 }
 
 void monitorControllerHealth() {
+  // Dispensing blocks polling, so don't count that time against the Unos.
+  if (orderInProgress) {
+    if (lastPaperUnoResponseAt > 0) lastPaperUnoResponseAt = millis();
+    if (lastBallpenUnoResponseAt > 0) lastBallpenUnoResponseAt = millis();
+    return;
+  }
   if (millis() - controllerCheckStartedAt < CONTROLLER_READY_GRACE_MS) return;
 
-  // Controller availability is checked when its own dispense command runs.
-  // A missing optional controller must not prevent the Mega from booting,
-  // accepting credits, or keeping the TFT usable.
   const unsigned long now = millis();
   if (lastPaperUnoResponseAt > 0 &&
       now - lastPaperUnoResponseAt > CONTROLLER_RESPONSE_TIMEOUT_MS) {
@@ -50,23 +53,24 @@ void monitorControllerHealth() {
   if (millis() < nextStatusPoll) return;
   UNO_SERIAL.println("STATUS?");
   BALLPEN_SERIAL.println("STATUS?");
+  nextStatusPoll = millis() + 3000;
 
-  if (!paperUnoResponsive) {
+  // Report only when the state changes, not on every poll.
+  if (!paperUnoResponsive && !paperUnoDisconnectObserved) {
     CLOUD_SERIAL.println("HARDWARE_EVENT:PAPER_UNO:DISCONNECTED");
     paperUnoDisconnectObserved = true;
-  } else if (paperUnoDisconnectObserved) {
+  } else if (paperUnoResponsive && paperUnoDisconnectObserved) {
     CLOUD_SERIAL.println("HARDWARE_EVENT:PAPER_UNO:CONNECTED");
     paperUnoDisconnectObserved = false;
   }
 
-  if (!ballpenUnoResponsive) {
+  if (!ballpenUnoResponsive && !ballpenUnoDisconnectObserved) {
     CLOUD_SERIAL.println("HARDWARE_EVENT:BALLPEN_UNO:DISCONNECTED");
     ballpenUnoDisconnectObserved = true;
-  } else if (ballpenUnoDisconnectObserved) {
+  } else if (ballpenUnoResponsive && ballpenUnoDisconnectObserved) {
     CLOUD_SERIAL.println("HARDWARE_EVENT:BALLPEN_UNO:CONNECTED");
     ballpenUnoDisconnectObserved = false;
   }
-  nextStatusPoll = millis() + 3000;
 }
 
 void softResetMachineState() {

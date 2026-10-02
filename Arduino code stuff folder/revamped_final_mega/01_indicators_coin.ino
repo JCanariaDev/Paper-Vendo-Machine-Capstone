@@ -1,8 +1,8 @@
 ﻿// INDICATORS COIN
 // Split from revamped_final_mega.ino for readability.
 
-void setMachineIndicator(IndicatorState state, bool sound) {
-  indicatorState = state;
+void setMachineIndicator(int state, bool sound) {
+  indicatorState = static_cast<IndicatorState>(state);
   const char* stateName = state == INDICATOR_READY ? "READY" :
                           state == INDICATOR_ACTIVE ? "ACTIVE" : "ERROR";
   BALLPEN_SERIAL.println(String("INDICATOR:") + stateName);

@@ -44,6 +44,7 @@
 // =============================================================
 
 // --- PINS (existing) ---
+const char MEGA_FIRMWARE_REVISION[] = "2026.10.02.3";
 const int COIN_PIN = 2;
 const int COIN_INHIBIT_PIN = 3; // Pin D3: Drives Coin Acceptor Relay
 // EXACT HARDWARE CALIBRATION:
@@ -151,6 +152,25 @@ const unsigned long FINALIZATION_STAGE_TIMEOUT_MS = 12000;
 unsigned long lastWifiStatusRequestAt = 0;
 const unsigned long WIFI_STATUS_REQUEST_INTERVAL_MS = 2000;
 String selectedPaperBrand = "Budget";
+String orderTrace = "";
+bool checkoutAckReceived = false;
+
+void trace(const String &t) {
+  const String marker = String(millis()) + " " + t;
+  if (orderTrace.length() < 300) {
+    orderTrace += marker + " | ";
+  }
+  // Persist each checkpoint independently so a reset before flush still
+  // leaves a useful trace in Machine Logs.
+  CLOUD_SERIAL.println("DBG:" + marker);
+}
+
+void flushTrace() {
+  if (orderTrace.length()) {
+    CLOUD_SERIAL.println("DBG:TIMELINE " + orderTrace);
+    orderTrace = "";
+  }
+}
 
 // --- DIAGNOSTICS STATE ---
 bool diagTftOk = false;
@@ -177,7 +197,7 @@ unsigned long hwResetDebounceUntil = 0;
 unsigned long swResetDebounceUntil = 0;
 
 // Forward declarations
-void setMachineIndicator(IndicatorState state, bool sound = false);
+void setMachineIndicator(int state, bool sound = false);
 void printCentered(const String &text, int cx, int cy);
 void printCentered(const char* text, int cx, int cy);
 float cartTotal();
@@ -230,7 +250,7 @@ void printHardwareStatus();
 void monitorControllerHealth();
 void executeDispensePlan(String message);
 void finishUiAfterTransaction(String message);
-void setTransactionStage(TransactionStage stage);
+void setTransactionStage(int stage);
 void monitorTransactionWatchdog();
 void finalizeTransactionLocally(const String &reason);
 void startSerialBallpenOrder(int quantity);
@@ -365,6 +385,7 @@ void setup() {
     CLOUD_SERIAL.println("MEGA_RESET_CAUSE:" + String(resetCause, HEX));
   }
   Serial.println("--- REVAMPED SMART PAPER VENDO FIRMWARE (OPTION A) STARTING ---");
+  Serial.println(String("Mega firmware revision: ") + MEGA_FIRMWARE_REVISION);
   controllerCheckStartedAt = millis();
 
   tftUiBegin();
