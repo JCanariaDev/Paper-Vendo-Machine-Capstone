@@ -14,7 +14,7 @@ export function startMachineWatchdog(supabase) {
     clearInterval(watchdogTimer);
   }
 
-  const timeoutSeconds = Number.parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS || '30', 10);
+  const timeoutSeconds = Number.parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS || '45', 10);
   const timeoutMs = (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? timeoutSeconds : 30) * 1000;
   const checkIntervalMs = 3000; // Check every 3 seconds
 

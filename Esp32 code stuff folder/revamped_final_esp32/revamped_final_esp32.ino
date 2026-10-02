@@ -12,7 +12,7 @@
 // Handles Dynamic 2-Bay Paper (database stock + exit confirmation) and 1-Bay Ballpen Vending.
 // ==============================================================================
 
-const char* ESP32_FIRMWARE_REVISION = "2026.10.02.7";
+const char* ESP32_FIRMWARE_REVISION = "2026.10.02.8";
 
 // --- WIFI CONFIG ---
 // Bootstrap credentials are used only when no working credentials have been
@@ -660,6 +660,7 @@ bool sendOnlineHeartbeat() {
     Serial.printf("Online heartbeat failed: HTTP %d\n", code);
     return false;
   }
+  Serial.printf("Online heartbeat saved: HTTP %d\n", code);
   return true;
 }
 

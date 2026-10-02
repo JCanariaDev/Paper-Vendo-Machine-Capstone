@@ -2,8 +2,9 @@
 
 ## Machine monitor status publishing - 2026-10-02
 
-- ESP32 revision `2026.10.02.7` upserts `machine_online_status` on each heartbeat instead of PATCHing only an existing row. This recreates the `id=1` status row if it was deleted, allowing the webapp's heartbeat-based online indicator to recover. Heartbeats are scheduled immediately after Wi-Fi connects.
+- ESP32 revision `2026.10.02.8` upserts `machine_online_status` on each heartbeat instead of PATCHing only an existing row. This recreates the `id=1` status row if it was deleted, allowing the webapp's heartbeat-based online indicator to recover. Heartbeats are scheduled immediately after Wi-Fi connects and successful sends are confirmed in Serial Monitor.
 - The backend status endpoint now surfaces errors reading `machine_online_status` instead of silently reporting the machine Offline when the heartbeat query itself failed.
+- The backend and watchdog use a 45-second heartbeat expiry by default (the ESP32 heartbeat interval is 10 seconds), reducing false Offline transitions during brief network/API delays while still detecting real disconnects. An explicit `HEARTBEAT_TIMEOUT_SECONDS` environment value overrides the default.
 - No SQL changes are required for this firmware update.
 
 ## Checkout responsiveness update - 2026-10-02

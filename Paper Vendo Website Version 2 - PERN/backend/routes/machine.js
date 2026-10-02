@@ -323,7 +323,7 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
 
   router.get('/online-status', async (_req, res) => {
     try {
-      const timeoutSeconds = Number.parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS || '30', 10);
+      const timeoutSeconds = Number.parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS || '45', 10);
       const timeoutMs = (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? timeoutSeconds : 30) * 1000;
 
       const { data, error } = await supabase
@@ -356,7 +356,7 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
 
   router.get('/status', async (_req, res) => {
     try {
-      const timeoutSeconds = Number.parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS || '30', 10);
+      const timeoutSeconds = Number.parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS || '45', 10);
       const timeoutMs = (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? timeoutSeconds : 30) * 1000;
 
       const [statusResult, onlineResult] = await Promise.all([
