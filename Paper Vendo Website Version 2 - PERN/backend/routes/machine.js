@@ -365,6 +365,7 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
       ]);
 
       if (statusResult.error) throw statusResult.error;
+      if (onlineResult.error) throw onlineResult.error;
 
       let onlineData = onlineResult.data;
       let effectiveStatus = 'Offline';

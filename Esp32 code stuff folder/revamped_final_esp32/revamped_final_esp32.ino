@@ -12,6 +12,8 @@
 // Handles Dynamic 2-Bay Paper (database stock + exit confirmation) and 1-Bay Ballpen Vending.
 // ==============================================================================
 
+const char* ESP32_FIRMWARE_REVISION = "2026.10.02.7";
+
 // --- WIFI CONFIG ---
 // Bootstrap credentials are used only when no working credentials have been
 // saved in ESP32 flash yet. Replace these with the initial machine network.
@@ -101,6 +103,8 @@ unsigned long nextPaperBayUpdateAt = 0;
 unsigned long nextSystemEventAttemptAt = 0;
 unsigned long nextQueuedEventAttemptAt = 0;
 unsigned long lastCustomerActivityAt = 0;
+unsigned long lastMegaUartMessageAt = 0;
+const unsigned long MEGA_UART_QUIET_WINDOW_MS = 200;
 const unsigned long NETWORK_CONFIG_IDLE_GRACE_MS = 30000;
 const unsigned long QUEUED_EVENT_RETRY_INTERVAL_MS = 3000;
 
@@ -439,6 +443,10 @@ bool persistCreditSession(int creditCents) {
   request["p_credit_cents"] = creditCents;
   if (!callRpc("machine_update_credit_session", request, response, 1500, false)) return false;
   pendingCreditSessionCents = -1;
+  Serial.printf("Credit session saved: %d cents.\n", creditCents);
+  queueSystemEvent("INFO", "ESP32", "CREDIT_SESSION_SAVED",
+                   "Credit session saved to database (" + String(creditCents) + " cents)",
+                   "machine_update_credit_session", 200);
   return true;
 }
 
@@ -615,6 +623,11 @@ void handleCreditUpdate(String message) {
   nextCurrentCreditsStatusAttemptAt = 0;
   pendingCreditSessionCents = credits * 100;
   nextCreditSessionAttemptAt = 0;
+  Serial.printf("Credit update received from Mega: %d cents.\n", pendingCreditSessionCents);
+  queueSystemEvent("INFO", "ESP32", "CREDIT_UPDATE_RECEIVED",
+                   "Credit update received from Mega (" +
+                     String(pendingCreditSessionCents) + " cents)",
+                   "machine_update_credit_session", 0);
 }
 
 bool sendOnlineHeartbeat() {
@@ -623,7 +636,7 @@ bool sendOnlineHeartbeat() {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  const String url = String(SUPABASE_URL) + "/rest/v1/machine_online_status?id=eq.1";
+  const String url = String(SUPABASE_URL) + "/rest/v1/machine_online_status?on_conflict=id";
   if (!http.begin(client, url)) {
     Serial.println("Online heartbeat request could not start.");
     return false;
@@ -635,11 +648,12 @@ bool sendOnlineHeartbeat() {
   http.addHeader("apikey", SUPABASE_ANON_KEY);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("Prefer", "return=minimal");
+  http.addHeader("Prefer", "resolution=merge-duplicates,return=minimal");
   http.setConnectTimeout(1000);
 
-  // The Supabase trigger updates last_heartbeat and updated_at with server time.
-  const int code = http.PATCH("{\"status\":\"Online\"}");
+  // Upsert avoids a silent no-op PATCH if the seeded status row was removed.
+  // The trigger/default maintain last_heartbeat using the database clock.
+  const int code = http.POST("{\"id\":1,\"status\":\"Online\"}");
   http.end();
 
   if (code < 200 || code >= 300) {
@@ -885,7 +899,12 @@ void checkoutCart(const String &message) {
   // proves that the ESP32 received the request and lets the Mega distinguish
   // a transport problem from a slow checkout request.
   MEGA_SERIAL.println("CHECKOUT_RECEIVED");
+  MEGA_SERIAL.flush();
   Serial.println("Checkout request received from Mega.");
+  queueSystemEvent("INFO", "ESP32", "CHECKOUT_ACK_SENT",
+                   "ESP32 received Mega checkout and sent CHECKOUT_RECEIVED (credits=" +
+                     String(creditCents) + " cents)",
+                   "machine_checkout_transaction_with_session", 0);
   DynamicJsonDocument request(2048);
   request["p_credit_cents"] = creditCents;
   JsonArray lines = request.createNestedArray("p_lines");
@@ -937,6 +956,24 @@ void checkoutCart(const String &message) {
     return;
   }
 
+  // This checkout now owns the credit amount. Do not replay the deferred
+  // CREDIT update after the transaction finishes, or it can create a fresh
+  // CREDIT_HELD TR for credits already consumed by this order.
+  if (pendingCreditSessionCents >= 0) {
+    if (pendingCreditSessionCents > 0) {
+      Serial.printf("Discarding pending credit-session write (%d cents); checkout committed %d cents.\n",
+                    pendingCreditSessionCents, creditCents);
+      queueSystemEvent("INFO", "ESP32", "CREDIT_SESSION_RECONCILED",
+                       "Pending credit session superseded by successful checkout (pending=" +
+                         String(pendingCreditSessionCents) + " cents, checkout=" +
+                         String(creditCents) + " cents)",
+                       "machine_checkout_transaction_with_session", 200);
+    }
+    pendingCreditSessionCents = -1;
+    nextCreditSessionAttemptAt = 0;
+    customerCreditSessionActive = false;
+  }
+
   String txId = result["transaction_id"].as<String>();
   String trNumber = result["tr_number"].as<String>();
   if (trNumber.length() == 0) trNumber = "TR-00000";
@@ -954,6 +991,10 @@ void checkoutCart(const String &message) {
   // Send complete Plan + TR Number directly to Mega (Product-First Flow)
   // Format: PLAN:<tx_id>:<tr_number>:<subtotal_cents>:<change_due_cents>:<encodedPlan>
   MEGA_SERIAL.println("PLAN:" + txId + ":" + trNumber + ":" + String(subtotalCents) + ":" + String(changeDueCents) + ":" + encodedPlan);
+  MEGA_SERIAL.flush();
+  queueSystemEvent("INFO", "ESP32", "CHECKOUT_PLAN_SENT",
+                   "Dispense plan sent to Mega for " + trNumber + " (transaction " + txId + ")",
+                   "machine_checkout_transaction_with_session", 200);
 }
 
 void changePaid(const String &message) {
@@ -1070,6 +1111,11 @@ void processPendingFinish() {
     finishAckAttempts++;
     return;
   }
+
+  // Keep database retries from blocking a command arriving on the Mega UART.
+  if (MEGA_SERIAL.available() > 0 ||
+      (lastMegaUartMessageAt > 0 &&
+       millis() - lastMegaUartMessageAt < MEGA_UART_QUIET_WINDOW_MS)) return;
 
   promoteQueuedFinish();
   if (!pendingFinish || millis() < nextFinishRetryAt) return;
@@ -1269,6 +1315,7 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println("\n--- REVAMPED ESP32 CLOUD GATEWAY STARTING ---");
+  Serial.println(String("ESP32 firmware revision: ") + ESP32_FIRMWARE_REVISION);
 
   const esp_reset_reason_t resetReason = esp_reset_reason();
   if (resetReason != ESP_RST_POWERON) {
@@ -1282,6 +1329,7 @@ void setup() {
   wifiConnected = connectUsingSavedFallbacks();
   sendWifiStatus();
   if (wifiConnected) {
+    lastOnlineHeartbeatAt = millis() - ONLINE_HEARTBEAT_INTERVAL_MS;
     if (resetReason != ESP_RST_POWERON) {
       queueSystemEvent(
         "ERROR", "ESP32", "ESP32_RESET",
@@ -1299,10 +1347,15 @@ void loop() {
   uint8_t messagesRead = 0;
   while (MEGA_SERIAL.available() && messagesRead < 24) {
     String message = MEGA_SERIAL.readStringUntil('\n');
-    if (message.length()) handleMegaMessage(message);
+    if (message.length()) {
+      lastMegaUartMessageAt = millis();
+      handleMegaMessage(message);
+    }
     messagesRead++;
   }
   const bool megaHasQueuedMessages = MEGA_SERIAL.available() > 0;
+  const bool megaUartQuiet = lastMegaUartMessageAt == 0 ||
+    millis() - lastMegaUartMessageAt >= MEGA_UART_QUIET_WINDOW_MS;
 
   // Detect connectivity edges here. ensureWifi() only queries the radio, so
   // request handlers cannot overwrite this transition before it is reported.
@@ -1312,6 +1365,7 @@ void loop() {
     sendWifiStatus();
     if (wifiConnected) {
       disconnectedSince = 0;
+      lastOnlineHeartbeatAt = millis() - ONLINE_HEARTBEAT_INTERVAL_MS;
       pendingRemoteNetworkConfigCheck = true;
     } else if (disconnectedSince == 0) {
       disconnectedSince = millis();
@@ -1326,17 +1380,16 @@ void loop() {
 
   // Run only one queued credit write per loop pass. The session RPC is the
   // durable record; current_credits is a best-effort monitor display value.
-  if (!megaTransactionActive && !megaHasQueuedMessages && pendingCreditSessionCents >= 0 &&
+  if (!megaTransactionActive && megaUartQuiet && !megaHasQueuedMessages && pendingCreditSessionCents >= 0 &&
       millis() >= nextCreditSessionAttemptAt) {
     processPendingCreditSession();
-  } else if (!megaTransactionActive && !customerCreditSessionActive &&
-             !megaHasQueuedMessages) {
+  } else if (!megaTransactionActive && megaUartQuiet && !megaHasQueuedMessages) {
     processPendingCurrentCreditsStatus();
   }
   processPendingFinish();
 
   const bool customerSessionIdle = !megaTransactionActive && !customerCreditSessionActive;
-  if (wifiConnected && !megaHasQueuedMessages &&
+  if (wifiConnected && megaUartQuiet && !megaHasQueuedMessages &&
       millis() - lastOnlineHeartbeatAt >= ONLINE_HEARTBEAT_INTERVAL_MS) {
     lastOnlineHeartbeatAt = millis();
     sendOnlineHeartbeat();
@@ -1351,7 +1404,7 @@ void loop() {
 
   // Run at most one noncritical network operation during idle time. UART is
   // drained first on the next pass, keeping checkout ahead of diagnostics.
-  if (!megaTransactionActive && !megaHasQueuedMessages &&
+  if (!megaTransactionActive && megaUartQuiet && !megaHasQueuedMessages &&
       millis() >= nextQueuedEventAttemptAt) {
     if (hardwareEventQueueCount > 0 && millis() >= nextHardwareEventAttemptAt)
       processPendingHardwareEvent();
