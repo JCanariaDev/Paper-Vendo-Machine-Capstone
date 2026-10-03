@@ -17,14 +17,6 @@ function LevelIcon({ level }) {
   return <Info className="w-4 h-4" />;
 }
 
-function getTraceSteps(message = '') {
-  return message
-    .replace(/^TIMELINE\s+/i, '')
-    .split('|')
-    .map((step) => step.trim())
-    .filter(Boolean);
-}
-
 export default function Logs() {
   const location = useLocation();
   const [logs, setLogs] = useState([]);
@@ -32,30 +24,21 @@ export default function Logs() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [lastUpdated, setLastUpdated] = useState(null);
 
-  const fetchLogs = async ({ showLoading = true } = {}) => {
-    if (showLoading) setLoading(true);
+  const fetchLogs = async () => {
+    setLoading(true);
     try {
-      const response = await axios.get('/api/machine/logs?limit=1000');
+      const response = await axios.get('/api/machine/logs?limit=500');
       setLogs(response.data || []);
       setError('');
-      setLastUpdated(new Date());
     } catch (err) {
       setError(err.response?.data?.message || 'Could not retrieve machine logs.');
     } finally {
-      if (showLoading) setLoading(false);
+      setLoading(false);
     }
   };
 
   useEffect(() => { fetchLogs(); }, []);
-
-  useEffect(() => {
-    const refreshTimer = window.setInterval(() => {
-      fetchLogs({ showLoading: false }).catch(() => {});
-    }, 10000);
-    return () => window.clearInterval(refreshTimer);
-  }, []);
 
   useEffect(() => {
     const transaction = new URLSearchParams(location.search).get('transaction');
@@ -81,12 +64,9 @@ export default function Logs() {
             <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Transaction, controller, and database events.</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="hidden text-xs font-semibold text-slate-400 sm:inline">{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Auto-refreshing every 10s'}</span>
-          <button onClick={() => fetchLogs({ showLoading: true })} className="inline-flex items-center justify-center gap-2 h-11 px-4 rounded-xl bg-primary-500 text-white font-bold text-sm hover:bg-primary-600 transition-colors">
+        <button onClick={fetchLogs} className="inline-flex items-center justify-center gap-2 h-11 px-4 rounded-xl bg-primary-500 text-white font-bold text-sm hover:bg-primary-600 transition-colors">
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
-          </button>
-        </div>
+        </button>
       </div>
 
       <div className="flex flex-col md:flex-row gap-4">
@@ -113,25 +93,14 @@ export default function Logs() {
           <div className="py-16 text-center text-sm font-semibold text-slate-400">No machine logs found.</div>
         ) : (
           <div className="divide-y divide-slate-100 dark:divide-white/[0.04]">
-            {filteredLogs.map((log) => {
-              const isMegaTrace = log.event_type === 'MEGA_TRACE';
-              const traceSteps = isMegaTrace ? getTraceSteps(log.message) : [];
-              return (
-              <div key={log.id} className={`px-6 py-4 flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-6 hover:bg-slate-50/60 dark:hover:bg-white/[0.01] ${isMegaTrace ? 'bg-sky-50/40 dark:bg-sky-950/10' : ''}`}>
+            {filteredLogs.map((log) => (
+              <div key={log.id} className="px-6 py-4 flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-6 hover:bg-slate-50/60 dark:hover:bg-white/[0.01]">
                 <span className={`inline-flex items-center gap-1.5 w-fit px-2.5 py-1 rounded-full border text-[11px] font-bold ${LEVEL_STYLES[log.level] || LEVEL_STYLES.INFO}`}><LevelIcon level={log.level} />{log.level}</span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
-                    <span>{isMegaTrace ? 'Mega checkout timeline' : log.source}</span><span>•</span><span>{log.event_type}</span>
+                    <span>{log.source}</span><span>•</span><span>{log.event_type}</span>
                   </div>
-                  {isMegaTrace ? (
-                    <ol className="mt-2 flex flex-wrap gap-2">
-                      {traceSteps.map((step, index) => (
-                        <li key={`${log.id}-${index}`} className="rounded-lg border border-sky-200 bg-white px-2.5 py-1.5 font-mono text-xs font-semibold text-slate-700 dark:border-sky-900 dark:bg-slate-900 dark:text-slate-200">{step}</li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <p className="mt-1 text-sm font-semibold text-slate-800 dark:text-white">{log.message}</p>
-                  )}
+                  <p className="mt-1 text-sm font-semibold text-slate-800 dark:text-white">{log.message}</p>
                   {log.metadata?.failure_reason && (
                     <p className="mt-1 text-xs font-semibold text-red-500 dark:text-red-300">Cause: {log.metadata.failure_reason}</p>
                   )}
@@ -139,7 +108,7 @@ export default function Logs() {
                 </div>
                 <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 whitespace-nowrap"><Calendar className="w-3.5 h-3.5" />{new Date(log.created_at).toLocaleString()}</span>
               </div>
-            );})}
+            ))}
           </div>
         )}
       </div>

@@ -17,8 +17,7 @@
     - Bay 2: STEP Pin D4,  DIR Pin D5
     - Common ENABLE Pin:   Pin D10 (Active LOW)
 
-  2x Paper Exit IR Sensors (INPUT_PULLUP wiring: HIGH = paper detected,
-      LOW = paper cleared):
+  2x Paper Exit IR Sensors (INPUT_PULLUP: HIGH = beam clear, LOW = paper passing):
     - Bay 1 Exit Sensor:   Pin D11
     - Bay 2 Exit Sensor:   Pin D12
 
@@ -45,9 +44,7 @@ const int ENABLE_PIN             = 10; // Common active LOW
 // One IR sensor is installed at the paper exit of each bay.
 // The sensor confirms that a sheet actually crossed the outlet.
 const int PAPER_EXIT_SENSOR_PINS[MOTOR_COUNT] = { 11, 12 };
-// This sensor reports HIGH while paper blocks/detects the beam and LOW after
-// the paper clears the exit. The feed logic stops only after both events.
-const int PAPER_EXIT_BLOCKED_LEVEL = HIGH;
+const int PAPER_EXIT_BLOCKED_LEVEL = LOW;
 const int PAPER_LEVEL_SENSOR_PINS[MOTOR_COUNT] = { 6, 7 };
 const int PAPER_LEVEL_HIGH_LEVEL = LOW;
 // The motor feeds continuously until the exit beam is interrupted and then
@@ -55,13 +52,12 @@ const int PAPER_LEVEL_HIGH_LEVEL = LOW;
 // an empty pad; the 20-second limit is only a final jam/sensor safety stop.
 const unsigned long PAPER_NO_STOCK_CONFIRM_MS = 15000;
 const unsigned long PAPER_EXIT_TIMEOUT_MS = 20000;
+const long MAX_STEPS_PER_SHEET = 12000;
 const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
 
-// Lower delay means a faster STEP pulse rate. Increase this if the motor skips
-// under load; 500 us is a moderate increase from the previous 900 us setting.
-const unsigned int STEP_PULSE_DELAY_US = 500;
+const unsigned int STEP_PULSE_DELAY_US = 900;
 int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
 long remainingSheets[MOTOR_COUNT] = { -1, -1 };
@@ -112,10 +108,7 @@ bool feedOneSheet(int bayIndex) {
   bool paperDetected = digitalRead(sensorPin) == PAPER_EXIT_BLOCKED_LEVEL;
   bool noStockCheckReported = false;
   const unsigned long feedStartedAt = millis();
-  // Run continuously until the exit sensor sees and then clears a sheet.
-  // A fixed step limit could expire before the paper reached the sensor,
-  // especially with a slower or loaded NEMA17 mechanism.
-  while (millis() - feedStartedAt < PAPER_EXIT_TIMEOUT_MS) {
+  for (long step = 0; step < MAX_STEPS_PER_SHEET; step++) {
     // Keep the motor running while the paper travels toward and through the
     // exit sensor. The sensor controls when this sheet is considered done.
     pulseStep(bayIndex);

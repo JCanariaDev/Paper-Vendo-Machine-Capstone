@@ -22,18 +22,11 @@ DROP TABLE IF EXISTS admins CASCADE;
 
 -- Drop all existing RPC functions so signature changes are applied cleanly
 DROP FUNCTION IF EXISTS machine_reserve_transaction(INTEGER, JSONB) CASCADE;
-DROP FUNCTION IF EXISTS machine_reserve_transaction_with_session(INTEGER, JSONB) CASCADE;
-DROP FUNCTION IF EXISTS machine_checkout_transaction(INTEGER, JSONB) CASCADE;
-DROP FUNCTION IF EXISTS machine_checkout_transaction(INTEGER, JSONB, UUID) CASCADE;
-DROP FUNCTION IF EXISTS machine_checkout_transaction_with_session(INTEGER, JSONB) CASCADE;
-DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB, INTEGER, BOOLEAN) CASCADE;
 DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB) CASCADE;
 DROP FUNCTION IF EXISTS machine_mark_change_paid(UUID, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS machine_release_change(UUID) CASCADE;
 DROP FUNCTION IF EXISTS machine_cancel_reserved_transaction(UUID, TEXT) CASCADE;
-DROP FUNCTION IF EXISTS machine_cancel_checkout_transaction(UUID, TEXT) CASCADE;
-DROP FUNCTION IF EXISTS machine_record_system_event(TEXT, TEXT, TEXT, TEXT, UUID, TEXT, JSONB) CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) CASCADE;
 
@@ -100,6 +93,7 @@ CREATE TABLE ballpen_compartments (
     compartment_number INTEGER UNIQUE NOT NULL CHECK (compartment_number = 1),
     assigned_product_id INTEGER REFERENCES ballpen_inventory(id) ON DELETE SET NULL,
     current_piece_stock INTEGER NOT NULL DEFAULT 0 CHECK (current_piece_stock >= 0),
+    reserved_piece_stock INTEGER NOT NULL DEFAULT 0 CHECK (reserved_piece_stock >= 0),
     max_piece_capacity INTEGER NOT NULL DEFAULT 100 CHECK (max_piece_capacity > 0),
     dispenser_channel INTEGER NOT NULL UNIQUE CHECK (dispenser_channel = 1),
     physical_status TEXT NOT NULL DEFAULT 'Good',
@@ -114,6 +108,7 @@ CREATE TABLE change_inventory (
     id SERIAL PRIMARY KEY,
     denomination_cents INTEGER NOT NULL UNIQUE CHECK (denomination_cents > 0),
     current_coin_count INTEGER NOT NULL DEFAULT 0 CHECK (current_coin_count >= 0),
+    reserved_coin_count INTEGER NOT NULL DEFAULT 0 CHECK (reserved_coin_count >= 0),
     hopper_channel INTEGER NOT NULL UNIQUE CHECK (hopper_channel BETWEEN 1 AND 3),
     max_capacity INTEGER NOT NULL DEFAULT 200 CHECK (max_capacity > 0),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -127,8 +122,8 @@ CREATE TABLE sales_transactions (
     transaction_number BIGSERIAL UNIQUE,
     tr_number TEXT GENERATED ALWAYS AS ('TR-' || LPAD(transaction_number::text, 5, '0')) STORED,
     machine_id TEXT NOT NULL DEFAULT 'paper-vendo-01',
-    status TEXT NOT NULL DEFAULT 'IN_PROGRESS'
-      CHECK (status IN ('CREDIT_HELD', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'FAILED_CHANGE', 'FAILED_DISPENSE', 'PARTIAL_SUCCESS', 'REFUNDED', 'COMPLETED_CHANGE_OWED')),
+    status TEXT NOT NULL DEFAULT 'RESERVED'
+      CHECK (status IN ('RESERVED', 'CHANGE_PAID', 'COMPLETED', 'CANCELLED', 'FAILED_CHANGE', 'FAILED_DISPENSE', 'PARTIAL_SUCCESS', 'REFUNDED', 'COMPLETED_CHANGE_OWED')),
     credit_received_cents INTEGER NOT NULL CHECK (credit_received_cents >= 0),
     subtotal_cents INTEGER NOT NULL CHECK (subtotal_cents >= 0),
     change_due_cents INTEGER NOT NULL CHECK (change_due_cents >= 0),
@@ -137,7 +132,6 @@ CREATE TABLE sales_transactions (
     change_plan JSONB NOT NULL DEFAULT '[]'::jsonb,
     failure_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    status_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at TIMESTAMPTZ
 );
 
@@ -154,8 +148,8 @@ CREATE TABLE sales_transaction_lines (
     sheets_per_unit_snapshot INTEGER NOT NULL DEFAULT 1 CHECK (sheets_per_unit_snapshot > 0),
     qty_requested INTEGER NOT NULL CHECK (qty_requested > 0), -- Total sheets for paper, pieces for pen
     qty_dispensed INTEGER NOT NULL DEFAULT 0 CHECK (qty_dispensed >= 0),
-    line_status TEXT NOT NULL DEFAULT 'PENDING'
-      CHECK (line_status IN ('PENDING', 'DISPENSED', 'FAILED')),
+    line_status TEXT NOT NULL DEFAULT 'RESERVED'
+      CHECK (line_status IN ('RESERVED', 'DISPENSED', 'FAILED')),
     UNIQUE (transaction_id, item_type, product_id)
 );
 
@@ -175,93 +169,6 @@ CREATE TABLE machine_logs (
 CREATE INDEX idx_machine_logs_created ON machine_logs(created_at DESC);
 CREATE INDEX idx_machine_logs_transaction ON machine_logs(transaction_id);
 GRANT SELECT ON machine_logs TO anon, authenticated, service_role;
-
--- Record controller availability transitions without duplicating the same
--- state while the Mega continues polling a disconnected controller.
-CREATE OR REPLACE FUNCTION machine_record_hardware_event(
-    p_component TEXT,
-    p_state TEXT,
-    p_message TEXT DEFAULT NULL
-)
-RETURNS VOID
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-    v_event_type TEXT;
-    v_previous_event TEXT;
-BEGIN
-    IF p_component IS NULL OR p_component = '' THEN
-        RAISE EXCEPTION 'Hardware component is required';
-    END IF;
-    IF p_state NOT IN ('DISCONNECTED', 'CONNECTED') THEN
-        RAISE EXCEPTION 'Unsupported hardware state: %', p_state;
-    END IF;
-
-    v_event_type := CASE
-        WHEN p_state = 'DISCONNECTED' THEN 'HARDWARE_DISCONNECTED'
-        ELSE 'HARDWARE_RECONNECTED'
-    END;
-
-    SELECT ml.event_type
-      INTO v_previous_event
-      FROM machine_logs AS ml
-     WHERE ml.event_type IN ('HARDWARE_DISCONNECTED', 'HARDWARE_RECONNECTED')
-       AND ml.metadata->>'component' = p_component
-     ORDER BY ml.created_at DESC
-     LIMIT 1;
-
-    IF v_previous_event = v_event_type THEN
-        RETURN;
-    END IF;
-
-    INSERT INTO machine_logs (
-        level, source, event_type, message, metadata
-    ) VALUES (
-        CASE WHEN p_state = 'DISCONNECTED' THEN 'ERROR' ELSE 'INFO' END,
-        'MEGA',
-        v_event_type,
-        COALESCE(p_message,
-                 p_component || CASE WHEN p_state = 'DISCONNECTED'
-                                     THEN ' is disconnected'
-                                     ELSE ' reconnected'
-                                END),
-        jsonb_build_object('component', p_component, 'state', p_state)
-    );
-END;
-$$;
-
--- Record gateway/controller failures that are not tied to a completed
--- transaction, such as an abandoned checkout before a TR number is returned.
-CREATE OR REPLACE FUNCTION machine_record_system_event(
-    p_level TEXT,
-    p_source TEXT,
-    p_event_type TEXT,
-    p_message TEXT,
-    p_transaction_id UUID DEFAULT NULL,
-    p_tr_number TEXT DEFAULT NULL,
-    p_metadata JSONB DEFAULT '{}'::jsonb
-)
-RETURNS VOID
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-BEGIN
-    INSERT INTO machine_logs (
-        level, source, event_type, message, transaction_id, tr_number, metadata
-    ) VALUES (
-        COALESCE(NULLIF(p_level, ''), 'ERROR'),
-        COALESCE(NULLIF(p_source, ''), 'SYSTEM'),
-        COALESCE(NULLIF(p_event_type, ''), 'SYSTEM_ERROR'),
-        COALESCE(NULLIF(p_message, ''), 'Machine event recorded'),
-        p_transaction_id,
-        p_tr_number,
-        COALESCE(p_metadata, '{}'::jsonb)
-    );
-END;
-$$;
 
 -- ------------------------------------------------------------------------------
 -- 5b. Inventory Refill History
@@ -289,8 +196,8 @@ RETURNS TRIGGER AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
         INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
-        VALUES ('INFO', 'DATABASE', 'TRANSACTION_STARTED',
-                'Transaction record created', NEW.id, NEW.tr_number,
+        VALUES ('INFO', 'DATABASE', 'TRANSACTION_RESERVED',
+                'Transaction reserved for dispensing', NEW.id, NEW.tr_number,
                 jsonb_build_object('status', NEW.status, 'credit_received_cents', NEW.credit_received_cents));
     ELSIF NEW.status IS DISTINCT FROM OLD.status THEN
         INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
@@ -312,20 +219,6 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_log_sales_transaction_event
 AFTER INSERT OR UPDATE OF status ON sales_transactions
 FOR EACH ROW EXECUTE FUNCTION log_sales_transaction_event();
-
-CREATE OR REPLACE FUNCTION set_sales_transaction_status_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.status IS DISTINCT FROM OLD.status THEN
-        NEW.status_updated_at = NOW();
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_sales_transaction_status_updated_at
-BEFORE UPDATE OF status ON sales_transactions
-FOR EACH ROW EXECUTE FUNCTION set_sales_transaction_status_updated_at();
 
 CREATE TABLE machine_status (
     id SERIAL PRIMARY KEY,
@@ -357,15 +250,6 @@ GRANT SELECT, UPDATE ON machine_options TO anon, authenticated, service_role;
 
 CREATE INDEX idx_revamped_tx_created ON sales_transactions(created_at DESC);
 CREATE INDEX idx_revamped_tx_lines ON sales_transaction_lines(item_type, product_id);
-CREATE INDEX idx_sales_transactions_credit_session
-    ON sales_transactions(machine_id, status, created_at DESC)
-    WHERE status = 'CREDIT_HELD';
-CREATE INDEX idx_sales_transaction_lines_transaction
-    ON sales_transaction_lines(transaction_id);
-CREATE INDEX idx_paper_compartments_product
-    ON paper_compartments(assigned_product_id);
-CREATE INDEX idx_ballpen_compartments_product
-    ON ballpen_compartments(assigned_product_id);
 
 -- ------------------------------------------------------------------------------
 -- Seed Initial Data
@@ -438,69 +322,11 @@ EXECUTE FUNCTION update_machine_online_heartbeat();
 GRANT ALL ON TABLE machine_online_status TO anon, authenticated, service_role;
 
 -- ------------------------------------------------------------------------------
--- Stored Procedures: Checkout, Change, Completion & Bay Management
+-- Stored Procedures: Reservation, Change, Completion & Bay Management
 -- ------------------------------------------------------------------------------
 
--- Persist inserted credits before checkout. A single open session is reused
--- when checkout starts, preserving one TR for the customer's credit session.
-CREATE OR REPLACE FUNCTION machine_update_credit_session(p_credit_cents INTEGER)
-RETURNS TABLE(transaction_id UUID, tr_number TEXT, session_status TEXT, credit_received_cents INTEGER)
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_tx sales_transactions%ROWTYPE;
-BEGIN
-    SELECT * INTO v_tx
-      FROM sales_transactions AS st
-      WHERE st.machine_id = 'paper-vendo-01'
-       AND st.status = 'CREDIT_HELD'
-     ORDER BY st.created_at DESC
-     LIMIT 1
-     FOR UPDATE;
-
-    IF p_credit_cents <= 0 THEN
-        IF FOUND THEN
-            UPDATE sales_transactions AS st
-               SET status = 'CANCELLED',
-                   subtotal_cents = 0,
-                   change_due_cents = v_tx.credit_received_cents,
-                   failure_reason = 'Power loss or session reset before checkout; credits await administrator release',
-                   completed_at = NOW()
-             WHERE st.id = v_tx.id;
-            RETURN QUERY SELECT v_tx.id, v_tx.tr_number, 'CANCELLED'::TEXT, v_tx.credit_received_cents;
-        END IF;
-        RETURN;
-    END IF;
-
-    IF FOUND THEN
-        UPDATE sales_transactions AS st
-           SET credit_received_cents = p_credit_cents,
-               subtotal_cents = 0,
-               change_due_cents = p_credit_cents
-         WHERE st.id = v_tx.id
-         RETURNING * INTO v_tx;
-    ELSE
-        INSERT INTO sales_transactions (
-            machine_id, status, credit_received_cents, subtotal_cents,
-            change_due_cents, change_paid_cents, change_plan
-        )
-        VALUES ('paper-vendo-01', 'CREDIT_HELD', p_credit_cents, 0,
-                p_credit_cents, 0, '[]'::jsonb)
-        RETURNING * INTO v_tx;
-    END IF;
-
-    RETURN QUERY SELECT v_tx.id, v_tx.tr_number, v_tx.status, v_tx.credit_received_cents;
-END;
-$$;
-
-GRANT EXECUTE ON FUNCTION machine_update_credit_session(INTEGER) TO anon, authenticated;
-
--- Validate cart and create its transaction record. No stock is reserved: stock
--- is deducted only from the quantity the dispenser confirms at completion.
-CREATE OR REPLACE FUNCTION machine_checkout_transaction(
-    p_credit_cents INTEGER,
-    p_lines JSONB,
-    p_credit_session_id UUID DEFAULT NULL
-)
+-- Reserve Transaction
+CREATE OR REPLACE FUNCTION machine_reserve_transaction(p_credit_cents INTEGER, p_lines JSONB)
 RETURNS TABLE(transaction_id UUID, tr_number TEXT, subtotal_cents INTEGER, change_due_cents INTEGER, dispense_plan JSONB)
 LANGUAGE plpgsql
 AS $$
@@ -526,7 +352,7 @@ DECLARE
     v_take INTEGER;
     v_change_plan JSONB := '[]'::jsonb;
     v_dispense_plan JSONB := '[]'::jsonb;
-    v_tx UUID := COALESCE(p_credit_session_id, gen_random_uuid());
+    v_tx UUID := gen_random_uuid();
     v_tr_number TEXT;
 BEGIN
     SELECT COALESCE(maximum_ballpens_per_transaction, 5)
@@ -572,7 +398,7 @@ BEGIN
             END IF;
             -- Pen validation by exact piece count in compartment
             SELECT p.cost_per_unit_cents, 1, p.item_name, NULL::TEXT, c.dispenser_channel,
-                   c.current_piece_stock
+                   c.current_piece_stock - c.reserved_piece_stock
               INTO v_price, v_sheets, v_name, v_size, v_channel, v_available
               FROM ballpen_inventory p
               JOIN ballpen_compartments c ON c.assigned_product_id = p.id
@@ -588,6 +414,10 @@ BEGIN
                 RAISE EXCEPTION 'Insufficient pen stock in compartment for product %', v_product_id; 
             END IF;
 
+            UPDATE ballpen_compartments
+               SET reserved_piece_stock = reserved_piece_stock + v_qty, updated_at = NOW()
+             WHERE assigned_product_id = v_product_id;
+
         END IF;
 
         v_subtotal := v_subtotal + (v_price * v_units);
@@ -602,35 +432,16 @@ BEGIN
 
     -- Calculate Change from Coin Hopper if available (does not block purchase if hopper is short)
     FOR v_coin IN SELECT * FROM change_inventory ORDER BY denomination_cents DESC FOR UPDATE LOOP
-        v_take := LEAST(v_remaining / v_coin.denomination_cents, v_coin.current_coin_count);
+        v_take := LEAST(v_remaining / v_coin.denomination_cents, v_coin.current_coin_count - v_coin.reserved_coin_count);
         IF v_take > 0 THEN
             v_change_plan := v_change_plan || jsonb_build_array(jsonb_build_object('hopper_channel', v_coin.hopper_channel, 'denomination_cents', v_coin.denomination_cents, 'count', v_take));
             v_remaining := v_remaining - (v_take * v_coin.denomination_cents);
         END IF;
     END LOOP;
 
-    IF p_credit_session_id IS NULL THEN
-        INSERT INTO sales_transactions (id, status, credit_received_cents, subtotal_cents, change_due_cents, change_plan)
-        VALUES (v_tx, 'IN_PROGRESS', p_credit_cents, v_subtotal, v_change, v_change_plan)
-        RETURNING sales_transactions.tr_number INTO v_tr_number;
-    ELSE
-        UPDATE sales_transactions AS st
-           SET status = 'IN_PROGRESS',
-               credit_received_cents = p_credit_cents,
-               subtotal_cents = v_subtotal,
-               change_due_cents = v_change,
-               change_paid_cents = 0,
-               change_plan = v_change_plan,
-               failure_reason = NULL,
-               completed_at = NULL
-         WHERE st.id = p_credit_session_id
-           AND st.status = 'CREDIT_HELD'
-        RETURNING st.tr_number INTO v_tr_number;
-
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'Credit session is no longer available for checkout';
-        END IF;
-    END IF;
+    INSERT INTO sales_transactions (id, credit_received_cents, subtotal_cents, change_due_cents, change_plan)
+    VALUES (v_tx, p_credit_cents, v_subtotal, v_change, v_change_plan)
+    RETURNING sales_transactions.tr_number INTO v_tr_number;
 
     -- Record transaction lines
     FOR v_line IN SELECT value FROM jsonb_array_elements(p_lines) LOOP
@@ -660,39 +471,16 @@ BEGIN
         v_dispense_plan := v_dispense_plan || jsonb_build_array(jsonb_build_object('item_type', v_type, 'product_id', v_product_id, 'physical_channel', v_channel, 'qty_requested', v_qty));
     END LOOP;
 
+    -- Reserve the planned change only for this active transaction.
+    FOR v_coin IN SELECT value FROM jsonb_array_elements(v_change_plan) LOOP
+        UPDATE change_inventory
+           SET reserved_coin_count = reserved_coin_count + ((v_coin.value->>'count')::INTEGER), updated_at = NOW()
+         WHERE hopper_channel = ((v_coin.value->>'hopper_channel')::INTEGER);
+    END LOOP;
+
     RETURN QUERY SELECT v_tx, v_tr_number, v_subtotal, v_change, v_dispense_plan;
 END;
 $$;
-
--- Checkout wrapper reuses the open CREDIT_HELD TR so coin-session logging and
--- the final order keep one receipt number. Old in-progress records never gate
--- a new checkout; this path does not lock inventory or change for later orders.
-CREATE OR REPLACE FUNCTION machine_checkout_transaction_with_session(p_credit_cents INTEGER, p_lines JSONB)
-RETURNS TABLE(transaction_id UUID, tr_number TEXT, subtotal_cents INTEGER, change_due_cents INTEGER, dispense_plan JSONB)
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_session_id UUID;
-    v_checkout RECORD;
-BEGIN
-    SELECT st.id INTO v_session_id
-      FROM sales_transactions AS st
-     WHERE st.machine_id = 'paper-vendo-01'
-       AND st.status = 'CREDIT_HELD'
-     ORDER BY st.created_at DESC
-     LIMIT 1
-     FOR UPDATE;
-
-    SELECT * INTO v_checkout
-      FROM machine_checkout_transaction(p_credit_cents, p_lines, v_session_id);
-
-    RETURN QUERY SELECT v_checkout.transaction_id, v_checkout.tr_number,
-                        v_checkout.subtotal_cents, v_checkout.change_due_cents,
-                        v_checkout.dispense_plan;
-END;
-$$;
-
-GRANT EXECUTE ON FUNCTION machine_checkout_transaction(INTEGER, JSONB, UUID) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION machine_checkout_transaction_with_session(INTEGER, JSONB) TO anon, authenticated;
 
 -- Mark Change Paid
 CREATE OR REPLACE FUNCTION machine_mark_change_paid(p_transaction_id UUID, p_change_paid_cents INTEGER)
@@ -700,16 +488,14 @@ RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE v_tx sales_transactions%ROWTYPE; v_coin JSONB;
 BEGIN
     SELECT * INTO v_tx FROM sales_transactions WHERE id = p_transaction_id FOR UPDATE;
-    IF NOT FOUND OR v_tx.status <> 'IN_PROGRESS' THEN RAISE EXCEPTION 'Transaction is not in progress'; END IF;
+    IF NOT FOUND OR v_tx.status <> 'RESERVED' THEN RAISE EXCEPTION 'Transaction is not reserved'; END IF;
     FOR v_coin IN SELECT value FROM jsonb_array_elements(v_tx.change_plan) LOOP
         UPDATE change_inventory
            SET current_coin_count = GREATEST(0, current_coin_count - ((v_coin->>'count')::INTEGER)),
-               updated_at = NOW()
+               reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)), updated_at = NOW()
          WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
     END LOOP;
-    UPDATE sales_transactions
-       SET change_paid_cents = LEAST(change_due_cents, GREATEST(change_paid_cents, p_change_paid_cents))
-     WHERE id = p_transaction_id;
+    UPDATE sales_transactions SET status = 'CHANGE_PAID', change_paid_cents = p_change_paid_cents WHERE id = p_transaction_id;
 END;
 $$;
 
@@ -733,15 +519,11 @@ BEGIN
         RETURN QUERY SELECT v_tx.tr_number, v_tx.status, v_tx.change_paid_cents;
         RETURN;
     END IF;
-    IF v_tx.status NOT IN ('CREDIT_HELD', 'COMPLETED_CHANGE_OWED', 'PARTIAL_SUCCESS', 'FAILED_DISPENSE', 'FAILED_CHANGE', 'CANCELLED') THEN
+    IF v_tx.status NOT IN ('COMPLETED_CHANGE_OWED', 'FAILED_DISPENSE', 'FAILED_CHANGE', 'CANCELLED') THEN
         RAISE EXCEPTION 'Transaction % has no outstanding change to release', v_tx.tr_number;
     END IF;
 
-    v_status := CASE
-        WHEN v_tx.status = 'COMPLETED_CHANGE_OWED' THEN 'COMPLETED'
-        WHEN v_tx.status = 'CREDIT_HELD' THEN 'REFUNDED'
-        ELSE v_tx.status
-    END;
+    v_status := CASE WHEN v_tx.status = 'COMPLETED_CHANGE_OWED' THEN 'COMPLETED' ELSE v_tx.status END;
     UPDATE sales_transactions
        SET status = v_status,
            change_paid_cents = change_due_cents,
@@ -752,9 +534,7 @@ BEGIN
     VALUES ('INFO', 'DASHBOARD', 'CHANGE_RELEASED',
             'Remaining change was handed to the customer', p_transaction_id, v_tx.tr_number,
             jsonb_build_object('change_due_cents', v_tx.change_due_cents,
-                               'previously_paid_cents', v_tx.change_paid_cents,
-                               'unused_credits_cents', GREATEST(0, v_tx.change_due_cents - v_tx.change_paid_cents),
-                               'release_type', 'MANUAL_HANDOUT'));
+                               'previously_paid_cents', v_tx.change_paid_cents));
 
     RETURN QUERY SELECT v_tx.tr_number, v_status, v_tx.change_due_cents;
 END;
@@ -772,7 +552,6 @@ DECLARE
 BEGIN
     SELECT * INTO v_tx FROM sales_transactions WHERE id = p_transaction_id FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'Transaction % not found', p_transaction_id; END IF;
-
     IF v_tx.status <> 'FAILED_DISPENSE' THEN
         RAISE EXCEPTION 'Only failed-dispense transactions can receive a credit refund';
     END IF;
@@ -789,11 +568,11 @@ BEGIN
         RETURN;
     END IF;
 
-    UPDATE sales_transactions AS st
-       SET refund_paid_cents = v_tx.refund_paid_cents + v_amount,
+    UPDATE sales_transactions
+       SET refund_paid_cents = refund_paid_cents + v_amount,
            status = 'REFUNDED',
            completed_at = COALESCE(completed_at, NOW())
-     WHERE st.id = p_transaction_id;
+     WHERE id = p_transaction_id;
 
     INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
     VALUES ('INFO', 'DASHBOARD', 'FAILED_DISPENSE_REFUND_RECORDED',
@@ -805,13 +584,25 @@ BEGIN
 END;
 $$;
 
--- Cancel an active checkout without releasing stock holds (none are made).
-CREATE OR REPLACE FUNCTION machine_cancel_checkout_transaction(p_transaction_id UUID, p_reason TEXT)
+-- Cancel Reserved Transaction
+CREATE OR REPLACE FUNCTION machine_cancel_reserved_transaction(p_transaction_id UUID, p_reason TEXT)
 RETURNS VOID LANGUAGE plpgsql AS $$
-DECLARE v_tx sales_transactions%ROWTYPE;
+DECLARE v_line RECORD; v_coin JSONB; v_tx sales_transactions%ROWTYPE;
 BEGIN
     SELECT * INTO v_tx FROM sales_transactions WHERE id = p_transaction_id FOR UPDATE;
-    IF NOT FOUND OR v_tx.status <> 'IN_PROGRESS' THEN RAISE EXCEPTION 'Only in-progress transactions can be cancelled'; END IF;
+    IF NOT FOUND OR v_tx.status <> 'RESERVED' THEN RAISE EXCEPTION 'Only reserved transactions can be cancelled'; END IF;
+    FOR v_line IN SELECT * FROM sales_transaction_lines WHERE transaction_id = p_transaction_id LOOP
+        IF v_line.item_type = 'pen' THEN
+            UPDATE ballpen_compartments
+               SET reserved_piece_stock = GREATEST(0, reserved_piece_stock - v_line.qty_requested), updated_at = NOW()
+             WHERE dispenser_channel = v_line.physical_channel;
+        END IF;
+    END LOOP;
+    FOR v_coin IN SELECT value FROM jsonb_array_elements(v_tx.change_plan) LOOP
+        UPDATE change_inventory
+           SET reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)), updated_at = NOW()
+         WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
+    END LOOP;
     UPDATE sales_transactions SET status = 'CANCELLED', failure_reason = p_reason, completed_at = NOW() WHERE id = p_transaction_id;
 END;
 $$;
@@ -820,8 +611,7 @@ $$;
 CREATE OR REPLACE FUNCTION machine_finish_transaction(
     p_transaction_id UUID, 
     p_results JSONB, 
-    p_change_paid_cents INTEGER DEFAULT 0,
-    p_change_release_timed_out BOOLEAN DEFAULT FALSE
+    p_change_paid_cents INTEGER DEFAULT 0
 )
 RETURNS TABLE(tr_number TEXT, final_status TEXT, change_due_cents INTEGER, change_paid_cents INTEGER)
 LANGUAGE plpgsql AS $$
@@ -840,16 +630,6 @@ DECLARE
 BEGIN
     SELECT * INTO v_tx FROM sales_transactions WHERE id = p_transaction_id FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'Transaction % not found', p_transaction_id; END IF;
-
-    -- The ESP32 retries finish RPCs after network failures. If the first call
-    -- committed but its response was lost, return the saved result without
-    -- deducting inventory or change a second time.
-    IF v_tx.status <> 'IN_PROGRESS' THEN
-        RETURN QUERY SELECT v_tx.tr_number, v_tx.status,
-                            COALESCE(v_tx.change_due_cents, 0),
-                            COALESCE(v_tx.change_paid_cents, 0);
-        RETURN;
-    END IF;
     
     v_paid := COALESCE(p_change_paid_cents, 0);
     IF v_paid > v_tx.change_due_cents THEN v_paid := v_tx.change_due_cents; END IF;
@@ -869,6 +649,7 @@ BEGIN
         IF v_line.item_type = 'pen' THEN
             UPDATE ballpen_compartments 
                SET current_piece_stock = current_piece_stock - v_actual,
+                   reserved_piece_stock = GREATEST(0, reserved_piece_stock - v_line.qty_requested),
                    updated_at = NOW() 
              WHERE dispenser_channel = v_line.physical_channel;
         END IF;
@@ -887,26 +668,21 @@ BEGIN
         IF v_actual > 0 THEN v_any_success := TRUE; END IF;
     END LOOP;
 
-    -- Deduct only change physically released by the hopper.
+    -- Deduct released coins and free the unused reservation.
     FOR v_coin IN SELECT value FROM jsonb_array_elements(v_tx.change_plan) LOOP
         UPDATE change_inventory 
-           SET current_coin_count = GREATEST(0, current_coin_count - LEAST(v_paid / ((v_coin->>'denomination_cents')::INTEGER), (v_coin->>'count')::INTEGER)),
+           SET reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)),
+               current_coin_count = GREATEST(0, current_coin_count - LEAST(v_paid / ((v_coin->>'denomination_cents')::INTEGER), (v_coin->>'count')::INTEGER)),
                updated_at = NOW() 
          WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
     END LOOP;
 
-    -- Product sensors determine dispense success. Hopper availability only
-    -- affects the separate change-owed audit; it must not turn a failed item
-    -- into a partial success or block the transaction.
     IF v_any_success AND v_any_failure THEN
         v_final_status := 'PARTIAL_SUCCESS';
         v_reason := COALESCE(v_reason, 'Some products dispensed successfully while other products failed');
     ELSIF NOT v_all_success THEN
         v_final_status := 'FAILED_DISPENSE';
         v_reason := COALESCE(v_reason, 'Physical dispense sensor did not confirm all requested output');
-    ELSIF p_change_release_timed_out THEN
-        v_final_status := 'PARTIAL_SUCCESS';
-        v_reason := 'Items dispensed successfully; change hopper is disabled or unavailable, so remaining change is owed';
     ELSIF v_paid < v_tx.change_due_cents THEN
         v_final_status := 'COMPLETED_CHANGE_OWED';
         v_reason := 'Unreleased change of PHP ' || TO_CHAR((v_tx.change_due_cents - v_paid) / 100.0, 'FM999,990.00') || ' owed to student';
@@ -920,19 +696,6 @@ BEGIN
            failure_reason = v_reason,
            completed_at = NOW() 
      WHERE id = p_transaction_id;
-
-    IF v_tx.change_due_cents > v_paid THEN
-        INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
-        VALUES ('WARNING', 'MEGA', 'CHANGE_OWED',
-                'Unused customer credits were recorded for release', p_transaction_id, v_tx.tr_number,
-                jsonb_build_object(
-                  'change_due_cents', v_tx.change_due_cents,
-                  'change_paid_cents', v_paid,
-                  'unused_credits_cents', v_tx.change_due_cents - v_paid,
-                  'release_status', 'PENDING',
-                  'release_timed_out', p_change_release_timed_out
-                ));
-    END IF;
      
     RETURN QUERY SELECT v_tx.tr_number, v_final_status, v_tx.change_due_cents, v_paid;
 END;
@@ -1157,13 +920,12 @@ BEGIN
 END;
 $$;
 
+GRANT EXECUTE ON FUNCTION machine_reserve_transaction(INTEGER, JSONB) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_mark_change_paid(UUID, INTEGER) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_release_change(UUID) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION machine_record_hardware_event(TEXT, TEXT, TEXT) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION machine_record_system_event(TEXT, TEXT, TEXT, TEXT, UUID, TEXT, JSONB) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION machine_record_failed_dispense_refund(UUID) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION machine_cancel_checkout_transaction(UUID, TEXT) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION machine_finish_transaction(UUID, JSONB, INTEGER, BOOLEAN) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION machine_cancel_reserved_transaction(UUID, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION machine_finish_transaction(UUID, JSONB, INTEGER) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) TO anon, authenticated;
 

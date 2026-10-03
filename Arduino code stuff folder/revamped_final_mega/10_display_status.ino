@@ -15,7 +15,6 @@ void showError(String m) {
     setCoinAcceptance(true);
     cartCount = 0;
     currentScreen = SCREEN_MAIN;
-    setTransactionStage(TRANSACTION_IDLE);
   }
   delay(2000);
   refreshMachineAvailability();

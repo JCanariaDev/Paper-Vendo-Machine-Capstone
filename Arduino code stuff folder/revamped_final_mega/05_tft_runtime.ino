@@ -2,16 +2,6 @@
 // Split from revamped_final_mega.ino for readability.
 
 void tftUiBegin() {
-  // Keep both SPI peripherals deselected before either library starts. This
-  // prevents the XPT2046 touch controller from driving the shared SPI bus
-  // during ILI9341 startup.
-  pinMode(TFT_CS, OUTPUT);
-  digitalWrite(TFT_CS, HIGH);
-  pinMode(TOUCH_CS, OUTPUT);
-  digitalWrite(TOUCH_CS, HIGH);
-  pinMode(TFT_DC, OUTPUT);
-  pinMode(TFT_RST, OUTPUT);
-
   tft.begin();
   tft.setRotation(2);
   diagTouchOk = ts.begin();
@@ -23,9 +13,7 @@ void tftUiBegin() {
 
 void tftUiSetCredits() {
   bool hasCredits = credits >= minimumCreditsToStart;
-  // A receipt must remain on screen until the customer presses Confirm.
-  // Credit/status updates may refresh the balance, but must not dismiss it.
-  if (currentScreen == SCREEN_IDLE && hasCredits) {
+  if ((currentScreen == SCREEN_IDLE || currentScreen == SCREEN_RECEIPT) && hasCredits) {
     activeTrNumber = "";
     activeTransactionId = "";
     activeTransactionStatus = "";
@@ -46,7 +34,6 @@ void tftUiSetWifiStatus(int status) {
   bool changed = wifiStatus != status;
   wifiStatus = (WifiStatus)status;
   uiWifiConnected = (status == WIFI_STATUS_CONNECTED);
-  if (!changed) return;
   if (!orderInProgress) refreshMachineAvailability(changed);
   if (currentScreen == SCREEN_IDLE || currentScreen == SCREEN_MAIN) {
     redrawCurrentScreen();

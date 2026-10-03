@@ -1,19 +1,12 @@
 // DISPENSE HARDWARE
 // Paper is delegated to Paper Uno; ballpens are delegated to Ballpen Uno.
 
-// One forward 180-degree move plus the forward return can take several
-// seconds at 10 RPM, in addition to the IR detection window.
-const unsigned long BALLPEN_DISPENSE_TIMEOUT_PER_ITEM_MS = 18000;
-const unsigned long BALLPEN_DISPENSE_TIMEOUT_MARGIN_MS = 3000;
+const unsigned long BALLPEN_DISPENSE_TIMEOUT_PER_ITEM_MS = 8000;
+const unsigned long BALLPEN_DISPENSE_TIMEOUT_MARGIN_MS = 2500;
 
 void handleBallpenMessage(String msg) {
   msg.trim();
   if (msg.length() == 0) return;
-  if (msg == "BALLPEN_READY") {
-    ballpenUnoResponsive = true;
-    lastBallpenUnoResponseAt = millis();
-    return;
-  }
   Serial.print("Ballpen Uno: ");
   Serial.println(msg);
 }
@@ -48,7 +41,6 @@ int dispensePenFromUno(int channel, int quantity) {
     if (response.startsWith("BALLPEN_FAIL:")) {
       Serial.print("Ballpen dispense failed: ");
       Serial.println(response);
-      CLOUD_SERIAL.println("STAGE_ERROR:DISPENSING:BALLPEN_" + response.substring(13));
       // Format: BALLPEN_FAIL:<channel>:<count>:<reason>
       int first = response.indexOf(':');
       int second = response.indexOf(':', first + 1);
@@ -63,19 +55,11 @@ int dispensePenFromUno(int channel, int quantity) {
 
   BALLPEN_SERIAL.println("STOP");
   Serial.println("Ballpen Uno dispense timeout; STOP sent.");
-  CLOUD_SERIAL.println("STAGE_ERROR:DISPENSING:BALLPEN_TIMEOUT");
-  tftUiShowError("Ballpen Uno disconnected");
   return 0;
 }
 
 int releaseVerifiedChange(int changeCents) {
-  changeReleaseTimedOut = false;
   if (changeCents <= 0) return 0;
-  if (!CHANGE_HOPPER_ENABLED) {
-    changeReleaseTimedOut = true;
-    Serial.println("Change hopper disabled; remaining change will be recorded as owed.");
-    return 0;
-  }
   if (digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW) {
     Serial.println("HOPPER WARNING: exit sensor is LOW at start.");
   }
@@ -93,10 +77,5 @@ int releaseVerifiedChange(int changeCents) {
     previousBlocked = blocked;
   }
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
-  changeReleaseTimedOut = countedCoins < expectedCoins;
-  if (changeReleaseTimedOut) {
-    Serial.println("Change release exceeded 20 seconds; finalizing as partial dispense.");
-    CLOUD_SERIAL.println("STAGE_ERROR:RELEASING_CHANGE:HOPPER_TIMEOUT");
-  }
   return countedCoins * 100;
 }

@@ -2,8 +2,6 @@
 // Split from revamped_final_mega.ino for readability.
 
 void startOrder() {
-  orderTrace = "";
-  checkoutAckReceived = false;
   if (ballpenCartQuantity() > maximumBallpensPerTransaction) {
     tftUiShowError("Max " + String(maximumBallpensPerTransaction) + " ballpens");
     return;
@@ -30,11 +28,7 @@ void startOrder() {
   activeTransactionStatus = "";
   activeChangeDueCents = 0;
   activeChangePaidCents = 0;
-  changeReleaseTimedOut = false;
-  activeDispenseHadSuccess = false;
-  activeDispenseHadFailure = false;
   currentScreen = SCREEN_SUMMARY;
-  setTransactionStage(TRANSACTION_CHECKOUT);
   drawSummaryScreen();
 
   String encodedLines = "";
@@ -42,23 +36,11 @@ void startOrder() {
     if (encodedLines.length()) encodedLines += ';';
     encodedLines += cart[i].type + "," + String(cart[i].id) + "," + String(cart[i].qty);
   }
-  trace("CHECKOUT sent");
-  CLOUD_SERIAL.println("CHECKOUT:" + String((unsigned long)credits * 100UL) + ":" + encodedLines);
+  CLOUD_SERIAL.println("RESERVE:" + String((unsigned long)credits * 100UL) + ":" + encodedLines);
 }
 
 void executeDispensePlan(String message) {
-  if (!orderInProgress || transactionStage != TRANSACTION_CHECKOUT) {
-    Serial.println("Ignoring stale dispense plan received outside checkout stage.");
-    return;
-  }
-  trace("PLAN received");
-
-  // A paper request can contain several sheets, and Paper Uno allows up to
-  // 20 seconds per sheet while waiting for the exit sensor. The old 45-second
-  // whole-plan limit could abort a valid multi-sheet order while the Uno was
-  // still dispensing. Keep a generous final safety limit, while each device
-  // still has its own shorter timeout and reports partial output accurately.
-  const unsigned long DISPENSE_PLAN_TIMEOUT_MS = 180000UL;
+  const unsigned long DISPENSE_PLAN_TIMEOUT_MS = 45000;
   const unsigned long planStartedAt = millis();
 
   // Format: PLAN:<tx_id>:<tr_number>:<subtotal_cents>:<change_due_cents>:<encodedPlan>
@@ -96,7 +78,6 @@ void executeDispensePlan(String message) {
   activeChangeDueCents = changeDueCents;
   activeChangePaidCents = 0;
   orderTotalCost = subtotalCents / 100.0;
-  setTransactionStage(TRANSACTION_DISPENSING);
 
   // Render Status Bar (displays TR Number on top-left)
   drawTftStatusBar();
@@ -113,13 +94,10 @@ void executeDispensePlan(String message) {
 
   // -- STEP 1: GUARANTEED PRODUCT-FIRST PHYSICAL DISPENSING --
   String results = "";
-  bool dispenseFailed = false;
-  bool anyOutputDispensed = false;
   int start = 0;
   while (start < encodedPlan.length()) {
     if (millis() - planStartedAt >= DISPENSE_PLAN_TIMEOUT_MS) {
       Serial.println("Dispense plan timeout; submitting partial results.");
-      dispenseFailed = true;
       break;
     }
 
@@ -144,9 +122,6 @@ void executeDispensePlan(String message) {
       actualOutput = dispensePenFromUno(channel, expectedOutput);
     }
 
-    if (actualOutput < expectedOutput) dispenseFailed = true;
-    if (actualOutput > 0) anyOutputDispensed = true;
-
     if (dispenseResultSummary.length()) dispenseResultSummary += "\n";
     String resultLabel = actualOutput >= expectedOutput ? "OK " : "FAILED ";
     String resultType = type == "pen" ? "Ballpen" : "Paper";
@@ -158,23 +133,16 @@ void executeDispensePlan(String message) {
     if (end < 0) break;
     start = end + 1;
   }
-  activeDispenseHadSuccess = anyOutputDispensed;
-  activeDispenseHadFailure = dispenseFailed;
 
-  // -- STEP 2: HANDLE CHANGE AFTER PHYSICAL DISPENSING --
-  // If the hopper is not installed, skip its screen state and motor path.
-  // The unpaid amount is sent to the database as a change-owed record.
+  // -- STEP 2: NON-BLOCKING COIN HOPPER CHANGE ATTEMPT --
   if (millis() - planStartedAt >= DISPENSE_PLAN_TIMEOUT_MS) {
     Serial.println("Skipping change release after dispense plan timeout.");
     activeChangePaidCents = 0;
   } else if (activeChangeDueCents > 0) {
-    if (CHANGE_HOPPER_ENABLED) {
-      setTransactionStage(TRANSACTION_RELEASING_CHANGE);
-      tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
-      tft.setTextSize(2);
-      tft.setTextColor(COL_WHITE);
-      printCentered("Releasing Change...", tft.width() / 2, 130);
-    }
+    tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
+    tft.setTextSize(2);
+    tft.setTextColor(COL_WHITE);
+    printCentered("Releasing Change...", tft.width() / 2, 130);
     int verifiedChange = releaseVerifiedChange(activeChangeDueCents);
     activeChangePaidCents = max(0, verifiedChange);
   } else {
@@ -182,91 +150,24 @@ void executeDispensePlan(String message) {
   }
 
   // -- STEP 3: NOTIFY ESP32 CLOUD GATEWAY --
-  CLOUD_SERIAL.println("FINISH:" + activeTransactionId + ":" + results + ":" +
-                       String(activeChangePaidCents) + ":" +
-                       String(changeReleaseTimedOut ? 1 : 0));
-
-  setTransactionStage(TRANSACTION_FINALIZING);
-
+  CLOUD_SERIAL.println("FINISH:" + activeTransactionId + ":" + results + ":" + String(activeChangePaidCents));
 }
 
-void setTransactionStage(int stage) {
-  transactionStage = static_cast<TransactionStage>(stage);
-  transactionStageStartedAt = millis();
-}
-
-void logLocalDispenseOutcome() {
-  if (activeDispenseHadFailure) {
-    activeTransactionStatus = activeDispenseHadSuccess
-      ? "PARTIAL_SUCCESS"
-      : "FAILED_DISPENSE";
-  } else {
-    activeTransactionStatus = changeReleaseTimedOut
-      ? "PARTIAL_SUCCESS"
-      : "COMPLETED";
-  }
-}
-
-void finalizeTransactionLocally(const String &reason) {
-  if (!orderInProgress) return;
-
-  localFinishFallbackActive = true;
-  localFinishFallbackTransactionId = activeTransactionId;
-  credits = 0;
-  orderInProgress = false;
-  setCoinAcceptance(false);
-  cartCount = 0;
-  logLocalDispenseOutcome();
-  currentScreen = SCREEN_RECEIPT;
-  setTransactionStage(TRANSACTION_RECEIPT);
-  updateLCD();
-  refreshMachineAvailability(true);
-  drawReceiptScreen();
-  Serial.println("Transaction watchdog finalized locally: " + reason);
-  CLOUD_SERIAL.println("STAGE_ERROR:FINALIZATION:" + reason);
-}
-
-void monitorTransactionWatchdog() {
-  if (!orderInProgress) return;
-  const unsigned long elapsed = millis() - transactionStageStartedAt;
-
-  if (transactionStage == TRANSACTION_CHECKOUT &&
-      elapsed >= CHECKOUT_RESPONSE_TIMEOUT_MS) {
-    Serial.println("Transaction watchdog: checkout response timed out.");
-    trace("WATCHDOG checkout timeout");
-    flushTrace();
-    CLOUD_SERIAL.println(String("STAGE_ERROR:CHECKOUT:") +
-      (checkoutAckReceived ? "ACK_RECEIVED_NO_PLAN" : "NO_ESP32_ACK"));
-    showError("Checkout unavailable");
-    setTransactionStage(TRANSACTION_IDLE);
-  } else if (transactionStage == TRANSACTION_FINALIZING &&
-             elapsed >= FINALIZATION_STAGE_TIMEOUT_MS) {
-    finalizeTransactionLocally("ESP32_FINISH_ACK_TIMEOUT");
-  }
+void beginReservedTransaction(String message) {
+  // Legacy handler kept for compatibility
+  int first = message.indexOf(':');
+  int second = message.indexOf(':', first + 1);
+  if (first < 0 || second < 0) return;
+  activeTransactionId = message.substring(first + 1, second);
 }
 
 void finishUiAfterTransaction(String message) {
-  trace("FINISHED received");
-  flushTrace();
   // Format: FINISHED:<tx_id>:<tr_number>:<status>:<change_due>:<change_paid>
   int p1 = message.indexOf(':');
   int p2 = message.indexOf(':', p1 + 1);
   int p3 = message.indexOf(':', p2 + 1);
   int p4 = message.indexOf(':', p3 + 1);
   int p5 = message.indexOf(':', p4 + 1);
-
-  // A late backend response may correct the temporary receipt, but must never
-  // overwrite the UI after the customer has moved on to another screen.
-  if (p2 > 0) {
-    String finishedTransactionId = message.substring(p1 + 1, p2);
-    if (localFinishFallbackActive &&
-        finishedTransactionId == localFinishFallbackTransactionId) {
-      if (activeTransactionId != finishedTransactionId || currentScreen != SCREEN_RECEIPT) {
-        CLOUD_SERIAL.println("FINISHED_ACK:" + finishedTransactionId);
-        return;
-      }
-    }
-  }
 
   String trNum = activeTrNumber;
   String transactionStatus = "COMPLETED";
@@ -284,7 +185,7 @@ void finishUiAfterTransaction(String message) {
 
   credits = 0;
   orderInProgress = false;
-  setCoinAcceptance(false);
+  setCoinAcceptance(true);
   cartCount = 0;
   updateLCD();
   refreshMachineAvailability(true);
@@ -293,45 +194,19 @@ void finishUiAfterTransaction(String message) {
   activeTransactionStatus = transactionStatus;
   activeChangeDueCents = dueCents;
   activeChangePaidCents = paidCents;
-  changeReleaseTimedOut = false;
-  localFinishFallbackActive = false;
-  localFinishFallbackTransactionId = "";
-  setTransactionStage(TRANSACTION_RECEIPT);
 
   BALLPEN_SERIAL.println("BEEP:1000:300");
 
   // Switch to non-blocking Receipt Screen with CONFIRM button
   currentScreen = SCREEN_RECEIPT;
   drawReceiptScreen();
-  CLOUD_SERIAL.println("FINISHED_ACK:" + activeTransactionId);
 }
 
 void handleCloudCommand(String msg) {
-  if (msg == "CHECKOUT_RECEIVED") {
-    // The ESP32 has accepted the checkout request. Restart the single
-    // communication watchdog from this acknowledgement.
-    if (transactionStage == TRANSACTION_CHECKOUT) {
-      transactionStageStartedAt = millis();
-      checkoutAckReceived = true;
-      Serial.println("ESP32 acknowledged checkout request.");
-      trace("ESP32 ack");
-    }
-  }
+  if (msg.startsWith("RESERVED:")) beginReservedTransaction(msg);
   else if (msg.startsWith("PLAN:")) executeDispensePlan(msg);
   else if (msg.startsWith("FINISHED:")) finishUiAfterTransaction(msg);
-  else if (msg.startsWith("ERR:")) {
-    String error = msg.substring(4);
-    Serial.println("ESP32 error: " + error);
-    if (error == "FINISH_PENDING") {
-      // A finish retry is a background database-sync notice, not a checkout
-      // failure; do not cancel the active order or dismiss its receipt.
-      Serial.println("Transaction completion is queued for database retry.");
-    } else if (error == "FINISH_RETRY_FAILED" || error == "FINISH_QUEUE_FULL") {
-      tftUiShowError("Record sync pending");
-    } else {
-      showError(error);
-    }
-  }
+  else if (msg.startsWith("ERR:")) showError(msg.substring(4));
   // -- Dynamic catalog sync from ESP32 --------------------------
   else if (msg.startsWith("PAPER_BAY:")) parsePaperBay(msg);
   else if (msg.startsWith("PEN_BAY:"))   parsePenBay(msg);
@@ -339,7 +214,6 @@ void handleCloudCommand(String msg) {
   // -------------------------------------------------------------
   else if (msg.startsWith("WIFI:")) {
     bool connected = msg.substring(5) == "1";
-    Serial.println(connected ? "ESP32 WiFi status: CONNECTED" : "ESP32 WiFi status: DISCONNECTED");
     tftUiSetWifiConnected(connected);
   }
   else if (msg == "WIFISTATE:CONNECTING") {

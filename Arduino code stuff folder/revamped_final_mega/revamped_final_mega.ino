@@ -19,8 +19,8 @@
 // =============================================================
 //
 // -- DIGITAL I/O ----------------------------------------------
-//  D2   COIN_PIN            Coin acceptor pulse input (INPUT_PULLUP, INT4)
-//  D3   COIN_INHIBIT_PIN    Coin acceptor relay signal (OUTPUT, active HIGH)
+//  D2   COIN_PIN            Coin acceptor pulse input (INPUT_PULLUP, INT0)
+//  D6   COIN_INHIBIT_PIN    Coin acceptor INHIBIT line (OUTPUT, active HIGH)
 //  D14  BALLPEN_SERIAL TX3  -> Ballpen Uno RX (D0)
 //  D15  BALLPEN_SERIAL RX3  <- Ballpen Uno TX (D1)
 //  D16  TX2 (Serial2)       -> Arduino Uno RX (Pin D0) at 5V logic
@@ -44,12 +44,11 @@
 // =============================================================
 
 // --- PINS (existing) ---
-const char MEGA_FIRMWARE_REVISION[] = "2026.10.02.3";
 const int COIN_PIN = 2;
-const int COIN_INHIBIT_PIN = 3; // Pin D3: Drives Coin Acceptor Relay
+const int COIN_INHIBIT_PIN = 6; // Pin D6: Drives Coin Acceptor Relay
 // EXACT HARDWARE CALIBRATION:
-// Pin D3 HIGH -> Relay LED OFF -> 12V ON (Coin Acceptor Powered ON)
-// Pin D3 LOW  -> Relay LED ON  -> 12V CUT (Coin Acceptor Powered OFF / Rejects Coins)
+// Pin D6 HIGH -> Relay LED OFF -> 12V ON (Coin Acceptor Powered ON)
+// Pin D6 LOW  -> Relay LED ON  -> 12V CUT (Coin Acceptor Powered OFF / Rejects Coins)
 int coinRelayOnLevel  = HIGH;   // HIGH = Power ON
 int coinRelayOffLevel = LOW;    // LOW  = Power OFF (Cut at >= 30 credits)
 volatile uint16_t maximumCreditsAllowed = 30;
@@ -58,19 +57,14 @@ volatile bool coinAcceptorEnabled = true;         // Software gate for coin puls
 // Option A: Delayed relay cutoff to capture all pulses from last inserted coin
 volatile bool pendingCoinAcceptorOff = false;     // Relay cut is queued, waiting for burst to finish
 volatile unsigned long lastCoinBurstTime = 0;     // Timestamp of most recent valid coin pulse
-volatile uint16_t coinBurstPulseCount = 0;        // Pulses received for the current denomination burst
 const unsigned long COIN_BURST_SILENCE_MS = 350;  // Wait 350ms of silence before physically cutting relay
-const unsigned long COIN_PULSE_DEBOUNCE_MS = 15;  // Accept fast multi-pulse coin trains
 
 const int HW_RESET_BTN_PIN = A8;
 const int SW_RESET_BTN_PIN = A9;
 
 const int CHANGE_HOPPER_MOTOR_PIN  = 22;
 const int CHANGE_HOPPER_SENSOR_PIN = 23;
-// The hopper is intentionally not installed. Keep it disabled so change
-// hardware cannot delay or block product dispensing/finalization.
-const bool CHANGE_HOPPER_ENABLED = false;
-const unsigned long CHANGE_COIN_TIMEOUT_MS  = 20000;
+const unsigned long CHANGE_COIN_TIMEOUT_MS  = 5000;
 const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
 // Paper Uno reports a confirmed result promptly; avoid a long dead wait if its
@@ -128,67 +122,13 @@ String activeTrNumber = "";          // Human-readable TR Record Number (e.g. "T
 String activeTransactionStatus = ""; // Final backend result shown on the receipt screen
 int activeChangeDueCents = 0;        // Total change owed to user
 int activeChangePaidCents = 0;       // Total change physically released by hopper
-bool changeReleaseTimedOut = false;
-bool activeDispenseHadSuccess = false;
-bool activeDispenseHadFailure = false;
-bool localFinishFallbackActive = false;
-String localFinishFallbackTransactionId = "";
-
-enum TransactionStage {
-  TRANSACTION_IDLE,
-  TRANSACTION_CHECKOUT,
-  TRANSACTION_DISPENSING,
-  TRANSACTION_RELEASING_CHANGE,
-  TRANSACTION_FINALIZING,
-  TRANSACTION_RECEIPT
-};
-
-TransactionStage transactionStage = TRANSACTION_IDLE;
-unsigned long transactionStageStartedAt = 0;
-// One communication watchdog for the checkout response; it only prevents the
-// TFT from waiting forever when the ESP32/database does not respond.
-const unsigned long CHECKOUT_RESPONSE_TIMEOUT_MS = 12000;
-const unsigned long FINALIZATION_STAGE_TIMEOUT_MS = 12000;
-unsigned long lastWifiStatusRequestAt = 0;
-const unsigned long WIFI_STATUS_REQUEST_INTERVAL_MS = 2000;
 String selectedPaperBrand = "Budget";
-String orderTrace = "";
-bool checkoutAckReceived = false;
-
-void trace(const String &t) {
-  const String marker = String(millis()) + " " + t;
-  if (orderTrace.length() < 300) {
-    orderTrace += marker + " | ";
-  }
-  // Persist each checkpoint independently so a reset before flush still
-  // leaves a useful trace in Machine Logs.
-  CLOUD_SERIAL.println("DBG:" + marker);
-}
-
-void flushTrace() {
-  if (orderTrace.length()) {
-    CLOUD_SERIAL.println("DBG:TIMELINE " + orderTrace);
-    orderTrace = "";
-  }
-}
 
 // --- DIAGNOSTICS STATE ---
 bool diagTftOk = false;
 bool diagTouchOk = false;
 bool hopperManualRunning = false;
 unsigned long hopperManualStartedAt = 0;
-bool paperUnoResponsive = false;
-bool ballpenUnoResponsive = false;
-bool paperUnoDisconnectObserved = false;
-bool ballpenUnoDisconnectObserved = false;
-unsigned long lastPaperUnoResponseAt = 0;
-unsigned long lastBallpenUnoResponseAt = 0;
-String hardwareFaultMessage = "";
-unsigned long controllerCheckStartedAt = 0;
-unsigned long nextHardwareFaultBeepAt = 0;
-const unsigned long CONTROLLER_READY_GRACE_MS = 10000;
-const unsigned long CONTROLLER_RESPONSE_TIMEOUT_MS = 9000;
-const unsigned long HARDWARE_FAULT_BEEP_INTERVAL_MS = 3000;
 
 enum IndicatorState { INDICATOR_READY, INDICATOR_ACTIVE, INDICATOR_ERROR };
 IndicatorState indicatorState = INDICATOR_READY;
@@ -197,7 +137,7 @@ unsigned long hwResetDebounceUntil = 0;
 unsigned long swResetDebounceUntil = 0;
 
 // Forward declarations
-void setMachineIndicator(int state, bool sound = false);
+void setMachineIndicator(IndicatorState state, bool sound = false);
 void printCentered(const String &text, int cx, int cy);
 void printCentered(const char* text, int cx, int cy);
 float cartTotal();
@@ -247,13 +187,9 @@ void parsePenBay(String msg);
 void parseMachineOptions(String msg);
 void runDiagnostics();
 void printHardwareStatus();
-void monitorControllerHealth();
 void executeDispensePlan(String message);
+void beginReservedTransaction(String message);
 void finishUiAfterTransaction(String message);
-void setTransactionStage(int stage);
-void monitorTransactionWatchdog();
-void finalizeTransactionLocally(const String &reason);
-void startSerialBallpenOrder(int quantity);
 
 // ================= CATALOG =================
 struct CatalogItem {
@@ -364,34 +300,21 @@ int cartRowY(int i) {
 // ================= DIAGNOSTICS =================
 // ================= SETUP =================
 void setup() {
-  // Clear any watchdog state left by a previous reset before initializing
-  // peripherals. The watchdog is enabled only for the hardware reset button.
-  const uint8_t resetCause = MCUSR;
-  MCUSR = 0;
-  wdt_disable();
-
-  // Configure reset inputs before any peripheral startup. Reset must remain
-  // available even if a display or external controller is disconnected.
-  pinMode(HW_RESET_BTN_PIN, INPUT_PULLUP);
-  pinMode(SW_RESET_BTN_PIN, INPUT_PULLUP);
-
   Serial.begin(115200);
   CLOUD_SERIAL.begin(9600); // UART to ESP32 (Pins 18/19)
   UNO_SERIAL.begin(9600);   // UART to Arduino Uno (Pins 16/17)
   BALLPEN_SERIAL.begin(9600); // UART to Ballpen Uno (Pins 14/15)
   UNO_SERIAL.setTimeout(500);
   BALLPEN_SERIAL.setTimeout(500);
-  if (resetCause != 0) {
-    CLOUD_SERIAL.println("MEGA_RESET_CAUSE:" + String(resetCause, HEX));
-  }
   Serial.println("--- REVAMPED SMART PAPER VENDO FIRMWARE (OPTION A) STARTING ---");
-  Serial.println(String("Mega firmware revision: ") + MEGA_FIRMWARE_REVISION);
-  controllerCheckStartedAt = millis();
 
   tftUiBegin();
   diagTftOk = true;
 
   setMachineIndicator(INDICATOR_ACTIVE, true);
+
+  pinMode(HW_RESET_BTN_PIN, INPUT_PULLUP);
+  pinMode(SW_RESET_BTN_PIN, INPUT_PULLUP);
 
   pinMode(COIN_PIN, INPUT_PULLUP);
   pinMode(COIN_INHIBIT_PIN, OUTPUT);
@@ -421,7 +344,9 @@ void loop() {
     hwResetDebounceUntil = now + 1000;
     Serial.println("HW RESET BUTTON (A8): triggering watchdog reboot...");
     Serial.flush();
-    // Do not depend on TFT, LEDs, buzzer, or another controller here.
+    setMachineIndicator(INDICATOR_ERROR, false);
+    BALLPEN_SERIAL.println("BEEP:500:200");
+    delay(200);
     noInterrupts();
     wdt_enable(WDTO_15MS);
     while (true) {}
@@ -448,13 +373,12 @@ void loop() {
     hopperManualRunning = false;
   }
 
-  static uint16_t lastCredits = 0;
+  static uint16_t lastCredits = 65535;
   noInterrupts();
   uint16_t creditSnapshot = credits;
   bool pulseSnapshot = coinPulseReceived;
   bool pendingOff = pendingCoinAcceptorOff;
   unsigned long burstTime = lastCoinBurstTime;
-  uint16_t burstPulseCount = coinBurstPulseCount;
   coinPulseReceived = false;
   interrupts();
 
@@ -475,23 +399,15 @@ void loop() {
   }
 
   if (creditSnapshot != lastCredits) {
-    // A denomination is represented by a pulse burst. Do not publish the
-    // partial total after the first pulse; wait until the burst is quiet.
-    const bool coinBurstSettled =
-      creditSnapshot == 0 || millis() - burstTime >= COIN_BURST_SILENCE_MS;
-    if (coinBurstSettled) {
-      lastCredits = creditSnapshot;
-      updateLCD();
-      tftUiSetCredits();
-      CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)creditSnapshot));
-      Serial.println("Credits inserted! Total: P" + String((unsigned int)creditSnapshot));
-      Serial.println("Coin burst complete: " + String(burstPulseCount) + " pulse(s), total P" + String((unsigned int)creditSnapshot));
+    lastCredits = creditSnapshot;
+    updateLCD();
+    tftUiSetCredits();
+    CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)creditSnapshot));
+    Serial.println("Credits inserted! Total: P" + String((unsigned int)creditSnapshot));
 
-      // Coin acceptance is local hardware state. Do not make it depend on a
-      // delayed ESP32 Wi-Fi status message; checkout can enforce Wi-Fi later.
-      if (creditSnapshot < maximumCreditsAllowed && !pendingOff && !orderInProgress) {
-        setCoinAcceptance(true);
-      }
+    // Re-enable coin acceptor after each credit update (no WiFi dependency)
+    if (creditSnapshot < maximumCreditsAllowed && !pendingOff && !orderInProgress && uiWifiConnected) {
+      setCoinAcceptance(true);
     }
   }
 
@@ -500,15 +416,6 @@ void loop() {
     msg.trim();
     handleCloudCommand(msg);
   }
-
-  // Periodically request the ESP32 status so the TFT can recover if the
-  // ESP32's boot-time Wi-Fi message was sent before the Mega was listening.
-  if (millis() - lastWifiStatusRequestAt >= WIFI_STATUS_REQUEST_INTERVAL_MS) {
-    lastWifiStatusRequestAt = millis();
-    CLOUD_SERIAL.println("STATUS?");
-  }
-
-  monitorTransactionWatchdog();
 
   if (UNO_SERIAL.available()) {
     String msg = UNO_SERIAL.readStringUntil('\n');
@@ -521,27 +428,21 @@ void loop() {
     handleBallpenMessage(msg);
   }
 
-  monitorControllerHealth();
-
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
     cmd.toUpperCase();
-    if (cmd == "HELP") {
-      Serial.println("Commands: PEN <quantity>, DIAG, STATUS, SOFT_RESET, ESP_RESET");
-    } else if (cmd.startsWith("PEN ")) {
-      startSerialBallpenOrder(cmd.substring(4).toInt());
-    } else if (cmd == "DIAG") runDiagnostics();
+    if (cmd == "DIAG") runDiagnostics();
     else if (cmd == "STATUS") printHardwareStatus();
     else if (cmd == "SOFT_RESET") softResetMachineState();
     else if (cmd == "ESP_RESET") CLOUD_SERIAL.println("ESP_RESET");
     else if (cmd == "COIN ON" || cmd == "ACCEPTOR ON") {
       setCoinAcceptance(true);
-      Serial.print("MANUAL COIN ACCEPTOR: Power ON. Pin D3 level = ");
+      Serial.print("MANUAL COIN ACCEPTOR: Power ON. Pin D6 level = ");
       Serial.println(digitalRead(COIN_INHIBIT_PIN) == HIGH ? "HIGH (5V)" : "LOW (0V)");
     } else if (cmd == "COIN OFF" || cmd == "ACCEPTOR OFF") {
       setCoinAcceptance(false);
-      Serial.print("MANUAL COIN ACCEPTOR: Power OFF (Cut). Pin D3 level = ");
+      Serial.print("MANUAL COIN ACCEPTOR: Power OFF (Cut). Pin D6 level = ");
       Serial.println(digitalRead(COIN_INHIBIT_PIN) == HIGH ? "HIGH (5V)" : "LOW (0V)");
     } else if (cmd == "COIN INVERT") {
       int tmp = coinRelayOnLevel;
@@ -553,26 +454,21 @@ void loop() {
     } else if (cmd == "COIN 1") {
       ignoreCoinPulsesUntil = millis() + 600;
       digitalWrite(COIN_INHIBIT_PIN, HIGH);
-      Serial.println("DIRECT PIN D3 -> HIGH (5V)");
+      Serial.println("DIRECT PIN D6 -> HIGH (5V)");
     } else if (cmd == "COIN 0") {
       ignoreCoinPulsesUntil = millis() + 600;
       digitalWrite(COIN_INHIBIT_PIN, LOW);
-      Serial.println("DIRECT PIN D3 -> LOW (0V)");
+      Serial.println("DIRECT PIN D6 -> LOW (0V)");
     } else if (cmd == "HOPPER ON") {
-      if (!CHANGE_HOPPER_ENABLED) {
-        Serial.println("Hopper is disabled in firmware.");
-      } else {
-        digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_ON);
-        hopperManualRunning = true;
-        hopperManualStartedAt = millis();
-      }
+      digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_ON);
+      hopperManualRunning = true;
+      hopperManualStartedAt = millis();
     } else if (cmd == "HOPPER OFF") {
       digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
       hopperManualRunning = false;
     } else if (cmd.startsWith("HOPPER ")) {
       int coins = cmd.substring(7).toInt();
-      if (!CHANGE_HOPPER_ENABLED) Serial.println("Hopper is disabled in firmware.");
-      else if (coins > 0) releaseVerifiedChange(coins * 100);
+      if (coins > 0) releaseVerifiedChange(coins * 100);
     }
   }
 }

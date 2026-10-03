@@ -1,8 +1,8 @@
 ﻿// INDICATORS COIN
 // Split from revamped_final_mega.ino for readability.
 
-void setMachineIndicator(int state, bool sound) {
-  indicatorState = static_cast<IndicatorState>(state);
+void setMachineIndicator(IndicatorState state, bool sound) {
+  indicatorState = state;
   const char* stateName = state == INDICATOR_READY ? "READY" :
                           state == INDICATOR_ACTIVE ? "ACTIVE" : "ERROR";
   BALLPEN_SERIAL.println(String("INDICATOR:") + stateName);
@@ -41,24 +41,14 @@ void setCoinAcceptance(bool allowed) {
   coinAcceptorEnabled = allowed;
   bool relayChanged = digitalRead(COIN_INHIBIT_PIN) != targetLevel;
   digitalWrite(COIN_INHIBIT_PIN, targetLevel);
-  if (relayChanged && allowed) {
-    // Ignore only the short relay-switch transient. The previous 600 ms filter
-    // was long enough to discard valid denomination pulses.
-    ignoreCoinPulsesUntil = millis() + 100;
-  } else if (relayChanged && !allowed) {
-    ignoreCoinPulsesUntil = millis() + 600;
-  }
-  if (!allowed) {
-    noInterrupts();
-    pendingCoinAcceptorOff = false;
-    interrupts();
-  }
+  // Do not restart the settling delay after every counted pulse in a coin burst.
+  if (relayChanged) ignoreCoinPulsesUntil = millis() + 600;
 }
 
 void coinInterrupt() {
-  // The deferred cutoff leaves this enabled until the pulse burst settles, so
-  // there is no reason to accept pulses once the software gate is closed.
-  if (orderInProgress || !coinAcceptorEnabled) return;
+  if (orderInProgress) return;
+  // Hard software gate: If acceptor was cut off and not waiting for burst remainder, reject pulse!
+  if (!coinAcceptorEnabled && !pendingCoinAcceptorOff) return;
 
   unsigned long now = millis();
   // Anti-glitch: Ignore power surge / relay transient noise on Pin D2
@@ -66,14 +56,10 @@ void coinInterrupt() {
   if (now < ignoreCoinPulsesUntil) return;
 
   static unsigned long lastPulse = 0;
-  // Short debounce: filters contact noise while capturing fast pulse bursts
+  // 50ms debounce: filters electrical noise while still capturing all pulse bursts
   // from ?1 (1 pulse), ?5 (5 pulses), ?10 (10 pulses), ?20 (20 pulses)
   // Coin acceptors typically send pulses 50-80ms apart within a burst.
-  if (now - lastPulse >= COIN_PULSE_DEBOUNCE_MS) {
-    if (lastPulse == 0 || now - lastPulse > COIN_BURST_SILENCE_MS) {
-      coinBurstPulseCount = 0;
-    }
-    coinBurstPulseCount++;
+  if (now - lastPulse > 50) {
     credits++;            // Count every pulse — including the remainder of a multi-peso coin
     coinPulseReceived = true;
     lastCoinBurstTime = now;  // Track when the last pulse arrived
@@ -87,5 +73,4 @@ void coinInterrupt() {
     }
   }
 }
-
 

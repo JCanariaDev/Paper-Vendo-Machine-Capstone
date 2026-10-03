@@ -18,7 +18,6 @@ const int STEPS_PER_REVOLUTION = 2048;
 const int HALF_TURN_STEPS = STEPS_PER_REVOLUTION / 2;
 const int MOTOR_SPEED_RPM = 10;
 const int SENSOR_WAIT_MS = 3000;
-const int SENSOR_CLEAR_WAIT_MS = 1500;
 
 const int STEPPER_IN1_PIN = 3;
 const int STEPPER_IN2_PIN = 4;
@@ -40,10 +39,6 @@ Stepper ballpenStepper(
 
 bool stopRequested = false;
 bool dispensing = false;
-
-// Non-blocking serial command buffer for use during stepping
-static char serialCmdBuf[32];
-static byte serialCmdIdx = 0;
 
 bool sensorDetected() {
   return digitalRead(BALLPEN_IR_PIN) == LOW;
@@ -69,23 +64,13 @@ void stopBallpen() {
   setIndicator("READY");
 }
 
-// Fast non-blocking check to prevent step jitter and delay
-bool checkStopCommandNonBlocking() {
+bool readStopCommand() {
   while (Serial.available() > 0) {
-    char c = (char)Serial.read();
-    if (c == '\n' || c == '\r') {
-      if (serialCmdIdx > 0) {
-        serialCmdBuf[serialCmdIdx] = '\0';
-        String cmd = String(serialCmdBuf);
-        cmd.trim();
-        serialCmdIdx = 0;
-        if (cmd == "STOP" || cmd == "BALLPEN_STOP") {
-          stopBallpen();
-          return true;
-        }
-      }
-    } else if (serialCmdIdx < sizeof(serialCmdBuf) - 1) {
-      serialCmdBuf[serialCmdIdx++] = c;
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    if (command == "STOP" || command == "BALLPEN_STOP") {
+      stopBallpen();
+      return true;
     }
   }
   return stopRequested;
@@ -95,97 +80,33 @@ bool moveInterruptible(int steps) {
   const int direction = steps >= 0 ? 1 : -1;
   const int count = abs(steps);
   for (int i = 0; i < count; i++) {
-    if (checkStopCommandNonBlocking()) return false;
+    if (readStopCommand()) return false;
     ballpenStepper.step(direction);
   }
   return true;
 }
 
-// Rotates while actively latching an IR drop pulse on every single step
-bool moveWithSensorWatch(int steps, bool &dropDetected) {
-  const int direction = steps >= 0 ? 1 : -1;
-  const int count = abs(steps);
-  for (int i = 0; i < count; i++) {
-    if (checkStopCommandNonBlocking()) return false;
-    ballpenStepper.step(direction);
-    if (!dropDetected && sensorDetected()) {
-      dropDetected = true;
-    }
-  }
-  return true;
-}
-
-bool waitForSensorClear(unsigned long maxWaitMs) {
-  const unsigned long startedAt = millis();
-  while (millis() - startedAt < maxWaitMs) {
-    if (checkStopCommandNonBlocking()) return false;
-    if (!sensorDetected()) return true;
+bool waitForSensor() {
+  unsigned long startedAt = millis();
+  while (millis() - startedAt < SENSOR_WAIT_MS) {
+    if (readStopCommand()) return false;
+    if (sensorDetected()) return true;
     delay(5);
   }
-  return !sensorDetected();
+  return sensorDetected();
 }
 
-bool dispenseOnePen(String &failReason) {
-  // Step 1: Ensure sensor is clear before starting.
-  // If sensor is blocked by previous debris or miscalibration, give it a window to clear.
-  if (!waitForSensorClear(SENSOR_CLEAR_WAIT_MS)) {
-    failReason = "SENSOR_BLOCKED";
-    return false;
-  }
+bool dispenseOnePen() {
+  if (sensorDetected()) return false;
+  if (!moveInterruptible(HALF_TURN_STEPS)) return false;
 
-  // Step 2: Rotate first half-turn toward the drop position while actively polling for drop.
-  bool dropDetected = false;
-  if (!moveWithSensorWatch(HALF_TURN_STEPS, dropDetected)) {
-    failReason = stopRequested ? "STOPPED" : "MOTOR_ERROR";
-    return false;
-  }
-  if (stopRequested) {
-    failReason = "STOPPED";
-    return false;
-  }
+  bool detected = waitForSensor();
+  if (stopRequested) return false;
 
-  // Step 3: If drop was not caught during rotation, give it a post-rotation detection window.
-  if (!dropDetected) {
-    unsigned long waitStart = millis();
-    while (millis() - waitStart < SENSOR_WAIT_MS) {
-      if (checkStopCommandNonBlocking()) {
-        failReason = "STOPPED";
-        return false;
-      }
-      if (sensorDetected()) {
-        dropDetected = true;
-        break;
-      }
-      delay(5);
-    }
-  }
-
-  if (stopRequested) {
-    failReason = "STOPPED";
-    return false;
-  }
-
-  if (!dropDetected) {
-    failReason = "IR_TIMEOUT";
-  }
-
-  // Step 4: If drop was detected, wait briefly for the pen to clear the sensor beam.
-  if (dropDetected) {
-    waitForSensorClear(SENSOR_CLEAR_WAIT_MS);
-  }
-
-  // Step 5: Always complete the rotation cycle back to home position (360° total),
-  // ensuring the mechanical rotor never stays stuck mid-turn.
-  delay(100);
-  bool returned = moveInterruptible(HALF_TURN_STEPS);
+  delay(100); // Let the pen clear the sensor, without delaying the next item.
+  bool returned = moveInterruptible(-HALF_TURN_STEPS);
   disableMotor();
-
-  if (!returned && stopRequested) {
-    failReason = "STOPPED";
-    return false;
-  }
-
-  return dropDetected && returned;
+  return detected && returned;
 }
 
 void dispensePens(int channel, int quantity) {
@@ -200,9 +121,8 @@ void dispensePens(int channel, int quantity) {
   tone(BUZZER_PIN, 1100, 120);
 
   int dispensed = 0;
-  String failReason = "IR_TIMEOUT";
   for (int i = 0; i < quantity; i++) {
-    if (!dispenseOnePen(failReason)) break;
+    if (!dispenseOnePen()) break;
     dispensed++;
   }
 
@@ -214,7 +134,8 @@ void dispensePens(int channel, int quantity) {
     Serial.println("BALLPEN_DONE:" + String(channel) + ":" + String(dispensed));
   } else {
     setIndicator("ERROR");
-    Serial.println("BALLPEN_FAIL:" + String(channel) + ":" + String(dispensed) + ":" + failReason);
+    Serial.println("BALLPEN_FAIL:" + String(channel) + ":" + String(dispensed) + ":" +
+                   (stopRequested ? "STOPPED" : "IR_TIMEOUT"));
     stopRequested = false;
   }
 }

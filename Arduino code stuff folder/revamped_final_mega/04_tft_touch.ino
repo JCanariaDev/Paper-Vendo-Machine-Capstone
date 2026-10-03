@@ -2,18 +2,12 @@
 // Split from revamped_final_mega.ino for readability.
 
 void handleReceiptTouch(int x, int y) {
-  // The receipt Confirm button is intentionally available for exact pay,
-  // successful change, partial success, and change-owed receipts.
-  if (x >= 20 && x <= 220 && y >= 230 && y <= 315) {
-    // Keep coin pulses gated throughout the receipt screen; re-enable only
-    // when the customer confirms the previous transaction is complete.
-    setCoinAcceptance(true);
+  if (x >= 20 && x <= 220 && y >= 240 && y <= 295) {
     activeTrNumber = "";
     activeTransactionId = "";
     activeTransactionStatus = "";
     activeChangeDueCents = 0;
     activeChangePaidCents = 0;
-    setTransactionStage(TRANSACTION_IDLE);
     currentScreen = SCREEN_IDLE;
     drawIdleScreen();
   }
