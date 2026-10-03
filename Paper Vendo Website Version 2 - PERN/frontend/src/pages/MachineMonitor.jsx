@@ -274,8 +274,8 @@ export default function MachineMonitor() {
         // Fetch enough lines to keep a multi-item active cart together.
         axios.get('/api/machine/transactions?limit=100'),
       ]);
-      const statuses = statusRes.data || [];
-      const txList   = groupTransactionLines(txRes.data || []);
+      const statuses = Array.isArray(statusRes.data) ? statusRes.data : [];
+      const txList   = groupTransactionLines(Array.isArray(txRes.data) ? txRes.data : []);
       const currentCredits = Number(
         statuses.find((s) => s.status_key === 'current_credits')?.status_value || 0
       );
@@ -523,7 +523,7 @@ export default function MachineMonitor() {
                   <span className="text-[10px] font-bold text-emerald-300">LIVE CART</span>
                 )}
               </div>
-              {transactionOngoing && latestTx.items?.length > 0 ? (
+              {transactionOngoing && (latestTx?.items?.length || 0) > 0 ? (
                 <div className="divide-y divide-white/[0.08]">
                   {latestTx.items.map((item) => (
                     <div key={item.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
