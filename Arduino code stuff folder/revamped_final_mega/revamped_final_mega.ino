@@ -71,7 +71,11 @@ const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
 // UART cable/controller is unavailable.
 // Must cover the Paper Uno's 20-second sensor/jam safety window. A normal
 // dispense still returns immediately when the exit sensor clears.
-const unsigned long PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS = 22000;
+const unsigned long PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS = 30000;
+// Safety timeout: if ESP32 doesn't reply with FINISHED: within this window
+// after the Mega sends FINISH:, force-transition to the receipt screen.
+const unsigned long FINISH_RESPONSE_TIMEOUT_MS = 15000;
+unsigned long finishSentAt = 0;
 
 const int HOPPER_RELAY_ON  = LOW;  // LOW  = Relay LED ON  -> Motor ON
 const int HOPPER_RELAY_OFF = HIGH; // HIGH = Relay LED OFF -> Motor OFF
@@ -151,6 +155,7 @@ void drawPaperBrandScreen();
 void drawCatalogScreen();
 void drawSummaryScreen();
 void drawCartScreen();
+void drawDispensingScreen();
 void drawReceiptScreen();
 void redrawCurrentScreen();
 void handleMainTouch(int x, int y);
@@ -182,6 +187,7 @@ void tftUiSetCredits();
 void tftUiSetWifiStatus(int status);
 void tftUiSetWifiConnected(bool connected);
 void drawWifiSpinnerFrame();
+void updateSummaryStatusFrame(bool reset = false);
 void parsePaperBay(String msg);
 void parsePenBay(String msg);
 void parseMachineOptions(String msg);
@@ -236,7 +242,7 @@ CartItem cart[MAX_CART_ITEMS];
 int cartCount = 0;
 
 // ================= UI STATE =================
-enum UiScreen { SCREEN_IDLE, SCREEN_MAIN, SCREEN_PAPER_BRAND, SCREEN_CATALOG, SCREEN_CART, SCREEN_SUMMARY, SCREEN_RECEIPT };
+enum UiScreen { SCREEN_IDLE, SCREEN_MAIN, SCREEN_PAPER_BRAND, SCREEN_CATALOG, SCREEN_CART, SCREEN_SUMMARY, SCREEN_DISPENSING, SCREEN_RECEIPT };
 UiScreen currentScreen = SCREEN_IDLE;
 
 bool uiWifiConnected = false;
@@ -329,7 +335,7 @@ void setup() {
   CLOUD_SERIAL.println("CREDIT:" + String((unsigned int)credits));
   CLOUD_SERIAL.println("STATUS?");
   // Request live catalog from ESP32 after boot so TFT shows real bay assignments
-  delay(500);
+  delay(50);
   CLOUD_SERIAL.println("GET_CATALOG");
   UNO_SERIAL.println("STATUS?");
   BALLPEN_SERIAL.println("STATUS?");
@@ -366,6 +372,24 @@ void loop() {
       lastSpinnerUpdate = millis();
       drawWifiSpinnerFrame();
     }
+  }
+
+  if (currentScreen == SCREEN_SUMMARY && orderInProgress) {
+    updateSummaryStatusFrame();
+  }
+
+  // Safety timeout: never stay stuck on "Releasing Change..." forever.
+  // If ESP32 hasn't responded with FINISHED: within the timeout window,
+  // force the receipt screen so the customer isn't left waiting.
+  if (finishSentAt > 0 && currentScreen == SCREEN_DISPENSING &&
+      millis() - finishSentAt > FINISH_RESPONSE_TIMEOUT_MS) {
+    Serial.println("FINISH response timeout; forcing receipt screen.");
+    finishSentAt = 0;
+    // Synthesise a FINISHED message from the data we already have
+    finishUiAfterTransaction("FINISHED:" + activeTransactionId + ":" +
+                             activeTrNumber + ":COMPLETED:" +
+                             String(activeChangeDueCents) + ":" +
+                             String(activeChangePaidCents));
   }
 
   if (hopperManualRunning && millis() - hopperManualStartedAt >= HOPPER_MANUAL_MAX_MS) {

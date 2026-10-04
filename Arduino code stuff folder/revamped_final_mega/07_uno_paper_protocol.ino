@@ -1,4 +1,4 @@
-﻿// UNO PAPER PROTOCOL
+// UNO PAPER PROTOCOL
 // Split from revamped_final_mega.ino for readability.
 
 void parsePaperBay(String msg) {
@@ -168,8 +168,11 @@ int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName)
       String response = UNO_SERIAL.readStringUntil('\n');
       response.trim();
       Serial.print("Paper Uno -> ");
-      Serial.println(response);
-      if (response.startsWith("DONE:")) {
+      if (response.startsWith("SHEET_OK:")) {
+        // IR sensor confirmed a sheet crossed the exit sensor
+        BALLPEN_SERIAL.println("BEEP:1800:100");
+      }
+      else if (response.startsWith("DONE:")) {
         // Format: DONE:<bay>:<count>
         int second = response.indexOf(':', 5);
         int count = response.substring(second + 1).toInt();
@@ -186,6 +189,9 @@ int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName)
         if (!paperCatalog[bayNumber - 1].isPaperPresent) {
           CLOUD_SERIAL.println("BAY_EMPTY:" + String(bayNumber));
         }
+        if (count > 0) {
+          BALLPEN_SERIAL.println("BEEP:1800:150");
+        }
         return count;
       }
       else if (response.startsWith("EMPTY:")) {
@@ -199,6 +205,7 @@ int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName)
     }
   }
   Serial.println("Paper Uno response timeout; no NEMA17 completion received.");
+  UNO_SERIAL.println("STOP");
   return 0; // Timeout
 }
 

@@ -1,4 +1,4 @@
-﻿// TFT DRAW
+// TFT DRAW
 // Split from revamped_final_mega.ino for readability.
 
 void printCentered(const String &text, int cx, int cy) {
@@ -178,6 +178,25 @@ void drawCatalogScreen() {
   printCentered("CANCEL", 130 + 47, 275 + 17);
 }
 
+static bool summaryToggle = false;
+static unsigned long lastSummaryUpdate = 0;
+
+void updateSummaryStatusFrame(bool reset) {
+  if (reset) {
+    summaryToggle = false;
+    lastSummaryUpdate = millis();
+    return;
+  }
+  unsigned long now = millis();
+  if (now - lastSummaryUpdate < 1000) return;
+  lastSummaryUpdate = now;
+  summaryToggle = !summaryToggle;
+  tft.fillRect(0, 246, tft.width(), 26, COL_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(COL_ORANGE);
+  printCentered(summaryToggle ? "Loading..." : "Fetching data", tft.width() / 2, 258);
+}
+
 void drawSummaryScreen() {
   tft.fillScreen(COL_BLACK);
   drawTftStatusBar();
@@ -207,7 +226,8 @@ void drawSummaryScreen() {
   tft.setTextSize(2);
   if (orderInProgress) {
     tft.setTextColor(COL_ORANGE);
-    printCentered("Dispensing...", tft.width() / 2, 258);
+    printCentered("Fetching data", tft.width() / 2, 258);
+    updateSummaryStatusFrame(true);
     tft.fillRoundRect(20, 275, 200, 40, 8, COL_GREY);
     tft.setTextColor(COL_WHITE);
     printCentered("PLEASE WAIT", tft.width() / 2, 275 + 20);
@@ -337,6 +357,17 @@ void drawReceiptScreen() {
   printCentered("CONFIRM", tft.width() / 2, 267);
 }
 
+void drawDispensingScreen() {
+  tft.fillScreen(COL_BLACK);
+  drawTftStatusBar();
+  tft.setTextColor(COL_WHITE);
+  tft.setTextSize(2);
+  printCentered("Dispensing Items...", tft.width() / 2, 130);
+  tft.setTextSize(1);
+  tft.setTextColor(COL_ORANGE);
+  printCentered("Please wait for your paper / pens", tft.width() / 2, 165);
+}
+
 void redrawCurrentScreen() {
   switch (currentScreen) {
     case SCREEN_IDLE:        drawIdleScreen();        break;
@@ -345,6 +376,7 @@ void redrawCurrentScreen() {
     case SCREEN_CATALOG:     drawCatalogScreen();     break;
     case SCREEN_CART:        drawCartScreen();        break;
     case SCREEN_SUMMARY:     drawSummaryScreen();     break;
+    case SCREEN_DISPENSING:  drawDispensingScreen();  break;
     case SCREEN_RECEIPT:     drawReceiptScreen();     break;
   }
 }

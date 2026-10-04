@@ -13,9 +13,8 @@
     - GND          <-- Connect to Mega GND (Common Ground)
 
   2x NEMA17 + TMC2209 Paper Feeder Motors:
-    - Bay 1: STEP Pin D2,  DIR Pin D3
-    - Bay 2: STEP Pin D4,  DIR Pin D5
-    - Common ENABLE Pin:   Pin D10 (Active LOW)
+    - Bay 1: STEP Pin D2,  DIR Pin D3,  ENABLE Pin D10 (Active LOW)
+    - Bay 2: STEP Pin D4,  DIR Pin D5,  ENABLE Pin D9  (Active LOW)
 
   2x Paper Exit IR Sensors (INPUT_PULLUP: HIGH = beam clear, LOW = paper passing):
     - Bay 1 Exit Sensor:   Pin D11
@@ -37,9 +36,9 @@
 const int MOTOR_COUNT = 2;
 
 // Motor Pin Assignments (TMC2209 Step/Dir Mode)
-const int STEP_PINS[MOTOR_COUNT] = { 2, 4 };
-const int DIR_PINS[MOTOR_COUNT]  = { 3, 5 };
-const int ENABLE_PIN             = 10; // Common active LOW
+const int STEP_PINS[MOTOR_COUNT]   = { 2, 4 };
+const int DIR_PINS[MOTOR_COUNT]    = { 3, 5 };
+const int ENABLE_PINS[MOTOR_COUNT] = { 10, 9 }; // Bay 1: D10, Bay 2: D9 (Active LOW)
 
 // One IR sensor is installed at the paper exit of each bay.
 // The sensor confirms that a sheet actually crossed the outlet.
@@ -57,7 +56,7 @@ const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
 
-const unsigned int STEP_PULSE_DELAY_US = 900;
+const unsigned int STEP_PULSE_DELAY_US = 250;
 int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
 long remainingSheets[MOTOR_COUNT] = { -1, -1 };
@@ -73,12 +72,24 @@ void showPaperLcd(const String &line1, const String &line2 = "") {
 
 void sendStatus();
 
-void enableDrivers() {
-  digitalWrite(ENABLE_PIN, LOW); // Active LOW
+void enableDriver(int motorIdx) {
+  // Active LOW. Drives the assigned pin LOW, plus D10 if still wired to shared pin.
+  if (motorIdx == 0) {
+    digitalWrite(10, LOW);
+  } else if (motorIdx == 1) {
+    digitalWrite(9, LOW);
+    digitalWrite(10, LOW); // Also drive D10 LOW in case Bay 2 is still physically on D10
+  }
 }
 
-void disableDrivers() {
-  digitalWrite(ENABLE_PIN, HIGH);
+void disableDriver(int motorIdx) {
+  digitalWrite(10, HIGH);
+  digitalWrite(9, HIGH);
+}
+
+void disableAllDrivers() {
+  digitalWrite(10, HIGH);
+  digitalWrite(9, HIGH);
 }
 
 void pulseStep(int motorIdx) {
@@ -102,32 +113,38 @@ bool feedOneSheet(int bayIndex) {
   if (bayIndex < 0 || bayIndex >= MOTOR_COUNT) return false;
 
   const int sensorPin = PAPER_EXIT_SENSOR_PINS[bayIndex];
-  // If a sheet is already covering the exit sensor when feeding starts, keep
-  // running the motor and push that sheet through instead of treating it as an
-  // immediate failure. The 20-second timeout remains the final jam/sensor stop.
-  bool paperDetected = digitalRead(sensorPin) == PAPER_EXIT_BLOCKED_LEVEL;
-  bool noStockCheckReported = false;
-  const unsigned long feedStartedAt = millis();
-  for (long step = 0; step < MAX_STEPS_PER_SHEET; step++) {
-    // Keep the motor running while the paper travels toward and through the
-    // exit sensor. The sensor controls when this sheet is considered done.
+  
+  // Auto-detect baseline clear level at start of this feed
+  const int clearLevel = digitalRead(sensorPin);
+  
+  bool paperSeen = false;
+  const long MAX_STEPS = 45000;
+  
+  for (long step = 0; step < MAX_STEPS; step++) {
+    if (Serial.available()) {
+      String cmd = Serial.readStringUntil('\n');
+      cmd.trim();
+      if (cmd == "STOP") {
+        disableAllDrivers();
+        return false;
+      }
+    }
     pulseStep(bayIndex);
 
-    const bool blocked = digitalRead(sensorPin) == PAPER_EXIT_BLOCKED_LEVEL;
-    if (blocked) paperDetected = true;
-
-    // Count the sheet only after it has interrupted and then cleared the beam.
-    if (paperDetected && !blocked) return true;
-
-    const unsigned long feedElapsed = millis() - feedStartedAt;
-    if (!paperDetected && !noStockCheckReported && feedElapsed >= PAPER_NO_STOCK_CONFIRM_MS) {
-      noStockCheckReported = true;
-      Serial.println(paperLevelIsHigh(bayIndex)
-        ? "NO_EXIT_SIGNAL_STOCK_LEVEL_HIGH"
-        : "NO_EXIT_SIGNAL_STOCK_LEVEL_LOW");
+    // Sensor detects paper when state changes from the clear baseline
+    bool isBlocked = (digitalRead(sensorPin) != clearLevel);
+    
+    if (isBlocked) {
+      // Paper entered the exit sensor beam! Motor keeps running!
+      paperSeen = true;
+    } else if (paperSeen && !isBlocked) {
+      // Paper was seen in the sensor and has now completely left the beam!
+      // Stop immediately as requested:
+      return true; // Sheet successfully dispensed!
     }
-    if (feedElapsed >= PAPER_EXIT_TIMEOUT_MS) return false;
   }
+
+  // If 45,000 steps reached without complete exit:
   return false;
 }
 
@@ -171,22 +188,15 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
     return;
   }
 
-  // 1. Pre-check the software stock synchronized from the database.
-  if (!paperBayHasStock(idx)) {
-    showPaperLcd("Paper unavailable", paperName);
-    Serial.println("EMPTY:" + String(bayNum));
-    return;
-  }
-
   showPaperLcd("Dispensing", paperName);
 
-  enableDrivers();
+  enableDriver(idx);
   digitalWrite(DIR_PINS[idx], HIGH); // Forward feed
 
   int sheetsDispensed = 0;
   for (int s = 0; s < requestedSheets; s++) {
     if (!feedOneSheet(idx)) {
-      disableDrivers();
+      disableDriver(idx);
        showPaperLcd("Paper sensor wait", paperName);
        Serial.println("EMPTY:" + String(bayNum) + ":" + String(sheetsDispensed));
       sendStatus();
@@ -194,10 +204,11 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
     }
 
     sheetsDispensed++;
-    delay(40); // Short gap prevents a second sheet from immediately following.
+    Serial.println("SHEET_OK:" + String(bayNum) + ":" + String(sheetsDispensed));
+    delay(500); // 0.5s stabilization gap between sheets as requested
   }
 
-  disableDrivers();
+  disableDriver(idx);
   if (remainingSheets[idx] >= 0) {
     remainingSheets[idx] = max(0L, remainingSheets[idx] - sheetsDispensed);
     paperPadStock[idx] = (remainingSheets[idx] + sheetsPerPad[idx] - 1) / sheetsPerPad[idx];
@@ -211,14 +222,14 @@ void jogMotor(int bayNum, long steps) {
   int idx = bayNum - 1;
   if (idx < 0 || idx >= MOTOR_COUNT) return;
 
-  enableDrivers();
+  enableDriver(idx);
   digitalWrite(DIR_PINS[idx], steps >= 0 ? HIGH : LOW);
   long totalSteps = labs(steps);
 
   for (long s = 0; s < totalSteps; s++) {
     pulseStep(idx);
   }
-  disableDrivers();
+  disableDriver(idx);
   Serial.println("JOG_DONE:" + String(bayNum));
 }
 
@@ -262,6 +273,10 @@ void handleCommand(String cmd) {
       jogMotor(bay, steps);
     }
   }
+  else if (cmd == "STOP") {
+    disableAllDrivers();
+    Serial.println("STOP_OK");
+  }
 }
 
 void setup() {
@@ -271,10 +286,9 @@ void setup() {
   paperLcd.backlight();
   showPaperLcd("Paper dispenser", "Ready");
 
-  pinMode(ENABLE_PIN, OUTPUT);
-  disableDrivers(); // Start with motors disabled
-
   for (int i = 0; i < MOTOR_COUNT; i++) {
+    pinMode(ENABLE_PINS[i], OUTPUT);
+    digitalWrite(ENABLE_PINS[i], HIGH); // Start with motors disabled (HIGH)
     pinMode(STEP_PINS[i], OUTPUT);
     pinMode(DIR_PINS[i], OUTPUT);
     pinMode(PAPER_EXIT_SENSOR_PINS[i], INPUT_PULLUP);

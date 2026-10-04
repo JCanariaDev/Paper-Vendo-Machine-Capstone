@@ -35,7 +35,11 @@ int dispensePenFromUno(int channel, int quantity) {
       int first = response.indexOf(':');
       int second = response.indexOf(':', first + 1);
       if (first < 0 || second < 0) return 0;
-      return response.substring(second + 1).toInt();
+      int count = response.substring(second + 1).toInt();
+      if (count > 0) {
+        BALLPEN_SERIAL.println("BEEP:1800:150");
+      }
+      return count;
     }
 
     if (response.startsWith("BALLPEN_FAIL:")) {
@@ -73,6 +77,7 @@ int releaseVerifiedChange(int changeCents) {
     if (blocked && !previousBlocked) {
       countedCoins++;
       lastCoinAt = millis();
+      BALLPEN_SERIAL.println("BEEP:2000:70"); // Coin detected by hopper IR sensor
     }
     previousBlocked = blocked;
   }

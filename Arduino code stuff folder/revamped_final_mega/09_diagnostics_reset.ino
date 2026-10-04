@@ -1,4 +1,4 @@
-﻿// DIAGNOSTICS RESET
+// DIAGNOSTICS RESET
 // Split from revamped_final_mega.ino for readability.
 
 void runDiagnostics() {
@@ -31,6 +31,7 @@ void softResetMachineState() {
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   hopperManualRunning = false;
   BALLPEN_SERIAL.println("STOP");
+  UNO_SERIAL.println("STOP");
 
   noInterrupts();
   credits = 0;
@@ -44,6 +45,7 @@ void softResetMachineState() {
   activeTransactionStatus = "";
   activeChangeDueCents = 0;
   activeChangePaidCents = 0;
+  finishSentAt = 0;
   selectedPaperBrand = "Budget";
   activeCatalogType = "paper";
   cartCount = 0;

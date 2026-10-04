@@ -6,6 +6,7 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+DROP TABLE IF EXISTS machine_network_config CASCADE;
 DROP TABLE IF EXISTS machine_logs CASCADE;
 DROP TABLE IF EXISTS inventory_refill_history CASCADE;
 DROP TABLE IF EXISTS sales_transaction_lines CASCADE;
@@ -20,15 +21,52 @@ DROP TABLE IF EXISTS machine_online_status CASCADE;
 DROP TABLE IF EXISTS machine_options CASCADE;
 DROP TABLE IF EXISTS admins CASCADE;
 
--- Drop all existing RPC functions so signature changes are applied cleanly
+-- Legacy tables
+DROP TABLE IF EXISTS paper_channels CASCADE;
+DROP TABLE IF EXISTS paper_settings CASCADE;
+DROP TABLE IF EXISTS ballpen_settings CASCADE;
+
+-- Drop all existing RPC functions and triggers so signature changes are applied cleanly
 DROP FUNCTION IF EXISTS machine_reserve_transaction(INTEGER, JSONB) CASCADE;
 DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS machine_finish_transaction(UUID, JSONB) CASCADE;
 DROP FUNCTION IF EXISTS machine_mark_change_paid(UUID, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS machine_release_change(UUID) CASCADE;
+DROP FUNCTION IF EXISTS machine_record_failed_dispense_refund(UUID) CASCADE;
 DROP FUNCTION IF EXISTS machine_cancel_reserved_transaction(UUID, TEXT) CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS update_machine_online_heartbeat() CASCADE;
+DROP FUNCTION IF EXISTS log_sales_transaction_event() CASCADE;
+DROP FUNCTION IF EXISTS trg_sync_paper_compartment_presence() CASCADE;
+
+-- Dynamic cleanup to purge ANY lingering function overloads in public schema
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN (
+        SELECT p.oid::regprocedure::text AS func_sig
+        FROM pg_proc p
+        JOIN pg_namespace n ON p.pronamespace = n.oid
+        WHERE n.nspname = 'public'
+          AND p.proname IN (
+              'machine_reserve_transaction',
+              'machine_finish_transaction',
+              'machine_mark_change_paid',
+              'machine_release_change',
+              'machine_record_failed_dispense_refund',
+              'machine_cancel_reserved_transaction',
+              'admin_reassign_paper_bay',
+              'admin_reassign_pen_bay',
+              'update_machine_online_heartbeat',
+              'log_sales_transaction_event',
+              'trg_sync_paper_compartment_presence'
+          )
+    ) LOOP
+        EXECUTE 'DROP FUNCTION IF EXISTS ' || r.func_sig || ' CASCADE';
+    END LOOP;
+END $$;
 
 -- ------------------------------------------------------------------------------
 -- 1. Admins Table
@@ -247,6 +285,27 @@ CREATE TABLE machine_options (
 INSERT INTO machine_options (id, minimum_credits, maximum_credits, minimum_ballpens_per_transaction, maximum_ballpens_per_transaction)
 VALUES (1, 1, 30, 1, 5);
 GRANT SELECT, UPDATE ON machine_options TO anon, authenticated, service_role;
+
+-- ------------------------------------------------------------------------------
+-- 14. Staged Wi-Fi Configuration
+-- Passwords are AES-256-GCM encrypted by the backend before being written here.
+-- The backend device endpoint decrypts this row only for the ESP32 device token.
+-- ------------------------------------------------------------------------------
+CREATE TABLE machine_network_config (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    ssid TEXT NOT NULL CHECK (char_length(ssid) BETWEEN 1 AND 32),
+    password_ciphertext TEXT NOT NULL,
+    password_iv TEXT NOT NULL,
+    password_auth_tag TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING_DEVICE_APPLY'
+      CHECK (status IN ('PENDING_DEVICE_APPLY', 'APPLIED', 'ROLLED_BACK', 'FAILED')),
+    configured_by INTEGER REFERENCES admins(id),
+    configured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+REVOKE ALL ON TABLE machine_network_config FROM anon, authenticated;
+GRANT ALL ON TABLE machine_network_config TO service_role;
 
 CREATE INDEX idx_revamped_tx_created ON sales_transactions(created_at DESC);
 CREATE INDEX idx_revamped_tx_lines ON sales_transaction_lines(item_type, product_id);
@@ -929,23 +988,3 @@ GRANT EXECUTE ON FUNCTION machine_finish_transaction(UUID, JSONB, INTEGER) TO an
 GRANT EXECUTE ON FUNCTION admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) TO anon, authenticated;
 
--- ------------------------------------------------------------------------------
--- Staged Wi-Fi Configuration
--- Passwords are AES-256-GCM encrypted by the backend before being written here.
--- The backend device endpoint decrypts this row only for the ESP32 device token.
--- ------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS machine_network_config (
-    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    ssid TEXT NOT NULL CHECK (char_length(ssid) BETWEEN 1 AND 32),
-    password_ciphertext TEXT NOT NULL,
-    password_iv TEXT NOT NULL,
-    password_auth_tag TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'PENDING_DEVICE_APPLY'
-      CHECK (status IN ('PENDING_DEVICE_APPLY', 'APPLIED', 'ROLLED_BACK', 'FAILED')),
-    configured_by INTEGER REFERENCES admins(id),
-    configured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-REVOKE ALL ON TABLE machine_network_config FROM anon, authenticated;
-GRANT ALL ON TABLE machine_network_config TO service_role;

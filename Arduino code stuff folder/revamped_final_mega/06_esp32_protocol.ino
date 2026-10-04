@@ -1,4 +1,4 @@
-﻿// ESP32 PROTOCOL
+// ESP32 PROTOCOL
 // Split from revamped_final_mega.ino for readability.
 
 void startOrder() {
@@ -40,7 +40,7 @@ void startOrder() {
 }
 
 void executeDispensePlan(String message) {
-  const unsigned long DISPENSE_PLAN_TIMEOUT_MS = 45000;
+  const unsigned long DISPENSE_PLAN_TIMEOUT_MS = 60000;
   const unsigned long planStartedAt = millis();
 
   // Format: PLAN:<tx_id>:<tr_number>:<subtotal_cents>:<change_due_cents>:<encodedPlan>
@@ -79,18 +79,9 @@ void executeDispensePlan(String message) {
   activeChangePaidCents = 0;
   orderTotalCost = subtotalCents / 100.0;
 
-  // Render Status Bar (displays TR Number on top-left)
-  drawTftStatusBar();
-
-  // Show "Dispensing items..." on TFT
-  tft.fillScreen(COL_BLACK);
-  drawTftStatusBar();
-  tft.setTextColor(COL_WHITE);
-  tft.setTextSize(2);
-  printCentered("Dispensing Items...", tft.width() / 2, 130);
-  tft.setTextSize(1);
-  tft.setTextColor(COL_ORANGE);
-  printCentered("Please wait for your paper / pens", tft.width() / 2, 165);
+  // Transition screen state so summary animation stops completely
+  currentScreen = SCREEN_DISPENSING;
+  drawDispensingScreen();
 
   // -- STEP 1: GUARANTEED PRODUCT-FIRST PHYSICAL DISPENSING --
   String results = "";
@@ -139,6 +130,7 @@ void executeDispensePlan(String message) {
     Serial.println("Skipping change release after dispense plan timeout.");
     activeChangePaidCents = 0;
   } else if (activeChangeDueCents > 0) {
+    delay(200); // Allow 12V power rail to settle after NEMA motor de-energization
     tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
     tft.setTextSize(2);
     tft.setTextColor(COL_WHITE);
@@ -151,6 +143,7 @@ void executeDispensePlan(String message) {
 
   // -- STEP 3: NOTIFY ESP32 CLOUD GATEWAY --
   CLOUD_SERIAL.println("FINISH:" + activeTransactionId + ":" + results + ":" + String(activeChangePaidCents));
+  finishSentAt = millis(); // Start safety timeout for FINISHED: response
 }
 
 void beginReservedTransaction(String message) {
@@ -162,6 +155,7 @@ void beginReservedTransaction(String message) {
 }
 
 void finishUiAfterTransaction(String message) {
+  finishSentAt = 0; // Cancel safety timeout — response received
   // Format: FINISHED:<tx_id>:<tr_number>:<status>:<change_due>:<change_paid>
   int p1 = message.indexOf(':');
   int p2 = message.indexOf(':', p1 + 1);
@@ -206,6 +200,20 @@ void handleCloudCommand(String msg) {
   if (msg.startsWith("RESERVED:")) beginReservedTransaction(msg);
   else if (msg.startsWith("PLAN:")) executeDispensePlan(msg);
   else if (msg.startsWith("FINISHED:")) finishUiAfterTransaction(msg);
+  else if (msg.startsWith("ERR:FINISH_PENDING") || msg.startsWith("ERR:FINISH_RETRY_FAILED")) {
+    // The ESP32 could not finalise the transaction in Supabase.
+    // Instead of the generic showError() (which dumps to SCREEN_MAIN and
+    // destroys all receipt context), force the receipt screen so the
+    // customer still sees their TR number and dispense results.
+    Serial.println("Cloud finish error: " + msg);
+    if (finishSentAt > 0) {
+      finishSentAt = 0;
+      finishUiAfterTransaction("FINISHED:" + activeTransactionId + ":" +
+                               activeTrNumber + ":COMPLETED:" +
+                               String(activeChangeDueCents) + ":" +
+                               String(activeChangePaidCents));
+    }
+  }
   else if (msg.startsWith("ERR:")) showError(msg.substring(4));
   // -- Dynamic catalog sync from ESP32 --------------------------
   else if (msg.startsWith("PAPER_BAY:")) parsePaperBay(msg);
