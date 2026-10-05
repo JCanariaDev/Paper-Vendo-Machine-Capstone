@@ -56,7 +56,7 @@ const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
 
-const unsigned int STEP_PULSE_DELAY_US = 250;
+const unsigned int STEP_PULSE_DELAY_US = 800; // 800us provides strong starting torque & prevents NEMA motor stall
 int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
 long remainingSheets[MOTOR_COUNT] = { -1, -1 };
@@ -73,22 +73,20 @@ void showPaperLcd(const String &line1, const String &line2 = "") {
 void sendStatus();
 
 void enableDriver(int motorIdx) {
-  // Active LOW. Bay 1 uses D10, Bay 2 uses D9.
-  if (motorIdx >= 0 && motorIdx < MOTOR_COUNT) {
-    digitalWrite(ENABLE_PINS[motorIdx], LOW);
-  }
+  // Active LOW. Drives both D10 and D9 LOW to guarantee motor enable
+  // whether Bay 1 & Bay 2 have dedicated enable pins or share D10 / shield common.
+  digitalWrite(10, LOW);
+  digitalWrite(9, LOW);
 }
 
 void disableDriver(int motorIdx) {
-  if (motorIdx >= 0 && motorIdx < MOTOR_COUNT) {
-    digitalWrite(ENABLE_PINS[motorIdx], HIGH);
-  }
+  digitalWrite(10, HIGH);
+  digitalWrite(9, HIGH);
 }
 
 void disableAllDrivers() {
-  for (int i = 0; i < MOTOR_COUNT; i++) {
-    digitalWrite(ENABLE_PINS[i], HIGH);
-  }
+  digitalWrite(10, HIGH);
+  digitalWrite(9, HIGH);
 }
 
 void pulseStep(int motorIdx) {
@@ -120,12 +118,18 @@ bool feedOneSheet(int bayIndex) {
   const long MAX_STEPS = 45000;
   
   for (long step = 0; step < MAX_STEPS; step++) {
+    // Non-blocking serial check for emergency STOP without freezing the stepper loop
     if (Serial.available()) {
-      String cmd = Serial.readStringUntil('\n');
-      cmd.trim();
-      if (cmd == "STOP") {
-        disableAllDrivers();
-        return false;
+      char c = Serial.peek();
+      if (c == 'S') {
+        String cmd = Serial.readStringUntil('\n');
+        cmd.trim();
+        if (cmd == "STOP") {
+          disableAllDrivers();
+          return false;
+        }
+      } else {
+        Serial.read(); // Discard noise / unhandled bytes
       }
     }
     pulseStep(bayIndex);
@@ -280,6 +284,7 @@ void handleCommand(String cmd) {
 
 void setup() {
   Serial.begin(9600); // UART Serial to Mega
+  Serial.setTimeout(100);
   Wire.begin();
   paperLcd.init();
   paperLcd.backlight();

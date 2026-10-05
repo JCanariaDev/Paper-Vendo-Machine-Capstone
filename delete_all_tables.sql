@@ -33,6 +33,8 @@ DROP FUNCTION IF EXISTS machine_mark_change_paid(UUID, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS machine_release_change(UUID) CASCADE;
 DROP FUNCTION IF EXISTS machine_record_failed_dispense_refund(UUID) CASCADE;
 DROP FUNCTION IF EXISTS machine_cancel_reserved_transaction(UUID, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS machine_recover_interrupted_reservations(TEXT) CASCADE;
+DROP FUNCTION IF EXISTS machine_recover_interrupted_reservations() CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS update_machine_online_heartbeat() CASCADE;
@@ -56,6 +58,7 @@ BEGIN
               'machine_release_change',
               'machine_record_failed_dispense_refund',
               'machine_cancel_reserved_transaction',
+              'machine_recover_interrupted_reservations',
               'admin_reassign_paper_bay',
               'admin_reassign_pen_bay',
               'update_machine_online_heartbeat',

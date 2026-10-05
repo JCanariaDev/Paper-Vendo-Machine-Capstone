@@ -12,6 +12,16 @@
 -- 4. Enables the administrator dashboard to click "Record Refund" for any credit inserted.
 -- ==============================================================================
 
+-- Relax machine_logs check constraint to accept WARN and WARNING
+DO $$
+BEGIN
+    ALTER TABLE machine_logs DROP CONSTRAINT IF EXISTS machine_logs_level_check;
+    ALTER TABLE machine_logs ADD CONSTRAINT machine_logs_level_check 
+        CHECK (level IN ('DEBUG', 'INFO', 'WARN', 'WARNING', 'ERROR'));
+EXCEPTION WHEN OTHERS THEN
+    NULL;
+END $$;
+
 CREATE OR REPLACE FUNCTION machine_recover_interrupted_reservations(p_reason TEXT DEFAULT 'POWER_OUTAGE_OR_REBOOT')
 RETURNS INTEGER
 LANGUAGE plpgsql AS $$
@@ -47,13 +57,13 @@ BEGIN
         -- 3. Transition status to FAILED_DISPENSE so dashboard can record cash refund
         UPDATE sales_transactions
            SET status = 'FAILED_DISPENSE',
-               failure_reason = COALESCE(p_reason, 'POWER_OUTAGE_OR_REBOOT'),
-               completed_at = NOW()
-         WHERE id = v_tx.id;
+                failure_reason = COALESCE(p_reason, 'POWER_OUTAGE_OR_REBOOT'),
+                completed_at = NOW()
+          WHERE id = v_tx.id;
 
         -- 4. Log the recovery event in machine_logs
         INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
-        VALUES ('WARN', 'ESP32', 'POWER_OUTAGE_RECOVERY',
+        VALUES ('WARNING', 'ESP32', 'POWER_OUTAGE_RECOVERY',
                 'Unresolved reserved transaction cleared upon machine reboot/startup',
                 v_tx.id, v_tx.tr_number,
                 jsonb_build_object(

@@ -34,6 +34,8 @@ DROP FUNCTION IF EXISTS machine_mark_change_paid(UUID, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS machine_release_change(UUID) CASCADE;
 DROP FUNCTION IF EXISTS machine_record_failed_dispense_refund(UUID) CASCADE;
 DROP FUNCTION IF EXISTS machine_cancel_reserved_transaction(UUID, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS machine_recover_interrupted_reservations(TEXT) CASCADE;
+DROP FUNCTION IF EXISTS machine_recover_interrupted_reservations() CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS update_machine_online_heartbeat() CASCADE;
@@ -57,6 +59,7 @@ BEGIN
               'machine_release_change',
               'machine_record_failed_dispense_refund',
               'machine_cancel_reserved_transaction',
+              'machine_recover_interrupted_reservations',
               'admin_reassign_paper_bay',
               'admin_reassign_pen_bay',
               'update_machine_online_heartbeat',
@@ -194,7 +197,7 @@ CREATE TABLE sales_transaction_lines (
 CREATE TABLE machine_logs (
     id BIGSERIAL PRIMARY KEY,
     level TEXT NOT NULL DEFAULT 'INFO'
-      CHECK (level IN ('DEBUG', 'INFO', 'WARNING', 'ERROR')),
+      CHECK (level IN ('DEBUG', 'INFO', 'WARN', 'WARNING', 'ERROR')),
     source TEXT NOT NULL DEFAULT 'SYSTEM',
     event_type TEXT NOT NULL,
     message TEXT NOT NULL,
@@ -1013,7 +1016,7 @@ BEGIN
          WHERE id = v_tx.id;
 
         INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
-        VALUES ('WARN', 'ESP32', 'POWER_OUTAGE_RECOVERY',
+        VALUES ('WARNING', 'ESP32', 'POWER_OUTAGE_RECOVERY',
                 'Unresolved reserved transaction cleared upon machine reboot/startup',
                 v_tx.id, v_tx.tr_number,
                 jsonb_build_object(
