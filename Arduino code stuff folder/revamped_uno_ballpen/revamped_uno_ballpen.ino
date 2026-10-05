@@ -188,6 +188,9 @@ void setup() {
   ballpenStepper.setSpeed(MOTOR_SPEED_RPM);
   disableMotor();
   setIndicator("READY");
+  tone(BUZZER_PIN, 1200, 100);
+  delay(130);
+  tone(BUZZER_PIN, 1800, 150);
   Serial.println("BALLPEN_READY");
 }
 

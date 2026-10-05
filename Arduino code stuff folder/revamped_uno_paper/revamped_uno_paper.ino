@@ -73,23 +73,22 @@ void showPaperLcd(const String &line1, const String &line2 = "") {
 void sendStatus();
 
 void enableDriver(int motorIdx) {
-  // Active LOW. Drives the assigned pin LOW, plus D10 if still wired to shared pin.
-  if (motorIdx == 0) {
-    digitalWrite(10, LOW);
-  } else if (motorIdx == 1) {
-    digitalWrite(9, LOW);
-    digitalWrite(10, LOW); // Also drive D10 LOW in case Bay 2 is still physically on D10
+  // Active LOW. Bay 1 uses D10, Bay 2 uses D9.
+  if (motorIdx >= 0 && motorIdx < MOTOR_COUNT) {
+    digitalWrite(ENABLE_PINS[motorIdx], LOW);
   }
 }
 
 void disableDriver(int motorIdx) {
-  digitalWrite(10, HIGH);
-  digitalWrite(9, HIGH);
+  if (motorIdx >= 0 && motorIdx < MOTOR_COUNT) {
+    digitalWrite(ENABLE_PINS[motorIdx], HIGH);
+  }
 }
 
 void disableAllDrivers() {
-  digitalWrite(10, HIGH);
-  digitalWrite(9, HIGH);
+  for (int i = 0; i < MOTOR_COUNT; i++) {
+    digitalWrite(ENABLE_PINS[i], HIGH);
+  }
 }
 
 void pulseStep(int motorIdx) {
@@ -287,8 +286,9 @@ void setup() {
   showPaperLcd("Paper dispenser", "Ready");
 
   for (int i = 0; i < MOTOR_COUNT; i++) {
+    digitalWrite(ENABLE_PINS[i], HIGH); // Drive HIGH before OUTPUT mode to prevent glitch enable
     pinMode(ENABLE_PINS[i], OUTPUT);
-    digitalWrite(ENABLE_PINS[i], HIGH); // Start with motors disabled (HIGH)
+    digitalWrite(ENABLE_PINS[i], HIGH);
     pinMode(STEP_PINS[i], OUTPUT);
     pinMode(DIR_PINS[i], OUTPUT);
     pinMode(PAPER_EXIT_SENSOR_PINS[i], INPUT_PULLUP);

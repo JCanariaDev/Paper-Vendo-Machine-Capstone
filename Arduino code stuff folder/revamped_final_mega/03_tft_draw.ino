@@ -56,13 +56,17 @@ void drawIdleScreen() {
     return;
   }
 
-  printCentered("Connect to WiFi", tft.width() / 2, 140);
-  printCentered("first.", tft.width() / 2, 165);
-
+  printCentered("Starting System...", tft.width() / 2, 130);
+  tft.setTextColor(COL_ORANGE);
   tft.setTextSize(1);
+  printCentered("Connecting to Wi-Fi / Cloud...", tft.width() / 2, 155);
+  tft.setTextColor(COL_WHITE);
+  tft.setTextSize(1);
+  printCentered("Coin slot disabled while booting", tft.width() / 2, 175);
+
   if (wifiStatus == WIFI_STATUS_NOT_FOUND) {
     tft.setTextColor(COL_RED);
-    printCentered("WiFi can't be detected", tft.width() / 2, 200);
+    printCentered("WiFi can't be detected", tft.width() / 2, 205);
   }
 }
 

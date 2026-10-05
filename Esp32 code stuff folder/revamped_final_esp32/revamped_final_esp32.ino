@@ -349,12 +349,18 @@ void updateStatusKey(const String &key, const String &value) {
 
 }
 
+int runtimeCredits = 0;
+bool pendingCreditsSync = false;
+unsigned long lastCreditPulseAt = 0;
+
 void handleCreditUpdate(String message) {
   int separator = message.indexOf(':');
   if (separator < 0) return;
   int credits = message.substring(separator + 1).toInt();
   if (credits < 0) return;
-  updateStatusKey("current_credits", String(credits));
+  runtimeCredits = credits;
+  pendingCreditsSync = true;
+  lastCreditPulseAt = millis();
 }
 
 bool sendOnlineHeartbeat() {
@@ -752,6 +758,16 @@ void updatePaperBayPresence(const String &message) {
   }
 }
 
+// Recovers any transactions stuck in 'RESERVED' state due to an unexpected power outage or reboot.
+void recoverInterruptedTransactions() {
+  if (!wifiConnected) return;
+  DynamicJsonDocument request(256), response(512);
+  request["p_reason"] = "POWER_OUTAGE_OR_REBOOT";
+  if (callRpc("machine_recover_interrupted_reservations", request, response)) {
+    Serial.println("Power recovery check completed: cleared unresolved reservations.");
+  }
+}
+
 void handleMegaMessage(String message) {
   message.trim();
   if (message.startsWith("CREDIT:")) handleCreditUpdate(message);
@@ -780,6 +796,7 @@ void softResetRuntime() {
   wifiConnected = connectToWifi(10000);
   sendWifiStatus();
   if (wifiConnected) {
+    recoverInterruptedTransactions();
     sendOnlineHeartbeat();
     updateMachineStatus();
     syncLiveCatalogToMega();
@@ -798,6 +815,7 @@ void setup() {
   sendWifiStatus();
   if (wifiConnected) {
     fetchAndApplyRemoteNetworkConfig();
+    recoverInterruptedTransactions();
     sendOnlineHeartbeat();
     updateMachineStatus();
     syncLiveCatalogToMega();
@@ -812,6 +830,14 @@ void loop() {
   ensureWifi();
 
   processPendingFinish();
+
+  // Defer credit status update until 2.5s of silence so we don't surge Wi-Fi RF power while coins are dropping
+  if (pendingCreditsSync && (millis() - lastCreditPulseAt >= 2500)) {
+    pendingCreditsSync = false;
+    if (wifiConnected) {
+      updateStatusKey("current_credits", String(runtimeCredits));
+    }
+  }
 
   if (millis() - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatAt = millis();
@@ -836,7 +862,10 @@ void loop() {
     if (nowConnected != wifiConnected) {
       wifiConnected = nowConnected;
       sendWifiStatus();
-      if (wifiConnected) fetchAndApplyRemoteNetworkConfig();
+      if (wifiConnected) {
+        fetchAndApplyRemoteNetworkConfig();
+        recoverInterruptedTransactions();
+      }
     }
 
     if (!nowConnected) {

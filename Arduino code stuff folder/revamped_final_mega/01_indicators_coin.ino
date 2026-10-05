@@ -1,4 +1,4 @@
-﻿// INDICATORS COIN
+// INDICATORS COIN
 // Split from revamped_final_mega.ino for readability.
 
 void setMachineIndicator(IndicatorState state, bool sound) {
@@ -57,7 +57,7 @@ void coinInterrupt() {
 
   static unsigned long lastPulse = 0;
   // 50ms debounce: filters electrical noise while still capturing all pulse bursts
-  // from ?1 (1 pulse), ?5 (5 pulses), ?10 (10 pulses), ?20 (20 pulses)
+  // from ₱1 (1 pulse), ₱5 (5 pulses), ₱10 (10 pulses), ₱20 (20 pulses)
   // Coin acceptors typically send pulses 50-80ms apart within a burst.
   if (now - lastPulse > 50) {
     credits++;            // Count every pulse — including the remainder of a multi-peso coin

@@ -1,4 +1,4 @@
-﻿// TFT RUNTIME
+// TFT RUNTIME
 // Split from revamped_final_mega.ino for readability.
 
 void tftUiBegin() {
@@ -35,6 +35,11 @@ void tftUiSetWifiStatus(int status) {
   wifiStatus = (WifiStatus)status;
   uiWifiConnected = (status == WIFI_STATUS_CONNECTED);
   if (!orderInProgress) refreshMachineAvailability(changed);
+  if (status == WIFI_STATUS_CONNECTED && !orderInProgress && credits < maximumCreditsAllowed) {
+    setCoinAcceptance(true);
+  } else if (status != WIFI_STATUS_CONNECTED) {
+    setCoinAcceptance(false);
+  }
   if (currentScreen == SCREEN_IDLE || currentScreen == SCREEN_MAIN) {
     redrawCurrentScreen();
   } else {

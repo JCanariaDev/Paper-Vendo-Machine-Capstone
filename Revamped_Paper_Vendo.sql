@@ -977,6 +977,56 @@ BEGIN
            updated_at = NOW()
      WHERE compartment_number = p_compartment_number;
 END;
+-- Recover Interrupted Transactions after Power Outage or Sudden Reboot
+CREATE OR REPLACE FUNCTION machine_recover_interrupted_reservations(p_reason TEXT DEFAULT 'POWER_OUTAGE_OR_REBOOT')
+RETURNS INTEGER
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_tx RECORD;
+    v_line RECORD;
+    v_coin JSONB;
+    v_recovered_count INTEGER := 0;
+BEGIN
+    FOR v_tx IN 
+        SELECT * FROM sales_transactions 
+        WHERE status = 'RESERVED' 
+        FOR UPDATE 
+    LOOP
+        FOR v_line IN SELECT * FROM sales_transaction_lines WHERE transaction_id = v_tx.id LOOP
+            IF v_line.item_type = 'pen' THEN
+                UPDATE ballpen_compartments
+                   SET reserved_piece_stock = GREATEST(0, reserved_piece_stock - v_line.qty_requested), updated_at = NOW()
+                 WHERE dispenser_channel = v_line.physical_channel;
+            END IF;
+        END LOOP;
+
+        FOR v_coin IN SELECT value FROM jsonb_array_elements(COALESCE(v_tx.change_plan, '[]'::jsonb)) LOOP
+            UPDATE change_inventory
+               SET reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)), updated_at = NOW()
+             WHERE hopper_channel = ((v_coin->>'hopper_channel')::INTEGER);
+        END LOOP;
+
+        UPDATE sales_transactions
+           SET status = 'FAILED_DISPENSE',
+               failure_reason = COALESCE(p_reason, 'POWER_OUTAGE_OR_REBOOT'),
+               completed_at = NOW()
+         WHERE id = v_tx.id;
+
+        INSERT INTO machine_logs (level, source, event_type, message, transaction_id, tr_number, metadata)
+        VALUES ('WARN', 'ESP32', 'POWER_OUTAGE_RECOVERY',
+                'Unresolved reserved transaction cleared upon machine reboot/startup',
+                v_tx.id, v_tx.tr_number,
+                jsonb_build_object(
+                    'credit_received_cents', v_tx.credit_received_cents,
+                    'subtotal_cents', v_tx.subtotal_cents,
+                    'change_due_cents', v_tx.change_due_cents
+                ));
+
+        v_recovered_count := v_recovered_count + 1;
+    END LOOP;
+
+    RETURN v_recovered_count;
+END;
 $$;
 
 GRANT EXECUTE ON FUNCTION machine_reserve_transaction(INTEGER, JSONB) TO anon, authenticated;
@@ -984,6 +1034,7 @@ GRANT EXECUTE ON FUNCTION machine_mark_change_paid(UUID, INTEGER) TO anon, authe
 GRANT EXECUTE ON FUNCTION machine_release_change(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_record_failed_dispense_refund(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_cancel_reserved_transaction(UUID, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION machine_recover_interrupted_reservations(TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION machine_finish_transaction(UUID, JSONB, INTEGER) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) TO anon, authenticated;

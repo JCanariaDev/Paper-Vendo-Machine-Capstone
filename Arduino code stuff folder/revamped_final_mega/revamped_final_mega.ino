@@ -324,7 +324,7 @@ void setup() {
 
   pinMode(COIN_PIN, INPUT_PULLUP);
   pinMode(COIN_INHIBIT_PIN, OUTPUT);
-  setCoinAcceptance(true);
+  setCoinAcceptance(false); // Coin acceptor disabled on boot until Wi-Fi & catalog are ready
   attachInterrupt(digitalPinToInterrupt(COIN_PIN), coinInterrupt, FALLING);
 
   pinMode(CHANGE_HOPPER_MOTOR_PIN, OUTPUT);
@@ -345,24 +345,40 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  // HW RESET (A8)
-  if (digitalRead(HW_RESET_BTN_PIN) == LOW && now >= hwResetDebounceUntil) {
-    hwResetDebounceUntil = now + 1000;
-    Serial.println("HW RESET BUTTON (A8): triggering watchdog reboot...");
-    Serial.flush();
-    setMachineIndicator(INDICATOR_ERROR, false);
-    BALLPEN_SERIAL.println("BEEP:500:200");
-    delay(200);
-    noInterrupts();
-    wdt_enable(WDTO_15MS);
-    while (true) {}
+  // HW RESET (A8) - Requires holding button continuously for 800ms to ignore motor EMF/noise spikes
+  static unsigned long hwResetPressedAt = 0;
+  if (digitalRead(HW_RESET_BTN_PIN) == LOW) {
+    if (hwResetPressedAt == 0) {
+      hwResetPressedAt = now;
+    } else if (now - hwResetPressedAt >= 800 && now >= hwResetDebounceUntil) {
+      hwResetDebounceUntil = now + 2000;
+      hwResetPressedAt = 0;
+      Serial.println("HW RESET BUTTON (A8 held >800ms): triggering watchdog reboot...");
+      Serial.flush();
+      setMachineIndicator(INDICATOR_ERROR, false);
+      BALLPEN_SERIAL.println("BEEP:500:200");
+      delay(200);
+      noInterrupts();
+      wdt_enable(WDTO_15MS);
+      while (true) {}
+    }
+  } else {
+    hwResetPressedAt = 0;
   }
 
-  // SW RESET (A9)
-  if (digitalRead(SW_RESET_BTN_PIN) == LOW && now >= swResetDebounceUntil) {
-    swResetDebounceUntil = now + 500;
-    Serial.println("SW RESET BUTTON (A9): performing software reset...");
-    softResetMachineState();
+  // SW RESET (A9) - Requires holding button continuously for 300ms
+  static unsigned long swResetPressedAt = 0;
+  if (digitalRead(SW_RESET_BTN_PIN) == LOW) {
+    if (swResetPressedAt == 0) {
+      swResetPressedAt = now;
+    } else if (now - swResetPressedAt >= 300 && now >= swResetDebounceUntil) {
+      swResetDebounceUntil = now + 1000;
+      swResetPressedAt = 0;
+      Serial.println("SW RESET BUTTON (A9 held >300ms): performing software reset...");
+      softResetMachineState();
+    }
+  } else {
+    swResetPressedAt = 0;
   }
 
   tftUiLoop();
