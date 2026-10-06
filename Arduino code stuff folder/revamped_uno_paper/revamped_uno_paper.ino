@@ -61,8 +61,10 @@ int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
 long remainingSheets[MOTOR_COUNT] = { -1, -1 };
 LiquidCrystal_I2C paperLcd(PAPER_LCD_ADDRESS, PAPER_LCD_COLUMNS, PAPER_LCD_ROWS);
+bool hasPaperLcd = false;
 
 void showPaperLcd(const String &line1, const String &line2 = "") {
+  if (!hasPaperLcd) return;
   paperLcd.clear();
   paperLcd.setCursor(0, 0);
   paperLcd.print(line1.substring(0, PAPER_LCD_COLUMNS));
@@ -73,20 +75,26 @@ void showPaperLcd(const String &line1, const String &line2 = "") {
 void sendStatus();
 
 void enableDriver(int motorIdx) {
-  // Active LOW. Drives both D10 and D9 LOW to guarantee motor enable
-  // whether Bay 1 & Bay 2 have dedicated enable pins or share D10 / shield common.
-  digitalWrite(10, LOW);
+  // Active LOW. Drives Pin 8 (CNC Shield common enable), Pin 9, and Pin 10 LOW
+  // to ensure stepper drivers are enabled under ALL wiring topologies.
+  digitalWrite(8, LOW);
   digitalWrite(9, LOW);
+  digitalWrite(10, LOW);
+  digitalWrite(13, HIGH); // LED ON indicates motor active
 }
 
 void disableDriver(int motorIdx) {
-  digitalWrite(10, HIGH);
+  digitalWrite(8, HIGH);
   digitalWrite(9, HIGH);
+  digitalWrite(10, HIGH);
+  digitalWrite(13, LOW); // LED OFF indicates motor idle
 }
 
 void disableAllDrivers() {
-  digitalWrite(10, HIGH);
+  digitalWrite(8, HIGH);
   digitalWrite(9, HIGH);
+  digitalWrite(10, HIGH);
+  digitalWrite(13, LOW);
 }
 
 void pulseStep(int motorIdx) {
@@ -115,7 +123,7 @@ bool feedOneSheet(int bayIndex) {
   const int clearLevel = digitalRead(sensorPin);
   
   bool paperSeen = false;
-  const long MAX_STEPS = 45000;
+  const long MAX_STEPS = 10000; // ~16 seconds max per sheet at 800us step timing
   
   for (long step = 0; step < MAX_STEPS; step++) {
     // Non-blocking serial check for emergency STOP without freezing the stepper loop
@@ -239,6 +247,7 @@ void jogMotor(int bayNum, long steps) {
 void handleCommand(String cmd) {
   cmd.trim();
   if (cmd.startsWith("DISPENSE:")) {
+    Serial.println("ACK:DISPENSE"); // Immediate acknowledge back to Mega
     // Format: DISPENSE:<bay_num>:<sheet_count>
     int first = cmd.indexOf(':');
     int second = cmd.indexOf(':', first + 1);
@@ -285,15 +294,35 @@ void handleCommand(String cmd) {
 void setup() {
   Serial.begin(9600); // UART Serial to Mega
   Serial.setTimeout(100);
+
+  // Status LED on Uno (Pin 13)
+  pinMode(13, OUTPUT);
+  digitalWrite(13, HIGH); // Turn LED ON during boot
+
+  // Configure CNC Shield Enable Pin 8 + Custom Enable Pins 9 & 10 (Active LOW)
+  pinMode(8, OUTPUT);
+  digitalWrite(8, HIGH); // Disabled
+  pinMode(9, OUTPUT);
+  digitalWrite(9, HIGH); // Disabled
+  pinMode(10, OUTPUT);
+  digitalWrite(10, HIGH); // Disabled
+
+  // Safe I2C probe to prevent infinite lockup if no 1602 LCD is connected
   Wire.begin();
-  paperLcd.init();
-  paperLcd.backlight();
-  showPaperLcd("Paper dispenser", "Ready");
+  #if defined(WIRE_HAS_TIMEOUT)
+  Wire.setWireTimeout(25000, true);
+  #endif
+  Wire.beginTransmission(PAPER_LCD_ADDRESS);
+  if (Wire.endTransmission() == 0) {
+    hasPaperLcd = true;
+    paperLcd.init();
+    paperLcd.backlight();
+    showPaperLcd("Paper dispenser", "Ready");
+  } else {
+    hasPaperLcd = false;
+  }
 
   for (int i = 0; i < MOTOR_COUNT; i++) {
-    digitalWrite(ENABLE_PINS[i], HIGH); // Drive HIGH before OUTPUT mode to prevent glitch enable
-    pinMode(ENABLE_PINS[i], OUTPUT);
-    digitalWrite(ENABLE_PINS[i], HIGH);
     pinMode(STEP_PINS[i], OUTPUT);
     pinMode(DIR_PINS[i], OUTPUT);
     pinMode(PAPER_EXIT_SENSOR_PINS[i], INPUT_PULLUP);
@@ -303,6 +332,7 @@ void setup() {
   }
 
   delay(200);
+  digitalWrite(13, LOW); // Boot finished, LED OFF
   Serial.println("UNO_PAPER_READY");
 }
 

@@ -71,10 +71,8 @@ const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
 // UART cable/controller is unavailable.
 // Must cover the Paper Uno's 20-second sensor/jam safety window. A normal
 // dispense still returns immediately when the exit sensor clears.
-const unsigned long PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS = 30000;
-// Safety timeout: if ESP32 doesn't reply with FINISHED: within this window
-// after the Mega sends FINISH:, force-transition to the receipt screen.
-const unsigned long FINISH_RESPONSE_TIMEOUT_MS = 15000;
+const unsigned long PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS = 12000; // 12s per sheet max
+const unsigned long FINISH_RESPONSE_TIMEOUT_MS = 6000; // 6s cloud response safety window
 unsigned long finishSentAt = 0;
 
 const int HOPPER_RELAY_ON  = LOW;  // LOW  = Relay LED ON  -> Motor ON
@@ -401,9 +399,10 @@ void loop() {
       millis() - finishSentAt > FINISH_RESPONSE_TIMEOUT_MS) {
     Serial.println("FINISH response timeout; forcing receipt screen.");
     finishSentAt = 0;
-    // Synthesise a FINISHED message from the data we already have
+    // Synthesise a FINISHED message using actual result status
+    String fallbackStatus = (dispenseResultSummary.indexOf("FAILED") >= 0) ? "FAILED_DISPENSE" : "COMPLETED";
     finishUiAfterTransaction("FINISHED:" + activeTransactionId + ":" +
-                             activeTrNumber + ":COMPLETED:" +
+                             activeTrNumber + ":" + fallbackStatus + ":" +
                              String(activeChangeDueCents) + ":" +
                              String(activeChangePaidCents));
   }

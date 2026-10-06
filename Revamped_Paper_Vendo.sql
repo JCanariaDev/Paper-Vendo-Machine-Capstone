@@ -731,7 +731,7 @@ BEGIN
     END LOOP;
 
     -- Deduct released coins and free the unused reservation.
-    FOR v_coin IN SELECT value FROM jsonb_array_elements(v_tx.change_plan) LOOP
+    FOR v_coin IN SELECT value FROM jsonb_array_elements(COALESCE(v_tx.change_plan, '[]'::jsonb)) LOOP
         UPDATE change_inventory 
            SET reserved_coin_count = GREATEST(0, reserved_coin_count - ((v_coin->>'count')::INTEGER)),
                current_coin_count = GREATEST(0, current_coin_count - LEAST(v_paid / ((v_coin->>'denomination_cents')::INTEGER), (v_coin->>'count')::INTEGER)),

@@ -125,6 +125,17 @@ void executeDispensePlan(String message) {
     start = end + 1;
   }
 
+  // Show clear status on screen if any physical dispense failed
+  if (dispenseResultSummary.indexOf("FAILED") >= 0) {
+    tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
+    tft.setTextSize(2);
+    tft.setTextColor(COL_RED);
+    printCentered("Dispense Failed!", tft.width() / 2, 130);
+    tft.setTextSize(1);
+    tft.setTextColor(COL_WHITE);
+    printCentered("Processing refund / change...", tft.width() / 2, 160);
+  }
+
   // -- STEP 2: NON-BLOCKING COIN HOPPER CHANGE ATTEMPT --
   if (millis() - planStartedAt >= DISPENSE_PLAN_TIMEOUT_MS) {
     Serial.println("Skipping change release after dispense plan timeout.");

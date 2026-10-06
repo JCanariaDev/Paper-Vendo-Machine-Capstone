@@ -159,16 +159,20 @@ int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName)
   UNO_SERIAL.println(command);
 
   unsigned long startedAt = millis();
-  const unsigned long timeoutMs = max(
-    6000UL,
-    PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS * (unsigned long)max(1, sheetCount)
+  const unsigned long timeoutMs = min(
+    25000UL,
+    max(6000UL, PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS * (unsigned long)max(1, sheetCount))
   );
   while (millis() - startedAt < timeoutMs) {
     if (UNO_SERIAL.available()) {
       String response = UNO_SERIAL.readStringUntil('\n');
       response.trim();
       Serial.print("Paper Uno -> ");
-      if (response.startsWith("SHEET_OK:")) {
+      Serial.println(response);
+      if (response.startsWith("ACK:DISPENSE")) {
+        Serial.println("Paper Uno acknowledged dispense command.");
+      }
+      else if (response.startsWith("SHEET_OK:")) {
         // IR sensor confirmed a sheet crossed the exit sensor
         BALLPEN_SERIAL.println("BEEP:1800:100");
       }
