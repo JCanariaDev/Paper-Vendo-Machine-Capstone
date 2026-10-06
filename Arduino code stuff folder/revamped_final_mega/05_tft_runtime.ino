@@ -35,7 +35,7 @@ void tftUiSetWifiStatus(int status) {
   wifiStatus = (WifiStatus)status;
   uiWifiConnected = (status == WIFI_STATUS_CONNECTED);
   if (!orderInProgress) refreshMachineAvailability(changed);
-  if (status == WIFI_STATUS_CONNECTED && !orderInProgress && credits < maximumCreditsAllowed) {
+  if (status == WIFI_STATUS_CONNECTED && catalogLoaded && !orderInProgress && credits < maximumCreditsAllowed) {
     setCoinAcceptance(true);
   } else if (status != WIFI_STATUS_CONNECTED) {
     setCoinAcceptance(false);

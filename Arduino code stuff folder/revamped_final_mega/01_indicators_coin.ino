@@ -33,9 +33,15 @@ void refreshMachineAvailability(bool sound) {
   }
 }
 
-void setCoinAcceptance(bool allowed) {
-  if (credits >= maximumCreditsAllowed) {
-    allowed = false;
+void setCoinAcceptance(bool allowed, bool force) {
+  if (!force) {
+    if (credits >= maximumCreditsAllowed || !uiWifiConnected || !catalogLoaded) {
+      allowed = false;
+    }
+  } else {
+    if (credits >= maximumCreditsAllowed) {
+      allowed = false;
+    }
   }
   int targetLevel = allowed ? coinRelayOnLevel : coinRelayOffLevel;
   coinAcceptorEnabled = allowed;

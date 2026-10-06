@@ -10,29 +10,32 @@ void parsePaperBay(String msg) {
   int p4 = data.indexOf(':', p3 + 1);
   int p5 = data.indexOf(':', p4 + 1);
   int p6 = data.indexOf(':', p5 + 1);
-  if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0) return;
+  if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0 || p6 < 0) {
+    Serial.println("WARN: Rejected malformed PAPER_BAY packet: " + msg);
+    return;
+  }
 
   int bayNum   = data.substring(0, p1).toInt();          // 1-PAPER_COUNT
   int prodId   = data.substring(p1 + 1, p2).toInt();
   String pres  = data.substring(p2 + 1, p3);             // HIGH or LOW
   int sheetsPerPad = data.substring(p3 + 1, p4).toInt();
-  int currentPadStock;
-  int priceCents;
-  String name;
-  if (p6 >= 0) {
-    currentPadStock = data.substring(p4 + 1, p5).toInt();
-    priceCents = data.substring(p5 + 1, p6).toInt();
-    name = data.substring(p6 + 1);
-  } else {
-    // Legacy format fallback while the ESP32 is being updated.
-    currentPadStock = (pres == "HIGH") ? 1 : 0;
-    priceCents = data.substring(p4 + 1, p5).toInt();
-    name = data.substring(p5 + 1);
-  }
+  int currentPadStock = data.substring(p4 + 1, p5).toInt();
+  int priceCents = data.substring(p5 + 1, p6).toInt();
+  String name = data.substring(p6 + 1);
   name.trim();
 
   int idx = bayNum - 1;
-  if (idx < 0 || idx >= PAPER_COUNT) return;
+  if (idx < 0 || idx >= PAPER_COUNT) {
+    Serial.println("WARN: Invalid paper bay number: " + String(bayNum));
+    return;
+  }
+
+  // Strict name validation: reject garbage or leaked tokens
+  if (name.length() < 2 || name.startsWith("WIFI") || name.startsWith("OPTIONS") ||
+      name.startsWith("PEN_BAY") || name.startsWith("PAPER_BAY") || name == "5" || name.indexOf(':') >= 0) {
+    Serial.println("WARN: Rejected corrupted paper name: '" + name + "'");
+    return;
+  }
 
   const int normalizedPadStock = max(0, currentPadStock);
   const int normalizedSheetsPerPad = max(1, sheetsPerPad);
@@ -50,6 +53,7 @@ void parsePaperBay(String msg) {
   paperCatalog[idx].isPaperPresent = currentPadStock > 0;
   name.toCharArray(paperCatalogNames[idx], 32);
   paperCatalog[idx].name = paperCatalogNames[idx];
+  paperBaysLoaded[idx] = true;
   UNO_SERIAL.println("STOCK:" + String(bayNum) + ":" + String(paperCatalog[idx].currentPadStock) + ":" + String(paperCatalog[idx].sheetsPerPad));
 
   Serial.print("Catalog Sync Paper Bay "); Serial.print(bayNum);
@@ -68,7 +72,10 @@ void parsePenBay(String msg) {
   int p2 = data.indexOf(':', p1 + 1);
   int p3 = data.indexOf(':', p2 + 1);
   int p4 = data.indexOf(':', p3 + 1);
-  if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0) return;
+  if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0) {
+    Serial.println("WARN: Rejected malformed PEN_BAY packet: " + msg);
+    return;
+  }
 
   int bayNum     = data.substring(0, p1).toInt();        // 1-BALLPEN_COUNT
   int prodId     = data.substring(p1 + 1, p2).toInt();
@@ -78,13 +85,25 @@ void parsePenBay(String msg) {
   name.trim();
 
   int idx = bayNum - 1;
-  if (idx < 0 || idx >= BALLPEN_COUNT) return;
+  if (idx < 0 || idx >= BALLPEN_COUNT) {
+    Serial.println("WARN: Invalid ballpen bay number: " + String(bayNum));
+    return;
+  }
+
+  // Strict name validation: reject garbage or leaked tokens
+  if (name.length() < 2 || name.startsWith("WIFI") || name.startsWith("OPTIONS") ||
+      name.startsWith("PEN_BAY") || name.startsWith("PAPER_BAY") || name == "5" || name.indexOf(':') >= 0) {
+    Serial.println("WARN: Rejected corrupted ballpen name: '" + name + "'");
+    return;
+  }
 
   ballpenCatalog[idx].id    = prodId;
   ballpenCatalog[idx].price = priceCents / 100.0;
   ballpenCatalog[idx].isPaperPresent = (stock > 0); // available if stock > 0
+  ballpenCatalogStock[idx]  = stock;
   name.toCharArray(ballpenCatalogNames[idx], 32);
   ballpenCatalog[idx].name = ballpenCatalogNames[idx];
+  penBaysLoaded[idx] = true;
 
   Serial.print("Catalog Sync Pen Bay "); Serial.print(bayNum);
   Serial.print(": "); Serial.print(name);
@@ -148,6 +167,7 @@ void parseMachineOptions(String msg) {
   Serial.print(minimumBallpensPerTransaction);
   Serial.print("-");
   Serial.println(maximumBallpensPerTransaction);
+  machineOptionsLoaded = true;
   tftUiSetCredits();
 }
 

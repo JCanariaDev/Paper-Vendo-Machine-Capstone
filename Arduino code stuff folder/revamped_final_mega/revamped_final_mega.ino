@@ -144,7 +144,9 @@ void printCentered(const String &text, int cx, int cy);
 void printCentered(const char* text, int cx, int cy);
 float cartTotal();
 float catalogDisplayPrice(int index);
-void setCoinAcceptance(bool allowed);
+void setCoinAcceptance(bool allowed, bool force = false);
+void onCatalogSyncCompleted();
+void onCatalogSyncFailed();
 void drawTftStatusBar();
 void resetPendingSelections();
 void drawIdleScreen();
@@ -222,6 +224,12 @@ CatalogItem ballpenCatalog[BALLPEN_COUNT] = {
 char paperCatalogNames[PAPER_COUNT][32];
 char ballpenCatalogNames[BALLPEN_COUNT][32];
 int  ballpenCatalogStock[BALLPEN_COUNT]; // pen stock per bay (pieces)
+
+bool catalogLoaded = false;
+bool catalogLoadingError = false;
+bool paperBaysLoaded[PAPER_COUNT] = { false, false };
+bool penBaysLoaded[BALLPEN_COUNT] = { false };
+bool machineOptionsLoaded = false;
 
 const int MAX_CATALOG_ROWS = 4;
 int pendingQty[MAX_CATALOG_ROWS];
@@ -306,6 +314,7 @@ int cartRowY(int i) {
 void setup() {
   Serial.begin(115200);
   CLOUD_SERIAL.begin(9600); // UART to ESP32 (Pins 18/19)
+  CLOUD_SERIAL.setTimeout(100);
   UNO_SERIAL.begin(9600);   // UART to Arduino Uno (Pins 16/17)
   BALLPEN_SERIAL.begin(9600); // UART to Ballpen Uno (Pins 14/15)
   UNO_SERIAL.setTimeout(500);
@@ -450,10 +459,12 @@ void loop() {
     }
   }
 
-  if (CLOUD_SERIAL.available()) {
+  while (CLOUD_SERIAL.available()) {
     String msg = CLOUD_SERIAL.readStringUntil('\n');
     msg.trim();
-    handleCloudCommand(msg);
+    if (msg.length() > 0) {
+      handleCloudCommand(msg);
+    }
   }
 
   if (UNO_SERIAL.available()) {
@@ -476,11 +487,11 @@ void loop() {
     else if (cmd == "SOFT_RESET") softResetMachineState();
     else if (cmd == "ESP_RESET") CLOUD_SERIAL.println("ESP_RESET");
     else if (cmd == "COIN ON" || cmd == "ACCEPTOR ON") {
-      setCoinAcceptance(true);
+      setCoinAcceptance(true, true);
       Serial.print("MANUAL COIN ACCEPTOR: Power ON. Pin D6 level = ");
       Serial.println(digitalRead(COIN_INHIBIT_PIN) == HIGH ? "HIGH (5V)" : "LOW (0V)");
     } else if (cmd == "COIN OFF" || cmd == "ACCEPTOR OFF") {
-      setCoinAcceptance(false);
+      setCoinAcceptance(false, true);
       Serial.print("MANUAL COIN ACCEPTOR: Power OFF (Cut). Pin D6 level = ");
       Serial.println(digitalRead(COIN_INHIBIT_PIN) == HIGH ? "HIGH (5V)" : "LOW (0V)");
     } else if (cmd == "COIN INVERT") {

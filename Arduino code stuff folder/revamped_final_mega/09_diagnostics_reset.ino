@@ -53,7 +53,14 @@ void softResetMachineState() {
   orderSummaryText = "";
   orderTotalCost = 0;
   resetPendingSelections();
-  setCoinAcceptance(true);
+
+  // Reset catalog sync state — coin acceptor stays off until ESP32 re-syncs
+  catalogLoaded = false;
+  catalogLoadingError = false;
+  for (int i = 0; i < PAPER_COUNT; i++) paperBaysLoaded[i] = false;
+  for (int i = 0; i < BALLPEN_COUNT; i++) penBaysLoaded[i] = false;
+  machineOptionsLoaded = false;
+  setCoinAcceptance(false);
 
   currentScreen = SCREEN_IDLE;
   refreshMachineAvailability(true);

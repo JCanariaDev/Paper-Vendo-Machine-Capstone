@@ -461,10 +461,17 @@ bool getTransactionPlan(const String &transactionId, DynamicJsonDocument &respon
 
 // Fetches live 2 Paper Bay assignments & 1 Pen Bay assignment for the Mega's dynamic catalog UI
 void syncLiveCatalogToMega() {
-  if (!ensureWifi()) return;
+  if (!ensureWifi()) {
+    MEGA_SERIAL.println("CATALOG_SYNC_FAIL");
+    return;
+  }
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
+  bool syncSuccess = true;
+
+  MEGA_SERIAL.println("CATALOG_SYNC_START");
+  delay(60);
 
   // 1. Fetch Paper Compartments
   String url = String(SUPABASE_URL) + "/rest/v1/paper_compartments?select=compartment_number,assigned_product_id,presence_status,current_pad_stock,paper_inventory(brand_name,paper_size,sheets_per_unit,cost_per_unit_cents)&compartment_number=lte.2&order=compartment_number.asc";
@@ -474,23 +481,48 @@ void syncLiveCatalogToMega() {
     int code = http.GET();
     if (code == 200) {
       DynamicJsonDocument doc(2048);
-      deserializeJson(doc, http.getString());
-      for (JsonObject bay : doc.as<JsonArray>()) {
-        int bayNum = bay["compartment_number"];
-        int prodId = bay["assigned_product_id"] | 0;
-        String presence = bay["presence_status"].as<String>();
-        int padStock = bay["current_pad_stock"] | 0;
-        JsonObject inv = bay["paper_inventory"];
-        String brand = inv["brand_name"].as<String>();
-        String size = inv["paper_size"].as<String>();
-        int sheets = inv["sheets_per_unit"] | 1;
-        int price = inv["cost_per_unit_cents"] | 100;
-        // Format: PAPER_BAY:<bay>:<product>:<legacy_presence>:<sheets_per_pad>:<pad_stock>:<price_cents>:<name>
-        MEGA_SERIAL.println("PAPER_BAY:" + String(bayNum) + ":" + String(prodId) + ":" + presence + ":" + String(sheets) + ":" + String(padStock) + ":" + String(price) + ":" + brand + " " + size);
-        delay(30);
+      if (deserializeJson(doc, http.getString()) == DeserializationError::Ok) {
+        for (JsonObject bay : doc.as<JsonArray>()) {
+          int bayNum = bay["compartment_number"];
+          int prodId = bay["assigned_product_id"] | 0;
+          String presence = bay["presence_status"].as<String>();
+          int padStock = bay["current_pad_stock"] | 0;
+          JsonObject inv = bay["paper_inventory"];
+          String brand = "Paper Bay " + String(bayNum);
+          String size = "";
+          if (!inv.isNull()) {
+            if (inv.containsKey("brand_name") && !inv["brand_name"].isNull()) {
+              brand = inv["brand_name"].as<String>();
+            }
+            if (inv.containsKey("paper_size") && !inv["paper_size"].isNull()) {
+              size = inv["paper_size"].as<String>();
+            }
+          }
+          String fullName = brand;
+          if (size.length() > 0 && size != "null") fullName += " " + size;
+          fullName.trim();
+          if (fullName.length() == 0 || fullName == "null" || fullName == "null null") {
+            fullName = "Paper Bay " + String(bayNum);
+          }
+          fullName.replace(':', ' ');
+          fullName.replace('\r', ' ');
+          fullName.replace('\n', ' ');
+
+          int sheets = inv.isNull() ? 1 : (inv["sheets_per_unit"] | 1);
+          int price = inv.isNull() ? 100 : (inv["cost_per_unit_cents"] | 100);
+          // Format: PAPER_BAY:<bay>:<product>:<legacy_presence>:<sheets_per_pad>:<pad_stock>:<price_cents>:<name>
+          MEGA_SERIAL.println("PAPER_BAY:" + String(bayNum) + ":" + String(prodId) + ":" + presence + ":" + String(sheets) + ":" + String(padStock) + ":" + String(price) + ":" + fullName);
+          delay(60);
+        }
+      } else {
+        syncSuccess = false;
       }
+    } else {
+      syncSuccess = false;
     }
     http.end();
+  } else {
+    syncSuccess = false;
   }
 
   // 2. Fetch Pen Compartments
@@ -501,20 +533,38 @@ void syncLiveCatalogToMega() {
     int code = http.GET();
     if (code == 200) {
       DynamicJsonDocument doc(1024);
-      deserializeJson(doc, http.getString());
-      for (JsonObject bay : doc.as<JsonArray>()) {
-        int bayNum = bay["compartment_number"];
-        int prodId = bay["assigned_product_id"] | 0;
-        int stock = bay["current_piece_stock"] | 0;
-        JsonObject inv = bay["ballpen_inventory"];
-        String name = inv["item_name"].as<String>();
-        int price = inv["cost_per_unit_cents"] | 500;
-        // Format: PEN_BAY:<bay_num>:<prod_id>:<stock>:<price_cents>:<name>
-        MEGA_SERIAL.println("PEN_BAY:" + String(bayNum) + ":" + String(prodId) + ":" + String(stock) + ":" + String(price) + ":" + name);
-        delay(30);
+      if (deserializeJson(doc, http.getString()) == DeserializationError::Ok) {
+        for (JsonObject bay : doc.as<JsonArray>()) {
+          int bayNum = bay["compartment_number"];
+          int prodId = bay["assigned_product_id"] | 0;
+          int stock = bay["current_piece_stock"] | 0;
+          JsonObject inv = bay["ballpen_inventory"];
+          String name = "Ballpen Slot " + String(bayNum);
+          if (!inv.isNull() && inv.containsKey("item_name") && !inv["item_name"].isNull()) {
+            name = inv["item_name"].as<String>();
+          }
+          name.trim();
+          if (name.length() == 0 || name == "null") {
+            name = "Ballpen Slot " + String(bayNum);
+          }
+          name.replace(':', ' ');
+          name.replace('\r', ' ');
+          name.replace('\n', ' ');
+
+          int price = inv.isNull() ? 500 : (inv["cost_per_unit_cents"] | 500);
+          // Format: PEN_BAY:<bay_num>:<prod_id>:<stock>:<price_cents>:<name>
+          MEGA_SERIAL.println("PEN_BAY:" + String(bayNum) + ":" + String(prodId) + ":" + String(stock) + ":" + String(price) + ":" + name);
+          delay(60);
+        }
+      } else {
+        syncSuccess = false;
       }
+    } else {
+      syncSuccess = false;
     }
     http.end();
+  } else {
+    syncSuccess = false;
   }
 
   // 3. Fetch machine-wide operating options for the Mega.
@@ -533,10 +583,24 @@ void syncLiveCatalogToMega() {
                             String(options["maximum_credits"] | 30) + ":" +
                             String(options["minimum_ballpens_per_transaction"] | 1) + ":" +
                             String(maximumBallpensPerTransaction));
+        delay(60);
+      } else {
+        syncSuccess = false;
       }
+    } else {
+      syncSuccess = false;
     }
     http.end();
+  } else {
+    syncSuccess = false;
   }
+
+  if (syncSuccess) {
+    MEGA_SERIAL.println("CATALOG_SYNC_COMPLETE");
+  } else {
+    MEGA_SERIAL.println("CATALOG_SYNC_FAIL");
+  }
+  lastHeartbeatAt = millis();
 }
 
 bool parseCartLine(const String &encoded, JsonArray lines) {

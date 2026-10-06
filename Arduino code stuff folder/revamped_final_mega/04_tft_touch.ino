@@ -1,4 +1,4 @@
-﻿// TFT TOUCH
+// TFT TOUCH
 // Split from revamped_final_mega.ino for readability.
 
 void handleReceiptTouch(int x, int y) {
@@ -23,6 +23,10 @@ void handleMainTouch(int x, int y) {
 
   if (!uiWifiConnected) {
     tftUiShowError("Connect to WiFi first");
+    return;
+  }
+  if (!catalogLoaded) {
+    tftUiShowError("Loading catalog...");
     return;
   }
 

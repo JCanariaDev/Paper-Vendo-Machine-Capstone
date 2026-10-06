@@ -207,6 +207,39 @@ void finishUiAfterTransaction(String message) {
   drawReceiptScreen();
 }
 
+void onCatalogSyncCompleted() {
+  catalogLoaded = true;
+  catalogLoadingError = false;
+  Serial.println("CATALOG SYNC COMPLETE: All bays and options loaded.");
+  Serial.print("  Paper bays: ");
+  for (int i = 0; i < PAPER_COUNT; i++) {
+    Serial.print(paperBaysLoaded[i] ? "OK " : "MISS ");
+  }
+  Serial.print(" | Pen bays: ");
+  for (int i = 0; i < BALLPEN_COUNT; i++) {
+    Serial.print(penBaysLoaded[i] ? "OK " : "MISS ");
+  }
+  Serial.print(" | Options: ");
+  Serial.println(machineOptionsLoaded ? "OK" : "MISS");
+
+  // Now that catalog is ready, enable coin acceptor if WiFi is connected
+  if (uiWifiConnected && !orderInProgress && credits < maximumCreditsAllowed) {
+    setCoinAcceptance(true);
+  }
+  refreshMachineAvailability(true);
+  if (currentScreen == SCREEN_IDLE || currentScreen == SCREEN_MAIN) {
+    redrawCurrentScreen();
+  }
+}
+
+void onCatalogSyncFailed() {
+  catalogLoadingError = true;
+  Serial.println("CATALOG SYNC FAILED: One or more fetches did not succeed.");
+  if (currentScreen == SCREEN_IDLE) {
+    redrawCurrentScreen();
+  }
+}
+
 void handleCloudCommand(String msg) {
   if (msg.startsWith("RESERVED:")) beginReservedTransaction(msg);
   else if (msg.startsWith("PLAN:")) executeDispensePlan(msg);
@@ -227,9 +260,18 @@ void handleCloudCommand(String msg) {
   }
   else if (msg.startsWith("ERR:")) showError(msg.substring(4));
   // -- Dynamic catalog sync from ESP32 --------------------------
+  else if (msg == "CATALOG_SYNC_START") {
+    paperBaysLoaded[0] = false;
+    paperBaysLoaded[1] = false;
+    penBaysLoaded[0] = false;
+    machineOptionsLoaded = false;
+    Serial.println("ESP32: Catalog sync starting...");
+  }
   else if (msg.startsWith("PAPER_BAY:")) parsePaperBay(msg);
   else if (msg.startsWith("PEN_BAY:"))   parsePenBay(msg);
   else if (msg.startsWith("OPTIONS:"))   parseMachineOptions(msg);
+  else if (msg == "CATALOG_SYNC_COMPLETE") onCatalogSyncCompleted();
+  else if (msg == "CATALOG_SYNC_FAIL")     onCatalogSyncFailed();
   // -------------------------------------------------------------
   else if (msg.startsWith("WIFI:")) {
     bool connected = msg.substring(5) == "1";

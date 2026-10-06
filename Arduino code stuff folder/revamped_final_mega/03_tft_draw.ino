@@ -50,19 +50,26 @@ void drawIdleScreen() {
   drawTftStatusBar();
   tft.setTextColor(COL_WHITE);
   tft.setTextSize(2);
-  if (wifiStatus == WIFI_STATUS_CONNECTED) {
+  if (wifiStatus == WIFI_STATUS_CONNECTED && catalogLoaded) {
     printCentered("Insert Coins", tft.width() / 2, 140);
     printCentered("to use.", tft.width() / 2, 165);
     return;
   }
 
-  printCentered("Starting System...", tft.width() / 2, 130);
+  printCentered("Starting System...", tft.width() / 2, 120);
   tft.setTextColor(COL_ORANGE);
   tft.setTextSize(1);
-  printCentered("Connecting to Wi-Fi / Cloud...", tft.width() / 2, 155);
+  if (wifiStatus != WIFI_STATUS_CONNECTED) {
+    printCentered("Connecting to Wi-Fi / Cloud...", tft.width() / 2, 148);
+  } else if (catalogLoadingError) {
+    tft.setTextColor(COL_RED);
+    printCentered("Catalog sync error - retrying...", tft.width() / 2, 148);
+  } else {
+    printCentered("Loading Catalog & Options...", tft.width() / 2, 148);
+  }
   tft.setTextColor(COL_WHITE);
   tft.setTextSize(1);
-  printCentered("Coin slot disabled while booting", tft.width() / 2, 175);
+  printCentered("Coin slot disabled while booting", tft.width() / 2, 172);
 
   if (wifiStatus == WIFI_STATUS_NOT_FOUND) {
     tft.setTextColor(COL_RED);
@@ -120,7 +127,7 @@ void drawCatalogScreen() {
 
   tft.setTextColor(COL_WHITE);
   tft.setTextSize(2);
-  String title = activeCatalogType == "paper" ? selectedPaperBrand + " Paper" : "Ballpen Options";
+  String title = activeCatalogType == "paper" ? "Paper Options" : "Ballpen Options";
   printCentered(title.c_str(), tft.width() / 2, 38);
 
   for (int i = 0; i < count; i++) {
