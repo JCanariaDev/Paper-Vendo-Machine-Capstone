@@ -1,4 +1,7 @@
 #include <Adafruit_GFX.h>
+#include <Fonts/FreeSansBold9pt7b.h>
+#include <Fonts/FreeSansBold12pt7b.h>
+#include <Fonts/FreeSansBoldOblique9pt7b.h>
 #include <SPI.h>
 #include <Adafruit_ILI9341.h>
 #include <XPT2046_Touchscreen.h>
@@ -111,6 +114,19 @@ XPT2046_Touchscreen ts(TOUCH_CS);
 #define COL_ORANGE    0xFD20
 #define COL_DARKGREEN 0x03E0
 #define COL_GREY      0x39C7
+#define COL_BACKGROUND 0xCF1B // #CFE0D9
+#define COL_TEXT       0x1185 // #17312E
+#define COL_PAPER_BTN  0xE672 // #E3CF93
+#define COL_PEN_BTN    0x7E79 // #7DCFC8
+#define COL_CHECKOUT   0xC4AD // #B8D76C
+#define COL_PANEL      0xAE16 // #A9C2B7
+#define COL_CART_BTN   0xAE37 // #A9C5BA
+#define COL_STATUS_BG  0x08A4 // #091723
+#define COL_CREAM      0xFFDB // #FCFBDD
+#define COL_GOLD       0xA3C7 // #A17B3A
+#define COL_CYAN       0x96B9 // #93D6CD
+#define COL_TITLE_EDGE 0xDDAA // #DEB652
+#define COL_MUTED_RED  0xC34C
 
 // --- STATE ---
 volatile uint16_t credits = 0;

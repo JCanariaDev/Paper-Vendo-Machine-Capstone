@@ -127,13 +127,9 @@ void executeDispensePlan(String message) {
 
   // Show clear status on screen if any physical dispense failed
   if (dispenseResultSummary.indexOf("FAILED") >= 0) {
-    tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(COL_RED);
-    printCentered("Dispense Failed!", tft.width() / 2, 130);
-    tft.setTextSize(1);
-    tft.setTextColor(COL_WHITE);
-    printCentered("Processing refund / change...", tft.width() / 2, 160);
+    tft.fillRect(0, 110, tft.width(), 80, COL_BACKGROUND);
+    printCenteredStyled("Dispense Failed!", tft.width() / 2, 130, COL_RED, true, true);
+    printCenteredStyled("Processing refund / change...", tft.width() / 2, 160, COL_TEXT);
   }
 
   // -- STEP 2: NON-BLOCKING COIN HOPPER CHANGE ATTEMPT --
@@ -142,10 +138,8 @@ void executeDispensePlan(String message) {
     activeChangePaidCents = 0;
   } else if (activeChangeDueCents > 0) {
     delay(200); // Allow 12V power rail to settle after NEMA motor de-energization
-    tft.fillRect(0, 110, tft.width(), 80, COL_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(COL_WHITE);
-    printCentered("Releasing Change...", tft.width() / 2, 130);
+    tft.fillRect(0, 110, tft.width(), 80, COL_BACKGROUND);
+    printCenteredStyled("Releasing Change...", tft.width() / 2, 130, COL_TEXT, true, true);
     int verifiedChange = releaseVerifiedChange(activeChangeDueCents);
     activeChangePaidCents = max(0, verifiedChange);
   } else {

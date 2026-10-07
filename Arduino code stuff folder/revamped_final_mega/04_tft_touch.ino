@@ -15,7 +15,7 @@ void handleReceiptTouch(int x, int y) {
 
 void handleMainTouch(int x, int y) {
   // VIEW CART — works even offline
-  if (x >= 20 && x <= 230 && y >= 285 && y <= 315) {
+  if (x >= 20 && x <= 230 && y >= 285 && y <= 320) {
     currentScreen = SCREEN_CART;
     drawCartScreen();
     return;

@@ -52,27 +52,21 @@ void tftUiSetWifiConnected(bool connected) {
 }
 
 void drawWifiSpinnerFrame() {
-  tft.fillRect(tft.width() / 2 - 10, 190, 20, 20, COL_BLACK);
-  tft.setTextColor(COL_WHITE);
-  tft.setTextSize(2);
+  tft.fillRect(tft.width() / 2 - 10, 190, 20, 20, COL_BACKGROUND);
   char buf[2] = { SPINNER_CHARS[spinnerFrame % 4], '\0' };
-  printCentered(buf, tft.width() / 2, 200);
+  printCenteredStyled(buf, tft.width() / 2, 200, COL_GOLD, false, false, true);
   spinnerFrame++;
 }
 
 void tftUiShowError(String message) {
   uiErrorUntil = millis() + 2500;
   tft.fillRect(0, tft.height() - 36, tft.width(), 24, COL_RED);
-  tft.setTextColor(COL_WHITE);
-  tft.setTextSize(2);
-  printCentered(message.c_str(), tft.width() / 2, tft.height() - 24);
+  printCenteredStyled(message, tft.width() / 2, tft.height() - 24, COL_WHITE);
 }
 
 void tftUiShowSuccess(String message) {
   uiSuccessUntil = millis() + 2000;
-  tft.fillRect(0, tft.height() - 36, tft.width(), 24, COL_DARKGREEN);
-  tft.setTextColor(COL_WHITE);
-  tft.setTextSize(2);
-  printCentered(message.c_str(), tft.width() / 2, tft.height() - 24);
+  tft.fillRect(0, tft.height() - 36, tft.width(), 24, COL_PEN_BTN);
+  printCenteredStyled(message, tft.width() / 2, tft.height() - 24, COL_TEXT);
 }
 
