@@ -75,25 +75,45 @@ void showPaperLcd(const String &line1, const String &line2 = "") {
 void sendStatus();
 
 void enableDriver(int motorIdx) {
-  // Active LOW. Drives Pin 8 (CNC Shield common enable), Pin 9, and Pin 10 LOW
-  // to ensure stepper drivers are enabled under ALL wiring topologies.
-  digitalWrite(8, LOW);
-  digitalWrite(9, LOW);
-  digitalWrite(10, LOW);
+  // Active LOW for TMC2209 EN pin (LOW = Driver enabled / holding torque ON)
+  if (motorIdx >= 0 && motorIdx < MOTOR_COUNT) {
+    // Strictly disable all other motors first so ONLY ONE motor ever draws power!
+    for (int i = 0; i < MOTOR_COUNT; i++) {
+      if (i != motorIdx) {
+        digitalWrite(ENABLE_PINS[i], HIGH); // Other driver OFF
+      }
+    }
+    digitalWrite(ENABLE_PINS[motorIdx], LOW); // ONLY the target driver ON
+
+    Serial.print("DRIVER_ACTIVE: Bay ");
+    Serial.print(motorIdx + 1);
+    Serial.print(" (Pin D");
+    Serial.print(ENABLE_PINS[motorIdx]);
+    Serial.print(" is LOW/ON). Bay ");
+    Serial.print((1 - motorIdx) + 1);
+    Serial.print(" (Pin D");
+    Serial.print(ENABLE_PINS[1 - motorIdx]);
+    Serial.println(" is HIGH/OFF)");
+  } else {
+    // Test mode only: enable both
+    for (int i = 0; i < MOTOR_COUNT; i++) digitalWrite(ENABLE_PINS[i], LOW);
+    Serial.println("DRIVER_ACTIVE: Both Bay 1 & Bay 2 ON (Test Mode)");
+  }
   digitalWrite(13, HIGH); // LED ON indicates motor active
 }
 
 void disableDriver(int motorIdx) {
-  digitalWrite(8, HIGH);
-  digitalWrite(9, HIGH);
-  digitalWrite(10, HIGH);
+  // Active LOW for TMC2209 EN pin (HIGH = Driver disabled / unenergized)
+  if (motorIdx >= 0 && motorIdx < MOTOR_COUNT) {
+    digitalWrite(ENABLE_PINS[motorIdx], HIGH);
+  }
   digitalWrite(13, LOW); // LED OFF indicates motor idle
 }
 
 void disableAllDrivers() {
-  digitalWrite(8, HIGH);
-  digitalWrite(9, HIGH);
-  digitalWrite(10, HIGH);
+  for (int i = 0; i < MOTOR_COUNT; i++) {
+    digitalWrite(ENABLE_PINS[i], HIGH);
+  }
   digitalWrite(13, LOW);
 }
 
@@ -123,7 +143,10 @@ bool feedOneSheet(int bayIndex) {
   const int clearLevel = digitalRead(sensorPin);
   
   bool paperSeen = false;
-  const long MAX_STEPS = 10000; // ~16 seconds max per sheet at 800us step timing
+  int blockedStreak = 0;
+  int clearStreak = 0;
+  const int NOISE_FILTER_STEPS = 30;
+  const long MAX_STEPS = 5000; // ~8 seconds max per sheet at 800us step timing
   
   for (long step = 0; step < MAX_STEPS; step++) {
     // Non-blocking serial check for emergency STOP without freezing the stepper loop
@@ -146,16 +169,24 @@ bool feedOneSheet(int bayIndex) {
     bool isBlocked = (digitalRead(sensorPin) != clearLevel);
     
     if (isBlocked) {
-      // Paper entered the exit sensor beam! Motor keeps running!
-      paperSeen = true;
-    } else if (paperSeen && !isBlocked) {
-      // Paper was seen in the sensor and has now completely left the beam!
-      // Stop immediately as requested:
-      return true; // Sheet successfully dispensed!
+      blockedStreak++;
+      clearStreak = 0;
+      if (blockedStreak >= NOISE_FILTER_STEPS) {
+        // Paper has genuinely entered the exit sensor beam!
+        paperSeen = true;
+      }
+    } else {
+      clearStreak++;
+      blockedStreak = 0;
+      if (paperSeen && clearStreak >= NOISE_FILTER_STEPS) {
+        // Paper was confirmed in the beam and has now completely left!
+        return true; // Sheet successfully dispensed!
+      }
     }
   }
 
-  // If 45,000 steps reached without complete exit:
+  // If 5,000 steps reached (~8s) without complete exit:
+  disableAllDrivers();
   return false;
 }
 
@@ -202,14 +233,15 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
   showPaperLcd("Dispensing", paperName);
 
   enableDriver(idx);
+  delay(10); // Allow TMC2209 charge pump to stabilize after enable
   digitalWrite(DIR_PINS[idx], HIGH); // Forward feed
 
   int sheetsDispensed = 0;
   for (int s = 0; s < requestedSheets; s++) {
     if (!feedOneSheet(idx)) {
-      disableDriver(idx);
-       showPaperLcd("Paper sensor wait", paperName);
-       Serial.println("EMPTY:" + String(bayNum) + ":" + String(sheetsDispensed));
+      disableAllDrivers();
+      showPaperLcd("Paper sensor wait", paperName);
+      Serial.println("EMPTY:" + String(bayNum) + ":" + String(sheetsDispensed));
       sendStatus();
       return;
     }
@@ -219,7 +251,7 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
     delay(500); // 0.5s stabilization gap between sheets as requested
   }
 
-  disableDriver(idx);
+  disableAllDrivers();
   if (remainingSheets[idx] >= 0) {
     remainingSheets[idx] = max(0L, remainingSheets[idx] - sheetsDispensed);
     paperPadStock[idx] = (remainingSheets[idx] + sheetsPerPad[idx] - 1) / sheetsPerPad[idx];
@@ -234,6 +266,7 @@ void jogMotor(int bayNum, long steps) {
   if (idx < 0 || idx >= MOTOR_COUNT) return;
 
   enableDriver(idx);
+  delay(10); // Allow TMC2209 charge pump to stabilize after enable
   digitalWrite(DIR_PINS[idx], steps >= 0 ? HIGH : LOW);
   long totalSteps = labs(steps);
 
@@ -285,9 +318,40 @@ void handleCommand(String cmd) {
       jogMotor(bay, steps);
     }
   }
-  else if (cmd == "STOP") {
+  else if (cmd.startsWith("ENABLE") || cmd.startsWith("EN")) {
+    // Keeps driver permanently energized so you can test holding torque / VREF
+    int colon = cmd.indexOf(':');
+    if (colon > 0) {
+      int bay = cmd.substring(colon + 1).toInt();
+      if (bay >= 1 && bay <= MOTOR_COUNT) {
+        enableDriver(bay - 1);
+        Serial.println("DRIVER_ENABLED: Bay " + String(bay) + " (Pin D" + String(ENABLE_PINS[bay - 1]) + " pulled LOW)");
+      }
+    } else {
+      enableDriver(-1); // enables both
+      Serial.println("DRIVERS_ENABLED: Both Bay 1 (Pin D10) & Bay 2 (Pin D9) pulled LOW");
+    }
+  }
+  else if (cmd.startsWith("TEST:")) {
+    // Format: TEST:<bay_num> (e.g. TEST:1 or TEST:2)
+    int bay = cmd.substring(5).toInt();
+    if (bay >= 1 && bay <= MOTOR_COUNT) {
+      int idx = bay - 1;
+      Serial.println("STARTING 1-SECOND ISOLATED TEST ON BAY " + String(bay) + "...");
+      enableDriver(idx);
+      delay(20);
+      for (int i = 0; i < 1000; i++) {
+        pulseStep(idx);
+      }
+      disableAllDrivers();
+      Serial.println("TEST FINISHED: Bay " + String(bay) + " motor powered down.");
+    } else {
+      Serial.println("ERR: Use TEST:1 or TEST:2");
+    }
+  }
+  else if (cmd.startsWith("DISABLE") || cmd == "DIS" || cmd == "STOP") {
     disableAllDrivers();
-    Serial.println("STOP_OK");
+    Serial.println("DRIVERS_DISABLED: Bay 1 (D10) & Bay 2 (D9) set HIGH (Motors free)");
   }
 }
 
@@ -299,13 +363,11 @@ void setup() {
   pinMode(13, OUTPUT);
   digitalWrite(13, HIGH); // Turn LED ON during boot
 
-  // Configure CNC Shield Enable Pin 8 + Custom Enable Pins 9 & 10 (Active LOW)
-  pinMode(8, OUTPUT);
-  digitalWrite(8, HIGH); // Disabled
-  pinMode(9, OUTPUT);
-  digitalWrite(9, HIGH); // Disabled
-  pinMode(10, OUTPUT);
-  digitalWrite(10, HIGH); // Disabled
+  // Configure direct TMC2209 Enable Pins: Bay 1 -> D10, Bay 2 -> D9 (Active LOW)
+  for (int i = 0; i < MOTOR_COUNT; i++) {
+    pinMode(ENABLE_PINS[i], OUTPUT);
+    digitalWrite(ENABLE_PINS[i], HIGH); // HIGH = Disabled on startup
+  }
 
   // Safe I2C probe to prevent infinite lockup if no 1602 LCD is connected
   Wire.begin();
