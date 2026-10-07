@@ -272,7 +272,6 @@ enum WifiStatus { WIFI_STATUS_IDLE, WIFI_STATUS_CONNECTING, WIFI_STATUS_NOT_FOUN
 WifiStatus wifiStatus = WIFI_STATUS_IDLE;
 int spinnerFrame = 0;
 unsigned long lastSpinnerUpdate = 0;
-const char SPINNER_CHARS[4] = { '|', '/', '-', '\\' };
 unsigned long uiErrorUntil = 0;
 unsigned long uiSuccessUntil = 0;
 unsigned long touchDebounceUntil = 0;

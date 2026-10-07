@@ -52,9 +52,20 @@ void tftUiSetWifiConnected(bool connected) {
 }
 
 void drawWifiSpinnerFrame() {
-  tft.fillRect(tft.width() / 2 - 10, 190, 20, 20, COL_BACKGROUND);
-  char buf[2] = { SPINNER_CHARS[spinnerFrame % 4], '\0' };
-  printCenteredStyled(buf, tft.width() / 2, 200, COL_GOLD, false, false, true);
+  const int centerX = tft.width() / 2;
+  const int centerY = 230;
+  const int8_t xOffsets[8] = { 0, 7, 10, 7, 0, -7, -10, -7 };
+  const int8_t yOffsets[8] = { -10, -7, 0, 7, 10, 7, 0, -7 };
+  const uint16_t trailColors[8] = {
+    COL_GOLD, COL_TITLE_EDGE, COL_CREAM, COL_CYAN,
+    COL_PEN_BTN, COL_CYAN, COL_CREAM, COL_TITLE_EDGE
+  };
+  tft.fillCircle(centerX, centerY, 14, COL_BACKGROUND);
+  for (uint8_t i = 0; i < 8; i++) {
+    uint8_t dot = (spinnerFrame + i) % 8;
+    tft.fillCircle(centerX + xOffsets[dot], centerY + yOffsets[dot],
+                   i == 0 ? 3 : 2, trailColors[i]);
+  }
   spinnerFrame++;
 }
 
