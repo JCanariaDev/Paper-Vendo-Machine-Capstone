@@ -162,7 +162,9 @@ void tftUiLoop() {
   int tmp = rawX; rawX = rawY; rawY = tmp;
 #endif
   int x = map(rawX, TS_MINX, TS_MAXX, 0, tft.width());
-  int y = map(rawY, TS_MINY, TS_MAXY, 0, tft.height());
+  // Temporary calibration nudge: bottom-row touches were mapping slightly high.
+  int y = constrain(map(rawY, TS_MINY, TS_MAXY, 0, tft.height()) + 4,
+                    0, tft.height() - 1);
 #if TOUCH_INVERT_X
   x = tft.width() - x;
 #endif
