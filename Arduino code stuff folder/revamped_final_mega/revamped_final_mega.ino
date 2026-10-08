@@ -164,6 +164,7 @@ void setCoinAcceptance(bool allowed, bool force = false);
 void onCatalogSyncCompleted();
 void onCatalogSyncFailed();
 void drawTftStatusBar();
+void drawPaperBuddyAnimationFrame(uint8_t frame);
 void resetPendingSelections();
 void drawIdleScreen();
 void drawMainScreen();
@@ -404,6 +405,15 @@ void loop() {
   }
 
   tftUiLoop();
+
+  // Animate only the mascot's reserved corner; keep the rest of the TFT static.
+  static unsigned long lastBuddyFrameAt = 0;
+  static uint8_t buddyFrame = 0;
+  if (currentScreen == SCREEN_IDLE && millis() - lastBuddyFrameAt >= 420) {
+    lastBuddyFrameAt = millis();
+    buddyFrame = (buddyFrame + 1) % 4;
+    drawPaperBuddyAnimationFrame(buddyFrame);
+  }
 
   if (currentScreen == SCREEN_IDLE && wifiStatus == WIFI_STATUS_CONNECTING) {
     if (millis() - lastSpinnerUpdate > 200) {

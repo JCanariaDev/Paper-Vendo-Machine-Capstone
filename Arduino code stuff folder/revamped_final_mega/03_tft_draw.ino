@@ -165,11 +165,16 @@ static void printModernRightAt(const String &text, int rightX, int y,
   tft.setTextSize(1);
 }
 
-static void drawPaperBuddy(int x, int y) {
-  // Compact cosmic-inspired paper mascot; kept inside the idle-screen corner.
+static void drawPaperBuddy(int x, int y, uint8_t frame) {
+  // Compact cosmic-inspired paper mascot; all animation stays within its footprint.
   const uint16_t hair = tft.color565(232, 242, 232);
   const uint16_t skin = tft.color565(238, 207, 169);
   const uint16_t shadow = tft.color565(9, 23, 35);
+  const uint16_t midtone = tft.color565(45, 139, 137);
+  const int8_t bobOffsets[4] = { 0, -1, -2, -1 };
+  int8_t bob = bobOffsets[frame % 4];
+  int8_t wave = (frame == 1 || frame == 3) ? -2 : 0;
+  y += bob;
 
   // Luminous halo and flame crest.
   tft.drawCircle(x + 25, y + 22, 18, COL_GOLD);
@@ -177,7 +182,8 @@ static void drawPaperBuddy(int x, int y) {
   tft.fillTriangle(x + 14, y + 11, x + 10, y + 1, x + 19, y + 8, COL_CYAN);
   tft.fillTriangle(x + 20, y + 8, x + 24, y - 2, x + 27, y + 9, COL_GOLD);
   tft.fillTriangle(x + 27, y + 9, x + 36, y + 1, x + 32, y + 13, COL_CYAN);
-  tft.drawLine(x + 23, y + 6, x + 24, y + 1, COL_CREAM);
+  tft.drawLine(x + 23, y + 6, x + 24, y + 1,
+               (frame % 2 == 0) ? COL_CREAM : COL_TITLE_EDGE);
 
   // Face, swept pale hair, and teal veil.
   tft.fillRoundRect(x + 16, y + 14, 19, 25, 8, skin);
@@ -186,19 +192,45 @@ static void drawPaperBuddy(int x, int y) {
   tft.fillTriangle(x + 30, y + 16, x + 37, y + 11, x + 33, y + 25, COL_CREAM);
   tft.drawLine(x + 17, y + 12, x + 24, y + 14, COL_GOLD);
   tft.drawLine(x + 28, y + 11, x + 32, y + 14, COL_GOLD);
+  tft.drawLine(x + 17, y + 19, x + 20, y + 17, COL_CREAM);
   tft.fillCircle(x + 21, y + 25, 1, shadow);
   tft.fillCircle(x + 30, y + 25, 1, shadow);
   tft.fillTriangle(x + 16, y + 29, x + 35, y + 29, x + 26, y + 39, COL_CYAN);
   tft.drawLine(x + 19, y + 31, x + 26, y + 35, COL_GOLD);
   tft.drawLine(x + 33, y + 31, x + 26, y + 35, COL_GOLD);
+  tft.drawLine(x + 21, y + 33, x + 26, y + 36, COL_CREAM);
 
-  // Small armored shoulders and a bright chest accent.
+  // Shaded shoulders, articulated arms, tiny hands, and chest detailing.
   tft.fillTriangle(x + 17, y + 38, x + 5, y + 45, x + 18, y + 49, COL_CYAN);
   tft.fillTriangle(x + 34, y + 38, x + 46, y + 45, x + 33, y + 49, COL_CYAN);
   tft.drawLine(x + 8, y + 44, x + 15, y + 43, COL_GOLD);
   tft.drawLine(x + 42, y + 44, x + 35, y + 43, COL_GOLD);
+  tft.drawLine(x + 10, y + 47, x + 7, y + 50 + wave, shadow);
+  tft.drawLine(x + 42, y + 47, x + 44, y + 50, shadow);
+  tft.fillCircle(x + 7, y + 51 + wave, 2, skin);
+  tft.fillCircle(x + 44, y + 51, 2, skin);
+  tft.drawPixel(x + 6, y + 50 + wave, COL_CREAM);
+  tft.drawPixel(x + 43, y + 50, COL_CREAM);
+
+  // Layered robe with a shadow edge, bright center, and fine seams.
   tft.fillTriangle(x + 18, y + 39, x + 33, y + 39, x + 26, y + 59, COL_GOLD);
+  tft.fillTriangle(x + 18, y + 41, x + 26, y + 44, x + 23, y + 57, midtone);
   tft.fillTriangle(x + 21, y + 41, x + 31, y + 41, x + 26, y + 54, COL_CYAN);
+  tft.drawLine(x + 26, y + 43, x + 26, y + 52, COL_CREAM);
+  tft.drawLine(x + 22, y + 55, x + 26, y + 58, COL_GOLD);
+
+  // Tiny boots and gold-edged soles complete the silhouette.
+  tft.fillRoundRect(x + 18, y + 55, 9, 5, 2, shadow);
+  tft.fillRoundRect(x + 27, y + 55, 9, 5, 2, shadow);
+  tft.drawFastHLine(x + 19, y + 59, 7, COL_GOLD);
+  tft.drawFastHLine(x + 28, y + 59, 7, COL_GOLD);
+}
+
+void drawPaperBuddyAnimationFrame(uint8_t frame) {
+  const int x = tft.width() - 58;
+  const int y = tft.height() - 63;
+  tft.fillRect(x - 2, y - 2, 54, 65, COL_BACKGROUND);
+  drawPaperBuddy(x, y, frame);
 }
 
 void printCentered(const String &text, int cx, int cy) {
@@ -258,7 +290,7 @@ void drawTftStatusBar() {
 void drawIdleScreen() {
   tft.fillScreen(COL_BACKGROUND);
   drawTftStatusBar();
-  drawPaperBuddy(tft.width() - 58, tft.height() - 63);
+  drawPaperBuddyAnimationFrame(0);
   if (wifiStatus == WIFI_STATUS_CONNECTED && catalogLoaded) {
     printCenteredStyled("Insert Coins", tft.width() / 2, 140, COL_TEXT, true, true);
     printCenteredStyled("to use.", tft.width() / 2, 165, COL_TEXT);
