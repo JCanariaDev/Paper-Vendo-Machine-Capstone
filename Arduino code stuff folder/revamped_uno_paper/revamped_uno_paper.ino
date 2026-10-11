@@ -56,7 +56,8 @@ const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
 
-const unsigned int STEP_PULSE_DELAY_US = 800; // 800us provides strong starting torque & prevents NEMA motor stall
+// Lower values step faster. Change in small increments; too low can stall the NEMAs.
+const unsigned int STEP_PULSE_DELAY_US = 750; // 750us = ~667 steps/s (was 625 steps/s)
 int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
 long remainingSheets[MOTOR_COUNT] = { -1, -1 };
@@ -146,7 +147,7 @@ bool feedOneSheet(int bayIndex) {
   int blockedStreak = 0;
   int clearStreak = 0;
   const int NOISE_FILTER_STEPS = 30;
-  const long MAX_STEPS = 5000; // ~8 seconds max per sheet at 800us step timing
+  const long MAX_STEPS = 5000; // ~7.5 seconds max per sheet at 750us step timing
   
   for (long step = 0; step < MAX_STEPS; step++) {
     // Non-blocking serial check for emergency STOP without freezing the stepper loop
