@@ -144,7 +144,8 @@ void handleCartTouch(int x, int y) {
     }
   }
 
-  if (x >= 20 && x <= 230 && y >= 320 && y <= 340) { // BACK
+  // Match the visible Back button (x=20..220, y=275..310) with a touch margin.
+  if (x >= 16 && x <= 224 && y >= 270 && y <= 319) {
     currentScreen = SCREEN_MAIN;
     drawMainScreen();
   }
