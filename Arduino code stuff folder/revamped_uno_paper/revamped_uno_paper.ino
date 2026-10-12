@@ -39,6 +39,8 @@ const int MOTOR_COUNT = 2;
 const int STEP_PINS[MOTOR_COUNT]   = { 2, 4 };
 const int DIR_PINS[MOTOR_COUNT]    = { 3, 5 };
 const int ENABLE_PINS[MOTOR_COUNT] = { 10, 9 }; // Bay 1: D10, Bay 2: D9 (Active LOW)
+// Opposite of the prior HIGH feed direction; verify CCW from each motor's shaft end.
+const uint8_t PAPER_FORWARD_DIR_LEVEL = LOW;
 
 // One IR sensor is installed at the paper exit of each bay.
 // The sensor confirms that a sheet actually crossed the outlet.
@@ -56,8 +58,9 @@ const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
 
-// Proven reliable setting: lower values step faster but reduce available torque.
-const unsigned int STEP_PULSE_DELAY_US = 800; // 800us = ~625 steps/s
+// 2x feed-rate test: 400us high + 400us low is ~1,250 steps/s.
+// Faster stepping reduces available torque; validate under the loaded paper stack.
+const unsigned int STEP_PULSE_DELAY_US = 400;
 int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
 long remainingSheets[MOTOR_COUNT] = { -1, -1 };
@@ -147,7 +150,7 @@ bool feedOneSheet(int bayIndex) {
   int blockedStreak = 0;
   int clearStreak = 0;
   const int NOISE_FILTER_STEPS = 30;
-  const long MAX_STEPS = 5000; // ~8 seconds max per sheet at 800us step timing
+  const long MAX_STEPS = 10000; // ~8 seconds nominal max per sheet at 400us timing
   
   for (long step = 0; step < MAX_STEPS; step++) {
     // Non-blocking serial check for emergency STOP without freezing the stepper loop
@@ -186,7 +189,7 @@ bool feedOneSheet(int bayIndex) {
     }
   }
 
-  // If 5,000 steps reached (~8s) without complete exit:
+  // If 10,000 steps reached without complete exit:
   disableAllDrivers();
   return false;
 }
@@ -235,7 +238,7 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
 
   enableDriver(idx);
   delay(10); // Allow TMC2209 charge pump to stabilize after enable
-  digitalWrite(DIR_PINS[idx], HIGH); // Forward feed
+  digitalWrite(DIR_PINS[idx], PAPER_FORWARD_DIR_LEVEL); // Reversed feed direction
 
   int sheetsDispensed = 0;
   for (int s = 0; s < requestedSheets; s++) {
@@ -268,7 +271,7 @@ void jogMotor(int bayNum, long steps) {
 
   enableDriver(idx);
   delay(10); // Allow TMC2209 charge pump to stabilize after enable
-  digitalWrite(DIR_PINS[idx], steps >= 0 ? HIGH : LOW);
+  digitalWrite(DIR_PINS[idx], steps >= 0 ? PAPER_FORWARD_DIR_LEVEL : !PAPER_FORWARD_DIR_LEVEL);
   long totalSteps = labs(steps);
 
   for (long s = 0; s < totalSteps; s++) {

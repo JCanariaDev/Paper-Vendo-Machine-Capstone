@@ -104,9 +104,10 @@ bool dispenseOnePen() {
   if (stopRequested) return false;
 
   delay(100); // Let the pen clear the sensor, without delaying the next item.
-  bool returned = moveInterruptible(-HALF_TURN_STEPS);
+  // Continue forward through the second half-turn instead of reversing back.
+  bool completedRotation = moveInterruptible(HALF_TURN_STEPS);
   disableMotor();
-  return detected && returned;
+  return detected && completedRotation;
 }
 
 void dispensePens(int channel, int quantity) {
