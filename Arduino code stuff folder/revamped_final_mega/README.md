@@ -1,5 +1,18 @@
 # Revamped Mega Firmware Notes
 
+## Paper Hardware Test Command
+
+From the Mega Serial Monitor (115200 baud, newline line ending), enter:
+
+- `PAPER_TEST 1 3` to feed 3 sheets from Bay 1.
+- `PAPER_TEST 2 3` to feed 3 sheets from Bay 2.
+
+The command uses the Mega-to-Paper-Uno UART and prints each `SHEET_OK` response
+and the final confirmed count. It is an unbilled hardware test: it does not
+create a cloud transaction or charge credits. Run only while no touchscreen
+transaction or coin burst is active. Physical sheets dispensed during a test
+must be accounted for in inventory separately.
+
 ## Revision 2026.10.02.1
 
 Adds a compact Mega-to-ESP32 order trace for checkout troubleshooting.

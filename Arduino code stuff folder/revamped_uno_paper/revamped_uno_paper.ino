@@ -58,9 +58,8 @@ const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
 
-// 2x feed-rate test: 400us high + 400us low is ~1,250 steps/s.
-// Faster stepping reduces available torque; validate under the loaded paper stack.
-const unsigned int STEP_PULSE_DELAY_US = 400;
+// Previously tested reliable setting; faster stepping may stall under paper load.
+const unsigned int STEP_PULSE_DELAY_US = 800; // 800us high + 800us low = ~625 steps/s
 int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
 long remainingSheets[MOTOR_COUNT] = { -1, -1 };
@@ -150,7 +149,7 @@ bool feedOneSheet(int bayIndex) {
   int blockedStreak = 0;
   int clearStreak = 0;
   const int NOISE_FILTER_STEPS = 30;
-  const long MAX_STEPS = 10000; // ~8 seconds nominal max per sheet at 400us timing
+  const long MAX_STEPS = 10000; // ~16 seconds nominal max per sheet at 800us timing
   
   for (long step = 0; step < MAX_STEPS; step++) {
     // Non-blocking serial check for emergency STOP without freezing the stepper loop
@@ -189,7 +188,7 @@ bool feedOneSheet(int bayIndex) {
     }
   }
 
-  // If 10,000 steps reached without complete exit:
+  // If 10,000 steps reached (~16s) without complete exit:
   disableAllDrivers();
   return false;
 }

@@ -72,9 +72,9 @@ const unsigned long PEN_SENSOR_TIMEOUT_MS   = 5000;
 const unsigned long HOPPER_MANUAL_MAX_MS    = 10000;
 // Paper Uno reports a confirmed result promptly; avoid a long dead wait if its
 // UART cable/controller is unavailable.
-// Must cover the Paper Uno's 20-second sensor/jam safety window. A normal
-// dispense still returns immediately when the exit sensor clears.
-const unsigned long PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS = 12000; // 12s per sheet max
+// Must cover the Paper Uno's 10,000-step feed window at 800us plus loop overhead.
+// A normal dispense still returns immediately when the exit sensor clears.
+const unsigned long PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS = 20000; // 20s per sheet max
 const unsigned long FINISH_RESPONSE_TIMEOUT_MS = 6000; // 6s cloud response safety window
 unsigned long finishSentAt = 0;
 
@@ -509,6 +509,36 @@ void loop() {
     cmd.toUpperCase();
     if (cmd == "DIAG") runDiagnostics();
     else if (cmd == "STATUS") printHardwareStatus();
+    else if (cmd.startsWith("PAPER_TEST ")) {
+      String args = cmd.substring(11);
+      args.trim();
+      int separator = args.indexOf(' ');
+      if (separator < 0) {
+        Serial.println("Usage: PAPER_TEST <bay 1-2> <sheets 1-10>");
+      } else {
+        int bay = args.substring(0, separator).toInt();
+        int sheets = args.substring(separator + 1).toInt();
+        if (bay < 1 || bay > PAPER_COUNT || sheets < 1 || sheets > 10) {
+          Serial.println("Invalid paper test. Use bay 1-2 and sheet count 1-10.");
+        } else if (orderInProgress || pendingCoinAcceptorOff) {
+          Serial.println("Paper test refused: finish the active transaction/coin burst first.");
+        } else {
+          Serial.println("PAPER TEST: unbilled hardware dispense; no web transaction will be created.");
+          orderInProgress = true;
+          setCoinAcceptance(false, true);
+          int confirmed = dispensePaperFromUno(bay, sheets, "Serial Test");
+          Serial.print("PAPER TEST RESULT: Bay ");
+          Serial.print(bay);
+          Serial.print(" confirmed ");
+          Serial.print(confirmed);
+          Serial.print("/");
+          Serial.print(sheets);
+          Serial.println(" sheet(s).");
+          orderInProgress = false;
+          setCoinAcceptance(true);
+        }
+      }
+    }
     else if (cmd == "SOFT_RESET") softResetMachineState();
     else if (cmd == "ESP_RESET") CLOUD_SERIAL.println("ESP_RESET");
     else if (cmd == "COIN ON" || cmd == "ACCEPTOR ON") {

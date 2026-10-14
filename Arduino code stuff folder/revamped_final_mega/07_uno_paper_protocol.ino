@@ -180,7 +180,7 @@ int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName)
 
   unsigned long startedAt = millis();
   const unsigned long timeoutMs = min(
-    25000UL,
+    55000UL,
     max(6000UL, PAPER_DISPENSE_TIMEOUT_PER_SHEET_MS * (unsigned long)max(1, sheetCount))
   );
   while (millis() - startedAt < timeoutMs) {
