@@ -14,10 +14,15 @@
     Green LED -> D8, red LED -> D9, buzzer -> D10, blue LED -> D13
 */
 
+// 28BYJ-48 Stepper Calibration on Dispenser Mechanism:
+// 2048 steps = 360° (Full Revolution with Stepper.h 4-step sequence)
+// 1024 steps = 180° (Half Turn forward to drop / return back)
+//  512 steps =  90° (Quarter Turn)
 const int STEPS_PER_REVOLUTION = 2048;
-const int HALF_TURN_STEPS = STEPS_PER_REVOLUTION / 2;
-const int MOTOR_SPEED_RPM = 10;
+const int HALF_TURN_STEPS = 1024; // 1024 steps = half turn (180°)
+const int MOTOR_SPEED_RPM = 10;   // 10 RPM (~341 steps/s) gives smooth motion without stalling
 const int SENSOR_WAIT_MS = 3000;
+const int BALLPEN_IR_TRIGGER_LEVEL = LOW; // LOW when object detected. Change to HIGH if your sensor outputs HIGH when covered
 
 const int STEPPER_IN1_PIN = 3;
 const int STEPPER_IN2_PIN = 4;
@@ -41,7 +46,7 @@ bool stopRequested = false;
 bool dispensing = false;
 
 bool sensorDetected() {
-  return digitalRead(BALLPEN_IR_PIN) == LOW;
+  return digitalRead(BALLPEN_IR_PIN) == BALLPEN_IR_TRIGGER_LEVEL;
 }
 
 void disableMotor() {
@@ -76,38 +81,81 @@ bool readStopCommand() {
   return stopRequested;
 }
 
-bool moveInterruptible(int steps) {
+bool moveInterruptible(int steps, bool *dropFlag = nullptr, int baseline = -1) {
   const int direction = steps >= 0 ? 1 : -1;
   const int count = abs(steps);
   for (int i = 0; i < count; i++) {
     if (readStopCommand()) return false;
     ballpenStepper.step(direction);
+    if (dropFlag != nullptr) {
+      if (digitalRead(BALLPEN_IR_PIN) == BALLPEN_IR_TRIGGER_LEVEL ||
+          (baseline >= 0 && digitalRead(BALLPEN_IR_PIN) != baseline)) {
+        *dropFlag = true;
+      }
+    }
   }
   return true;
 }
 
-bool waitForSensor() {
+bool waitForSensorDrop(int baseline) {
   unsigned long startedAt = millis();
   while (millis() - startedAt < SENSOR_WAIT_MS) {
     if (readStopCommand()) return false;
-    if (sensorDetected()) return true;
+    if (digitalRead(BALLPEN_IR_PIN) == BALLPEN_IR_TRIGGER_LEVEL ||
+        (baseline >= 0 && digitalRead(BALLPEN_IR_PIN) != baseline)) {
+      return true;
+    }
     delay(5);
   }
-  return sensorDetected();
+  return false;
 }
 
 bool dispenseOnePen() {
-  if (sensorDetected()) return false;
-  if (!moveInterruptible(HALF_TURN_STEPS)) return false;
+  bool penDetected = false;
+  const int baseline = digitalRead(BALLPEN_IR_PIN);
 
-  bool detected = waitForSensor();
-  if (stopRequested) return false;
+  Serial.print(F("DISPENSE: Start. Raw IR Pin D7 = "));
+  Serial.print(baseline == LOW ? F("LOW (0)") : F("HIGH (1)"));
+  Serial.println(F(". Rotating half-turn forward to drop position..."));
 
-  delay(100); // Let the pen clear the sensor, without delaying the next item.
-  // Continue forward through the second half-turn instead of reversing back.
-  bool completedRotation = moveInterruptible(HALF_TURN_STEPS);
+  // 1. Rotate HALF-TURN forward (1024 steps = 180°) to drop position
+  bool forwardCompleted = moveInterruptible(HALF_TURN_STEPS, &penDetected, baseline);
+  if (!forwardCompleted) {
+    // If stop command received, still return to start
+    moveInterruptible(-HALF_TURN_STEPS);
+    disableMotor();
+    return false;
+  }
+
+  // 2. STOP and wait for IR sensor if not detected during forward movement
+  if (!penDetected) {
+    Serial.println(F("DISPENSE: Holding at drop position. Waiting for pen drop on IR sensor..."));
+    penDetected = waitForSensorDrop(baseline);
+  }
+
+  if (penDetected) {
+    Serial.println(F("DISPENSE: Pen detected by IR sensor!"));
+  } else {
+    Serial.println(F("DISPENSE: IR timeout - no pen detected."));
+  }
+
+  delay(200); // Brief pause before returning
+
+  // 3. ALWAYS return to original position (reverse half-turn: -1024 steps)
+  Serial.println(F("DISPENSE: Reversing half-turn back to original starting position..."));
+  bool returned = moveInterruptible(-HALF_TURN_STEPS);
+
+  // 4. De-energize coils so motor stays cool at home position
   disableMotor();
-  return detected && completedRotation;
+
+  if (!returned) {
+    Serial.println(F("DISPENSE: Return move interrupted!"));
+    return false;
+  }
+
+  Serial.println(penDetected ? F("DISPENSE: SUCCESS - Returned to start position.")
+                             : F("DISPENSE: FAILED (IR timeout) - Returned to start position."));
+  return penDetected;
 }
 
 void dispensePens(int channel, int quantity) {
@@ -151,6 +199,10 @@ void handleCommand(String command) {
     Serial.println("BALLPEN_READY");
     Serial.println(sensorDetected() ? "IR:DETECTED" : "IR:NOTHING");
   }
+  else if (command == "IR" || command == "IR?") {
+    Serial.print("IR_STATUS: Pin D7 is ");
+    Serial.println(sensorDetected() ? "BLOCKED/LOW" : "CLEAR/HIGH");
+  }
   else if (command.startsWith("INDICATOR:")) {
     setIndicator(command.substring(10));
   }
@@ -193,6 +245,8 @@ void setup() {
   delay(130);
   tone(BUZZER_PIN, 1800, 150);
   Serial.println("BALLPEN_READY");
+  Serial.print("BALLPEN_BOOT: IR Sensor Pin D7 is ");
+  Serial.println(sensorDetected() ? "BLOCKED/LOW" : "CLEAR/HIGH");
 }
 
 void loop() {

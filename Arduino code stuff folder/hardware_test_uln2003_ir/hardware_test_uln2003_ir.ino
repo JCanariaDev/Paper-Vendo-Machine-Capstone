@@ -19,8 +19,12 @@
     OFF - stop immediately and de-energize the motor coils
 */
 
+// 28BYJ-48 Stepper Calibration on Dispenser Mechanism:
+// 1024 steps = 90°  (Quarter Turn)
+// 2048 steps = 180° (Half Turn - dispense / return)
+// 4096 steps = 360° (Full Revolution)
 const int STEPS_PER_REVOLUTION = 2048;
-const int HALF_TURN_STEPS = STEPS_PER_REVOLUTION / 2;
+const int HALF_TURN_STEPS = 2048; // 2048 steps = 180°
 const int MOTOR_SPEED_RPM = 10;
 
 const int STEPPER_IN1_PIN = 3;
