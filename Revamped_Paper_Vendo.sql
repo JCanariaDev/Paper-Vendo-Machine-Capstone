@@ -38,6 +38,9 @@ DROP FUNCTION IF EXISTS machine_recover_interrupted_reservations(TEXT) CASCADE;
 DROP FUNCTION IF EXISTS machine_recover_interrupted_reservations() CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_paper_bay(INTEGER, INTEGER, INTEGER, TEXT) CASCADE;
 DROP FUNCTION IF EXISTS admin_reassign_pen_bay(INTEGER, INTEGER, INTEGER, INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS paper_size_allowed_for_bay(INTEGER, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS enforce_paper_bay_product_type() CASCADE;
+DROP FUNCTION IF EXISTS enforce_assigned_paper_size_change() CASCADE;
 DROP FUNCTION IF EXISTS update_machine_online_heartbeat() CASCADE;
 DROP FUNCTION IF EXISTS log_sales_transaction_event() CASCADE;
 DROP FUNCTION IF EXISTS trg_sync_paper_compartment_presence() CASCADE;
@@ -62,6 +65,9 @@ BEGIN
               'machine_recover_interrupted_reservations',
               'admin_reassign_paper_bay',
               'admin_reassign_pen_bay',
+              'paper_size_allowed_for_bay',
+              'enforce_paper_bay_product_type',
+              'enforce_assigned_paper_size_change',
               'update_machine_online_heartbeat',
               'log_sales_transaction_event',
               'trg_sync_paper_compartment_presence'
@@ -323,9 +329,9 @@ INSERT INTO admins (username, password, role) VALUES
 -- 8 Paper Products in Master Inventory
 INSERT INTO paper_inventory (brand_name, paper_size, cost_per_unit_cents, sheets_per_unit, stock_pads, location_status) VALUES
 ('Standard', 'crosswise', 200, 3, 10, 'In compartment'),
-('Budget', '1_whole', 100, 2, 8, 'In compartment'),
+('Budget', '1_whole', 100, 2, 8, 'In stock'),
 ('Standard', '1/4', 200, 4, 12, 'In stock'),
-('Budget', 'lengthwise', 100, 3, 7, 'In stock'),
+('Budget', 'lengthwise', 100, 3, 7, 'In compartment'),
 ('Budget', '1/4', 100, 4, 15, 'In stock'),
 ('Budget', 'crosswise', 100, 3, 15, 'In stock'),
 ('Standard', 'lengthwise', 200, 3, 10, 'In stock'),
@@ -334,7 +340,97 @@ INSERT INTO paper_inventory (brand_name, paper_size, cost_per_unit_cents, sheets
 -- 2 Physical Paper Compartments
 INSERT INTO paper_compartments (compartment_number, assigned_product_id, current_pad_stock, presence_status, motor_channel, sensor_channel) VALUES
 (1, 1, 1, 'HIGH', 1, 1), -- Standard - Crosswise
-(2, 2, 1, 'HIGH', 2, 2); -- Budget - 1 Whole
+(2, 4, 1, 'HIGH', 2, 2); -- Budget - Lengthwise
+
+-- Enforce product-size stockability per physical paper bay.
+-- Bay 1: whole or crosswise. Bay 2: lengthwise or quarter-sheet.
+CREATE OR REPLACE FUNCTION paper_size_allowed_for_bay(p_bay_number INTEGER, p_paper_size TEXT)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+AS $$
+    SELECT CASE p_bay_number
+        WHEN 1 THEN regexp_replace(lower(trim(coalesce(p_paper_size, ''))), '[[:space:]-]+', '_', 'g') IN ('1_whole', 'crosswise')
+        WHEN 2 THEN regexp_replace(lower(trim(coalesce(p_paper_size, ''))), '[[:space:]-]+', '_', 'g') IN ('lengthwise', '1/4')
+        ELSE FALSE
+    END;
+$$;
+
+CREATE OR REPLACE FUNCTION enforce_paper_bay_product_type()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_paper_size TEXT;
+BEGIN
+    -- Let existing legacy assignments remain until explicitly changed.
+    IF TG_OP = 'UPDATE'
+       AND NEW.assigned_product_id IS NOT DISTINCT FROM OLD.assigned_product_id
+       AND NEW.compartment_number = OLD.compartment_number THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.assigned_product_id IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT paper_size INTO v_paper_size
+      FROM paper_inventory
+     WHERE id = NEW.assigned_product_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Paper product % does not exist', NEW.assigned_product_id
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF NOT paper_size_allowed_for_bay(NEW.compartment_number, v_paper_size) THEN
+        RAISE EXCEPTION 'Paper size "%" cannot be assigned to Paper Bay %', v_paper_size, NEW.compartment_number
+            USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION enforce_assigned_paper_size_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_bay_number INTEGER;
+BEGIN
+    -- Keep legacy assignments usable unless their size is actually changed.
+    IF lower(trim(coalesce(NEW.paper_size, ''))) = lower(trim(coalesce(OLD.paper_size, ''))) THEN
+        RETURN NEW;
+    END IF;
+
+    FOR v_bay_number IN
+        SELECT compartment_number
+          FROM paper_compartments
+         WHERE assigned_product_id = NEW.id
+    LOOP
+        IF NOT paper_size_allowed_for_bay(v_bay_number, NEW.paper_size) THEN
+            RAISE EXCEPTION 'Paper product % is assigned to Paper Bay %, which does not accept paper size "%"',
+                NEW.id, v_bay_number, NEW.paper_size
+                USING ERRCODE = '23514';
+        END IF;
+    END LOOP;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_enforce_paper_bay_product_type ON paper_compartments;
+CREATE TRIGGER trg_enforce_paper_bay_product_type
+BEFORE INSERT OR UPDATE OF compartment_number, assigned_product_id ON paper_compartments
+FOR EACH ROW
+EXECUTE FUNCTION enforce_paper_bay_product_type();
+
+DROP TRIGGER IF EXISTS trg_enforce_assigned_paper_size_change ON paper_inventory;
+CREATE TRIGGER trg_enforce_assigned_paper_size_change
+BEFORE UPDATE OF paper_size ON paper_inventory
+FOR EACH ROW
+EXECUTE FUNCTION enforce_assigned_paper_size_change();
 
 -- 3 Ballpen Products in Master Inventory
 INSERT INTO ballpen_inventory (item_name, cost_per_unit_cents, storage_stock_pieces, location_status) VALUES

@@ -9,6 +9,17 @@ const asInt = (value, fallback = 0) => {
 
 const asMoney = (cents) => asInt(cents) / 100;
 
+function normalizePaperSize(value) {
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function paperSizeAllowedInBay(compartmentNumber, paperSize) {
+  const normalizedSize = normalizePaperSize(paperSize);
+  if (compartmentNumber === 1) return ['1_whole', 'crosswise'].includes(normalizedSize);
+  if (compartmentNumber === 2) return ['lengthwise', '1/4'].includes(normalizedSize);
+  return false;
+}
+
 async function recordRefillHistory(supabase, entry) {
   const { error } = await supabase.from('inventory_refill_history').insert(entry);
   if (error) {
@@ -583,6 +594,10 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     const { assigned_product_id, pads_refilled = 0, presence_status = 'HIGH', physical_status = 'Good' } = req.body;
 
     try {
+      if (![1, 2].includes(compartmentNumber)) {
+        return res.status(400).json({ message: 'Paper bay must be Bay 1 or Bay 2.' });
+      }
+
       const productId = assigned_product_id ? asInt(assigned_product_id) : null;
       const pads = asInt(pads_refilled, 0);
       const { data: beforeComp } = await supabase
@@ -590,6 +605,23 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
         .select('assigned_product_id, current_pad_stock')
         .eq('compartment_number', compartmentNumber)
         .single();
+
+      if (productId !== null) {
+        const { data: product, error: productError } = await supabase
+          .from('paper_inventory')
+          .select('paper_size')
+          .eq('id', productId)
+          .single();
+        if (productError || !product) {
+          return res.status(400).json({ message: 'Selected paper product was not found.' });
+        }
+
+        const isExistingAssignment = beforeComp?.assigned_product_id === productId;
+        if (!isExistingAssignment && !paperSizeAllowedInBay(compartmentNumber, product.paper_size)) {
+          const allowed = compartmentNumber === 1 ? '1_whole or crosswise' : 'lengthwise or 1/4';
+          return res.status(400).json({ message: `Paper Bay ${compartmentNumber} only accepts ${allowed} paper.` });
+        }
+      }
 
       // Call database procedure to reassign and deduct pads safely
       const { error: rpcError } = await supabase.rpc('admin_reassign_paper_bay', {
@@ -811,6 +843,31 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     const { id } = req.params;
     const { brand_name, paper_size, cost_per_unit, sheets_per_unit, stock_pads, location_status, active } = req.body;
     try {
+      const { data: existingProduct, error: existingProductError } = await supabase
+        .from('paper_inventory')
+        .select('paper_size')
+        .eq('id', asInt(id))
+        .single();
+      if (existingProductError) throw existingProductError;
+
+      const requestedPaperSize = paper_size ?? existingProduct.paper_size;
+      const paperSizeChanged = normalizePaperSize(requestedPaperSize) !== normalizePaperSize(existingProduct.paper_size);
+      const { data: assignedBay, error: assignedBayError } = await supabase
+        .from('paper_compartments')
+        .select('compartment_number')
+        .eq('assigned_product_id', asInt(id));
+      if (assignedBayError) throw assignedBayError;
+
+      const incompatibleBay = (assignedBay || []).find(
+        (bay) => paperSizeChanged && !paperSizeAllowedInBay(bay.compartment_number, requestedPaperSize)
+      );
+      if (incompatibleBay) {
+        const allowed = incompatibleBay.compartment_number === 1 ? '1_whole or crosswise' : 'lengthwise or 1/4';
+        return res.status(400).json({
+          message: `This product is assigned to Paper Bay ${incompatibleBay.compartment_number}. Its size cannot be changed to this value; that bay only accepts ${allowed} paper.`
+        });
+      }
+
       const { data, error } = await supabase
         .from('paper_inventory')
         .update({

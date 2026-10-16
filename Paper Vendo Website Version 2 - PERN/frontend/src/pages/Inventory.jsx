@@ -7,6 +7,15 @@ import {
   Cpu, Activity, PlusCircle, Check, Archive, RotateCcw
 } from 'lucide-react';
 
+const normalizePaperSize = (value) => String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+
+const paperSizeAllowedInBay = (bayNumber, paperSize) => {
+  const normalizedSize = normalizePaperSize(paperSize);
+  if (Number(bayNumber) === 1) return ['1_whole', 'crosswise'].includes(normalizedSize);
+  if (Number(bayNumber) === 2) return ['lengthwise', '1/4'].includes(normalizedSize);
+  return false;
+};
+
 export default function Inventory() {
   const { user } = useAuth();
   const [paper, setPaper] = useState([]);
@@ -104,7 +113,8 @@ export default function Inventory() {
   const openBayModal = (type, bay) => {
     setEditingBay({ type, bay });
     if (type === 'paper') {
-      const initialProdId = bay.assigned_product_id || (paper[0]?.id || '');
+      const eligiblePaper = paper.filter((product) => paperSizeAllowedInBay(bay.compartment_number, product.paper_size));
+      const initialProdId = bay.assigned_product_id || (eligiblePaper[0]?.id || '');
       const prod = paper.find(p => p.id === initialProdId);
       const isBayEmpty = bay.presence_status === 'LOW' || (bay.current_pad_stock === 0);
       const defaultRefill = (prod && prod.stock_pads > 0) ? (isBayEmpty ? 1 : 0) : 0;
@@ -543,6 +553,11 @@ export default function Inventory() {
                 <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
                   Assigned Product Specification
                 </label>
+                {editingBay.type === 'paper' && (
+                  <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">
+                    Bay {editingBay.bay.compartment_number} accepts {editingBay.bay.compartment_number === 1 ? '1_whole or crosswise' : 'lengthwise or 1/4'} paper.
+                  </p>
+                )}
                 <select
                   value={bayFormData.assigned_product_id}
                   onChange={(e) => {
@@ -564,9 +579,12 @@ export default function Inventory() {
                 >
                   <option value="" disabled>Select product to assign...</option>
                   {editingBay.type === 'paper' 
-                    ? paper.map(p => (
+                    ? paper.filter((p) =>
+                        paperSizeAllowedInBay(editingBay.bay.compartment_number, p.paper_size)
+                        || p.id === editingBay.bay.assigned_product_id
+                      ).map(p => (
                         <option key={p.id} value={p.id}>
-                          {p.brand_name} – {p.paper_size} ({p.stock_pads} PADs in storage)
+                          {p.brand_name} – {p.paper_size}{!paperSizeAllowedInBay(editingBay.bay.compartment_number, p.paper_size) ? ' (current assignment)' : ''} ({p.stock_pads} PADs in storage)
                         </option>
                       ))
                     : pen.map(p => (
