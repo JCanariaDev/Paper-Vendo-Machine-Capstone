@@ -10,37 +10,32 @@
 
   Hardware:
     ULN2003 IN1/IN2/IN3/IN4 -> D3/D4/D11/D12
+    ULN2003 motor supply -> voltage rated for the 28BYJ-48 (typically 5V)
+    ULN2003 GND and Uno GND must be common
     Ballpen IR OUT -> D7 (active LOW)
     Green LED -> D8, red LED -> D9, buzzer -> D10, blue LED -> D13
 */
 
-// 28BYJ-48 Stepper Calibration on Dispenser Mechanism:
-// 2048 steps = 360° (Full Revolution with Stepper.h 4-step sequence)
-// 1024 steps = 180° (Half Turn forward to drop / return back)
-//  512 steps =  90° (Quarter Turn)
+// Starting calibration for the 28BYJ-48 through ULN2003; verify on the mechanism.
 const int STEPS_PER_REVOLUTION = 2048;
-const int HALF_TURN_STEPS = 1024; // 1024 steps = half turn (180°)
-const int MOTOR_SPEED_RPM = 10;   // 10 RPM (~341 steps/s) gives smooth motion without stalling
+const int HALF_TURN_STEPS = 1024;
+const int MOTOR_SPEED_RPM = 10;
 const int SENSOR_WAIT_MS = 3000;
 const int BALLPEN_IR_TRIGGER_LEVEL = LOW; // LOW when object detected. Change to HIGH if your sensor outputs HIGH when covered
 
-const int STEPPER_IN1_PIN = 3;
-const int STEPPER_IN2_PIN = 4;
-const int STEPPER_IN3_PIN = 11;
-const int STEPPER_IN4_PIN = 12;
+const int MOTOR_IN1_PIN = 3;
+const int MOTOR_IN2_PIN = 4;
+const int MOTOR_IN3_PIN = 11;
+const int MOTOR_IN4_PIN = 12;
 const int BALLPEN_IR_PIN = 7;
 const int LED_GREEN_PIN = 8;
 const int LED_RED_PIN = 9;
 const int BUZZER_PIN = 10;
 const int LED_BLUE_PIN = 13;
 
-Stepper ballpenStepper(
-  STEPS_PER_REVOLUTION,
-  STEPPER_IN1_PIN,
-  STEPPER_IN3_PIN,
-  STEPPER_IN2_PIN,
-  STEPPER_IN4_PIN
-);
+Stepper ballpenStepper(STEPS_PER_REVOLUTION,
+                       MOTOR_IN1_PIN, MOTOR_IN3_PIN,
+                       MOTOR_IN2_PIN, MOTOR_IN4_PIN);
 
 bool stopRequested = false;
 bool dispensing = false;
@@ -50,10 +45,10 @@ bool sensorDetected() {
 }
 
 void disableMotor() {
-  digitalWrite(STEPPER_IN1_PIN, LOW);
-  digitalWrite(STEPPER_IN2_PIN, LOW);
-  digitalWrite(STEPPER_IN3_PIN, LOW);
-  digitalWrite(STEPPER_IN4_PIN, LOW);
+  digitalWrite(MOTOR_IN1_PIN, LOW);
+  digitalWrite(MOTOR_IN2_PIN, LOW);
+  digitalWrite(MOTOR_IN3_PIN, LOW);
+  digitalWrite(MOTOR_IN4_PIN, LOW);
 }
 
 void setIndicator(const String &state) {
@@ -81,10 +76,11 @@ bool readStopCommand() {
   return stopRequested;
 }
 
-bool moveInterruptible(int steps, bool *dropFlag = nullptr, int baseline = -1) {
+bool moveInterruptible(long steps, bool *dropFlag = nullptr, int baseline = -1) {
+  const long count = steps >= 0 ? steps : -steps;
   const int direction = steps >= 0 ? 1 : -1;
-  const int count = abs(steps);
-  for (int i = 0; i < count; i++) {
+
+  for (long i = 0; i < count; i++) {
     if (readStopCommand()) return false;
     ballpenStepper.step(direction);
     if (dropFlag != nullptr) {
@@ -118,7 +114,7 @@ bool dispenseOnePen() {
   Serial.print(baseline == LOW ? F("LOW (0)") : F("HIGH (1)"));
   Serial.println(F(". Rotating half-turn forward to drop position..."));
 
-  // 1. Rotate HALF-TURN forward (1024 steps = 180°) to drop position
+  // 1. Rotate the calibrated half-turn forward to the drop position.
   bool forwardCompleted = moveInterruptible(HALF_TURN_STEPS, &penDetected, baseline);
   if (!forwardCompleted) {
     // If stop command received, still return to start
@@ -141,7 +137,7 @@ bool dispenseOnePen() {
 
   delay(200); // Brief pause before returning
 
-  // 3. ALWAYS return to original position (reverse half-turn: -1024 steps)
+  // 3. Return by the same calibrated half-turn in reverse.
   Serial.println(F("DISPENSE: Reversing half-turn back to original starting position..."));
   bool returned = moveInterruptible(-HALF_TURN_STEPS);
 
@@ -228,10 +224,10 @@ void setup() {
   Serial.begin(9600);
   Serial.setTimeout(100);
 
-  pinMode(STEPPER_IN1_PIN, OUTPUT);
-  pinMode(STEPPER_IN2_PIN, OUTPUT);
-  pinMode(STEPPER_IN3_PIN, OUTPUT);
-  pinMode(STEPPER_IN4_PIN, OUTPUT);
+  pinMode(MOTOR_IN1_PIN, OUTPUT);
+  pinMode(MOTOR_IN2_PIN, OUTPUT);
+  pinMode(MOTOR_IN3_PIN, OUTPUT);
+  pinMode(MOTOR_IN4_PIN, OUTPUT);
   pinMode(BALLPEN_IR_PIN, INPUT_PULLUP);
   pinMode(LED_GREEN_PIN, OUTPUT);
   pinMode(LED_RED_PIN, OUTPUT);

@@ -53,14 +53,13 @@ const int PAPER_LEVEL_HIGH_LEVEL = LOW;
 // an empty pad; the 20-second limit is only a final jam/sensor safety stop.
 const unsigned long PAPER_NO_STOCK_CONFIRM_MS = 15000;
 const unsigned long PAPER_EXIT_TIMEOUT_MS = 20000;
-const long MAX_STEPS_PER_SHEET = 32000;
+const long MAX_STEPS_PER_SHEET = 12000;
 const uint8_t PAPER_LCD_ADDRESS = 0x27;
 const uint8_t PAPER_LCD_COLUMNS = 16;
 const uint8_t PAPER_LCD_ROWS = 2;
 
-// Match the bench-tested 10k pulse setting; loop overhead makes the actual rate lower.
-const uint8_t STEP_PULSE_WIDTH_US = 5;
-const unsigned int STEP_PERIOD_US = 100; // 100us period = nominal 10,000 pulses/s
+// Previously tested reliable setting; faster stepping may stall under paper load.
+const unsigned int STEP_PULSE_DELAY_US = 800; // 800us high + 800us low = ~625 steps/s
 int paperPadStock[MOTOR_COUNT] = { -1, -1 }; // -1 = not synced yet
 int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
 long remainingSheets[MOTOR_COUNT] = { -1, -1 };
@@ -123,9 +122,9 @@ void disableAllDrivers() {
 
 void pulseStep(int motorIdx) {
   digitalWrite(STEP_PINS[motorIdx], HIGH);
-  delayMicroseconds(STEP_PULSE_WIDTH_US);
+  delayMicroseconds(STEP_PULSE_DELAY_US);
   digitalWrite(STEP_PINS[motorIdx], LOW);
-  delayMicroseconds(STEP_PERIOD_US - STEP_PULSE_WIDTH_US);
+  delayMicroseconds(STEP_PULSE_DELAY_US);
 }
 
 bool paperBayHasStock(int bayIndex) {
@@ -150,7 +149,7 @@ bool feedOneSheet(int bayIndex) {
   int blockedStreak = 0;
   int clearStreak = 0;
   const int NOISE_FILTER_STEPS = 30;
-  const long MAX_STEPS = MAX_STEPS_PER_SHEET;
+  const long MAX_STEPS = 10000; // ~16 seconds nominal max per sheet at 800us timing
   
   for (long step = 0; step < MAX_STEPS; step++) {
     // Non-blocking serial check for emergency STOP without freezing the stepper loop
@@ -189,7 +188,7 @@ bool feedOneSheet(int bayIndex) {
     }
   }
 
-  // If the per-sheet step safety limit is reached without a complete sensor pass:
+  // If 10,000 steps reached (~16s) without complete exit:
   disableAllDrivers();
   return false;
 }
