@@ -245,11 +245,8 @@ void printCentered(const char* text, int cx, int cy) {
   printCentered(String(text), cx, cy);
 }
 
-void drawTftStatusBar() {
-  tft.fillRect(0, 0, tft.width(), 26, COL_BACKGROUND);
-  drawGradientHorizontal(0, 25, tft.width());
+void drawTftWifiBadge() {
   tft.setTextSize(1);
-
   tft.fillRoundRect(4, 2, 76, 21, 7, COL_STATUS_BG);
   if (activeTrNumber.length() > 0) {
     // Show official TR Record Number on top-left throughout checkout/dispense
@@ -264,6 +261,13 @@ void drawTftStatusBar() {
     tft.setCursor(25, 8);
     tft.print(uiWifiConnected ? "WIFI OK" : "WIFI --");
   }
+  tft.setTextSize(1);
+}
+
+void drawTftStatusBar() {
+  tft.fillRect(0, 0, tft.width(), 26, COL_BACKGROUND);
+  drawGradientHorizontal(0, 25, tft.width());
+  drawTftWifiBadge();
 
   int remainingChangeCents = max(0, activeChangeDueCents - activeChangePaidCents);
   String creditText;
@@ -291,6 +295,12 @@ void drawIdleScreen() {
   tft.fillScreen(COL_BACKGROUND);
   drawTftStatusBar();
   drawPaperBuddyAnimationFrame(0);
+  drawIdleContent();
+}
+
+void drawIdleContent() {
+  // Wi-Fi transitions repaint this region only, preserving the status bar and mascot.
+  tft.fillRect(0, 90, tft.width(), 160, COL_BACKGROUND);
   if (wifiStatus == WIFI_STATUS_CONNECTED && catalogLoaded) {
     printCenteredStyled("Insert Coins", tft.width() / 2, 140, COL_TEXT, true, true);
     printCenteredStyled("to use.", tft.width() / 2, 165, COL_TEXT);

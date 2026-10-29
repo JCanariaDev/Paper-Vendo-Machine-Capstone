@@ -164,6 +164,8 @@ void setCoinAcceptance(bool allowed, bool force = false);
 void onCatalogSyncCompleted();
 void onCatalogSyncFailed();
 void drawTftStatusBar();
+void drawTftWifiBadge();
+void drawIdleContent();
 void drawPaperBuddyAnimationFrame(uint8_t frame);
 void resetPendingSelections();
 void drawIdleScreen();

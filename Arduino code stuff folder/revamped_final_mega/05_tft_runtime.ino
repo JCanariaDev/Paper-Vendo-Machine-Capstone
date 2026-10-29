@@ -40,10 +40,10 @@ void tftUiSetWifiStatus(int status) {
   } else if (status != WIFI_STATUS_CONNECTED) {
     setCoinAcceptance(false);
   }
-  if (currentScreen == SCREEN_IDLE || currentScreen == SCREEN_MAIN) {
-    redrawCurrentScreen();
-  } else {
-    drawTftStatusBar();
+  // Heartbeats update state, but repaint only the affected UI when it changes.
+  if (changed) {
+    drawTftWifiBadge();
+    if (currentScreen == SCREEN_IDLE) drawIdleContent();
   }
 }
 

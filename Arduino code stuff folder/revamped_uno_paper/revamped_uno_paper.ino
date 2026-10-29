@@ -65,14 +65,75 @@ int sheetsPerPad[MOTOR_COUNT] = { 1, 1 };
 long remainingSheets[MOTOR_COUNT] = { -1, -1 };
 LiquidCrystal_I2C paperLcd(PAPER_LCD_ADDRESS, PAPER_LCD_COLUMNS, PAPER_LCD_ROWS);
 bool hasPaperLcd = false;
+enum PaperLcdState { PAPER_LCD_DASHBOARD, PAPER_LCD_DISPENSING, PAPER_LCD_RESULT };
+PaperLcdState paperLcdState = PAPER_LCD_DASHBOARD;
+uint8_t paperDashboardPage = 0;
+unsigned long paperDashboardPageStartedAt = 0;
+unsigned long paperLcdResultStartedAt = 0;
+const unsigned long PAPER_LCD_PAGE_DURATION_MS = 2500;
+const unsigned long PAPER_LCD_RESULT_DURATION_MS = 2500;
 
 void showPaperLcd(const String &line1, const String &line2 = "") {
   if (!hasPaperLcd) return;
-  paperLcd.clear();
+
+  String row1 = line1.substring(0, PAPER_LCD_COLUMNS);
+  String row2 = line2.substring(0, PAPER_LCD_COLUMNS);
+  while (row1.length() < PAPER_LCD_COLUMNS) row1 += ' ';
+  while (row2.length() < PAPER_LCD_COLUMNS) row2 += ' ';
+
   paperLcd.setCursor(0, 0);
-  paperLcd.print(line1.substring(0, PAPER_LCD_COLUMNS));
+  paperLcd.print(row1);
   paperLcd.setCursor(0, 1);
-  paperLcd.print(line2.substring(0, PAPER_LCD_COLUMNS));
+  paperLcd.print(row2);
+}
+
+String paperStockLabel(int bayIndex) {
+  if (paperPadStock[bayIndex] < 0) return "--";
+  return paperPadStock[bayIndex] > 0 ? "OK" : "LOW";
+}
+
+String paperSheetCountLabel(int bayIndex) {
+  if (remainingSheets[bayIndex] < 0) return "---";
+  if (remainingSheets[bayIndex] > 999) return "999+";
+  String count = String(remainingSheets[bayIndex]);
+  while (count.length() < 3) count = "0" + count;
+  return count;
+}
+
+void showPaperDashboardPage() {
+  if (!hasPaperLcd || paperLcdState != PAPER_LCD_DASHBOARD) return;
+
+  if (paperDashboardPage == 0) {
+    showPaperLcd("PAPER STATUS", "B1:" + paperStockLabel(0) + " B2:" + paperStockLabel(1));
+  } else if (paperDashboardPage == 1) {
+    showPaperLcd("SHEETS LEFT", "B1:" + paperSheetCountLabel(0) + " B2:" + paperSheetCountLabel(1));
+  } else {
+    showPaperLcd("PAPER LEVEL", String("B1:") + (paperLevelIsHigh(0) ? "HIGH" : "LOW") +
+                 " B2:" + (paperLevelIsHigh(1) ? "HIGH" : "LOW"));
+  }
+  paperDashboardPageStartedAt = millis();
+}
+
+void updatePaperLcd() {
+  const unsigned long now = millis();
+  if (paperLcdState == PAPER_LCD_RESULT &&
+      now - paperLcdResultStartedAt >= PAPER_LCD_RESULT_DURATION_MS) {
+    paperLcdState = PAPER_LCD_DASHBOARD;
+    paperDashboardPage = 0;
+    showPaperDashboardPage();
+  } else if (paperLcdState == PAPER_LCD_DASHBOARD &&
+             now - paperDashboardPageStartedAt >= PAPER_LCD_PAGE_DURATION_MS) {
+    paperDashboardPage = (paperDashboardPage + 1) % 3;
+    showPaperDashboardPage();
+  }
+}
+
+void showPaperLcdResult(int bayNum, int sheetsDispensed, int requestedSheets, bool success) {
+  paperLcdState = PAPER_LCD_RESULT;
+  paperLcdResultStartedAt = millis();
+  showPaperLcd(success ? "BAY " + String(bayNum) + " COMPLETE"
+                       : "BAY " + String(bayNum) + " FEED FAIL",
+               "CONFIRMED " + String(sheetsDispensed) + "/" + String(requestedSheets));
 }
 
 void sendStatus();
@@ -223,17 +284,20 @@ void syncPaperStock(int bayNum, int padStock, int unitSheets) {
     remainingSheets[idx] = (long)paperPadStock[idx] * sheetsPerPad[idx];
   }
   sendStatus();
+  showPaperDashboardPage();
 }
 
 // Dispenses sheet-by-sheet and confirms each sheet at the exit IR sensor.
-void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
+void dispensePaper(int bayNum, int requestedSheets) {
   int idx = bayNum - 1;
   if (idx < 0 || idx >= MOTOR_COUNT) {
     Serial.println("ERR:BAD_BAY");
     return;
   }
 
-  showPaperLcd("Dispensing", paperName);
+  paperLcdState = PAPER_LCD_DISPENSING;
+  showPaperLcd("BAY " + String(bayNum) + " DISPENSING",
+               "CONFIRMED 0/" + String(requestedSheets));
 
   enableDriver(idx);
   delay(10); // Allow TMC2209 charge pump to stabilize after enable
@@ -243,7 +307,7 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
   for (int s = 0; s < requestedSheets; s++) {
     if (!feedOneSheet(idx)) {
       disableAllDrivers();
-      showPaperLcd("Paper sensor wait", paperName);
+      showPaperLcdResult(bayNum, sheetsDispensed, requestedSheets, false);
       Serial.println("EMPTY:" + String(bayNum) + ":" + String(sheetsDispensed));
       sendStatus();
       return;
@@ -251,6 +315,8 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
 
     sheetsDispensed++;
     Serial.println("SHEET_OK:" + String(bayNum) + ":" + String(sheetsDispensed));
+    showPaperLcd("BAY " + String(bayNum) + " DISPENSING",
+                 "CONFIRMED " + String(sheetsDispensed) + "/" + String(requestedSheets));
     delay(500); // 0.5s stabilization gap between sheets as requested
   }
 
@@ -260,7 +326,7 @@ void dispensePaper(int bayNum, int requestedSheets, const String &paperName) {
     paperPadStock[idx] = (remainingSheets[idx] + sheetsPerPad[idx] - 1) / sheetsPerPad[idx];
   }
   Serial.println("DONE:" + String(bayNum) + ":" + String(sheetsDispensed));
-  showPaperLcd("Dispense done", paperName);
+  showPaperLcdResult(bayNum, sheetsDispensed, requestedSheets, true);
   sendStatus();
 }
 
@@ -291,9 +357,7 @@ void handleCommand(String cmd) {
       int bay = cmd.substring(first + 1, second).toInt();
       int third = cmd.indexOf(':', second + 1);
       int count = (third < 0) ? cmd.substring(second + 1).toInt() : cmd.substring(second + 1, third).toInt();
-      String paperName = (third < 0) ? "Paper" : cmd.substring(third + 1);
-      paperName.trim();
-      dispensePaper(bay, count, paperName);
+      dispensePaper(bay, count);
     }
   }
   else if (cmd.startsWith("STOCK:")) {
@@ -382,7 +446,7 @@ void setup() {
     hasPaperLcd = true;
     paperLcd.init();
     paperLcd.backlight();
-    showPaperLcd("Paper dispenser", "Ready");
+    showPaperLcd("PAPER UNO READY", "Awaiting stock...");
   } else {
     hasPaperLcd = false;
   }
@@ -398,6 +462,7 @@ void setup() {
 
   delay(200);
   digitalWrite(13, LOW); // Boot finished, LED OFF
+  showPaperDashboardPage();
   Serial.println("UNO_PAPER_READY");
 }
 
@@ -406,4 +471,5 @@ void loop() {
     String incoming = Serial.readStringUntil('\n');
     handleCommand(incoming);
   }
+  updatePaperLcd();
 }

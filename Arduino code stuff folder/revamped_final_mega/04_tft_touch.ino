@@ -41,7 +41,7 @@ void handleMainTouch(int x, int y) {
     resetPendingSelections();
     currentScreen = SCREEN_CATALOG;
     drawCatalogScreen();
-  } else if (x >= 16 && x <= 224 && y >= 220 && y <= 280) {
+  } else if (x >= 8 && x <= 232 && y >= 216 && y <= 284) {
     if (cartCount > 0) {
       startOrder();
     } else {

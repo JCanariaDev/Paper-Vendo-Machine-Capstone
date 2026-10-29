@@ -4,8 +4,9 @@
 /*
   BALLPEN UNO ULN2003 TEST SKETCH
 
-  Keeps the Ballpen UNO serial commands, IR confirmation, indicators, and
-  dispense cycle, but drives a 28BYJ-48 through a ULN2003 board.
+  Keeps the Ballpen UNO serial commands, IR confirmation, and indicators, but
+  drives a 28BYJ-48 through a ULN2003 board. Each dispense advances two
+  half-turns in the forward direction, returning to the starting orientation.
 
   Wiring:
     ULN2003 IN1/IN2/IN3/IN4 -> UNO D3/D4/D11/D12
@@ -116,7 +117,6 @@ bool dispenseOnePen() {
   Serial.println(F(". Rotating half-turn forward to drop position..."));
 
   if (!moveInterruptible(HALF_TURN_STEPS, &penDetected, baseline)) {
-    moveInterruptible(-HALF_TURN_STEPS);
     disableMotor();
     return false;
   }
@@ -130,17 +130,22 @@ bool dispenseOnePen() {
                              : F("DISPENSE: IR timeout - no pen detected."));
   delay(200);
 
-  Serial.println(F("DISPENSE: Reversing half-turn back to original starting position..."));
-  const bool returned = moveInterruptible(-HALF_TURN_STEPS);
-  disableMotor();
-
-  if (!returned) {
-    Serial.println(F("DISPENSE: Return move interrupted!"));
+  if (stopRequested) {
+    disableMotor();
     return false;
   }
 
-  Serial.println(penDetected ? F("DISPENSE: SUCCESS - Returned to start position.")
-                             : F("DISPENSE: FAILED (IR timeout) - Returned to start position."));
+  Serial.println(F("DISPENSE: Continuing forward half-turn to return to starting orientation..."));
+  const bool returned = moveInterruptible(HALF_TURN_STEPS);
+  disableMotor();
+
+  if (!returned) {
+    Serial.println(F("DISPENSE: Forward return move interrupted!"));
+    return false;
+  }
+
+  Serial.println(penDetected ? F("DISPENSE: SUCCESS - Returned with forward rotation.")
+                             : F("DISPENSE: FAILED (IR timeout) - Returned with forward rotation."));
   return penDetected;
 }
 
