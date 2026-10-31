@@ -410,14 +410,26 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
   });
 
   router.get('/transactions', async (req, res) => {
-    const { limit, startDate, endDate, itemType, status } = req.query;
+    const { limit, startDate, endDate, startAt, endAt, itemType, status } = req.query;
     try {
       let lines = await getTransactionLines(supabase);
-      if (startDate) lines = lines.filter((line) => new Date(line.transaction_date) >= new Date(`${startDate}T00:00:00Z`));
-      if (endDate) lines = lines.filter((line) => new Date(line.transaction_date) <= new Date(`${endDate}T23:59:59Z`));
+      if (startAt) {
+        const startBoundary = new Date(startAt);
+        if (!Number.isFinite(startBoundary.getTime())) return res.status(400).json({ message: 'Invalid startAt date.' });
+        lines = lines.filter((line) => new Date(line.transaction_date) >= startBoundary);
+      } else if (startDate) {
+        lines = lines.filter((line) => new Date(line.transaction_date) >= new Date(`${startDate}T00:00:00Z`));
+      }
+      if (endAt) {
+        const endBoundary = new Date(endAt);
+        if (!Number.isFinite(endBoundary.getTime())) return res.status(400).json({ message: 'Invalid endAt date.' });
+        lines = lines.filter((line) => new Date(line.transaction_date) < endBoundary);
+      } else if (endDate) {
+        lines = lines.filter((line) => new Date(line.transaction_date) <= new Date(`${endDate}T23:59:59Z`));
+      }
       if (itemType && itemType !== 'all') lines = lines.filter((line) => line.item_type === itemType);
       if (status && status !== 'all') lines = lines.filter((line) => line.status === status);
-      if (limit) lines = lines.slice(0, asInt(limit));
+      if (limit) lines = lines.slice(0, Math.max(0, asInt(limit)));
       return res.status(200).json(lines);
     } catch (err) {
       console.error('Error fetching transactions:', err);
