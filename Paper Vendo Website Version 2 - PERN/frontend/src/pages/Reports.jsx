@@ -57,6 +57,11 @@ function formatDateTime(value, timeZone) {
   }).format(date);
 }
 
+function formatActivityLabel(dateKey, timeZone) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', timeZone }).format(new Date(year, month - 1, day));
+}
+
 function getStatusInfo(transaction) {
   const status = transaction.status || 'PENDING';
   if (status.startsWith('FAILED') || status === 'CANCELLED') {
@@ -116,7 +121,7 @@ function groupTransactionLines(lines) {
       changePaid: Number(first.change_paid || 0),
       changeOwed: Number(first.change_owed || 0),
       refundPaid: Number(first.refund_paid || 0),
-      netRetained: Number(first.credit_received || 0) - Number(first.change_paid || 0) - Number(first.refund_paid || 0)
+      estimatedProceeds: Number(first.credit_received || 0) - Number(first.change_due || 0) - Number(first.refund_paid || 0)
     };
   }).sort((a, b) => new Date(b.transaction_date) - new Date(a.transaction_date));
 }
@@ -152,6 +157,9 @@ export default function Reports() {
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState(null);
   const [page, setPage] = useState(1);
+  const [pdfPageSize, setPdfPageSize] = useState('a4');
+  const [pdfOrientation, setPdfOrientation] = useState('landscape');
+  const [includeLedger, setIncludeLedger] = useState(true);
 
   const generateReport = useCallback(async () => {
     if (!startDate || !endDate || startDate > endDate) {
@@ -214,7 +222,8 @@ export default function Reports() {
     totals.changePaid += transaction.changePaid;
     totals.changeOwed += transaction.changeOwed;
     totals.refundPaid += transaction.refundPaid;
-    totals.netRetained += transaction.netRetained;
+    totals.changeDue += transaction.changeDue;
+    totals.estimatedProceeds += transaction.estimatedProceeds;
     if (status === 'completed') totals.completed++;
     if (status === 'failed' || status === 'partial') totals.needsReview++;
     return totals;
@@ -226,7 +235,8 @@ export default function Reports() {
     changePaid: 0,
     changeOwed: 0,
     refundPaid: 0,
-    netRetained: 0,
+    changeDue: 0,
+    estimatedProceeds: 0,
     completed: 0,
     needsReview: 0
   }), [visibleTransactions]);
@@ -243,9 +253,9 @@ export default function Reports() {
       const rows = [
         ['Paper Vendo Machine Report'],
         [`Period: ${startDate} through ${endDate} (${timeZone})`],
-        [`Item filter: ${itemType}`, `Status filter: ${statusFilter}`, `Generated: ${formatDateTime(new Date(), timeZone)}`],
+        [`Item filter: ${itemType}`, `Status filter: ${statusFilter}`, `Search: ${searchQuery || 'none'}`, `Generated: ${formatDateTime(new Date(), timeZone)}`],
         [],
-        ['TR Number', 'Transaction ID', 'Date & Time', 'Status', 'Items', 'Requested Units', 'Dispensed Qty', 'Item Subtotal (PHP)', 'Credits Received (PHP)', 'Change Due (PHP)', 'Change Paid (PHP)', 'Change Owed (PHP)', 'Refund Recorded (PHP)', 'Net Retained (PHP)', 'Failure Reason']
+        ['TR Number', 'Transaction ID', 'Date & Time', 'Status', 'Items', 'Requested Units', 'Dispensed Qty', 'Item Subtotal (PHP)', 'Credits Received (PHP)', 'Change Due (PHP)', 'Change Paid (PHP)', 'Change Owed (PHP)', 'Refund Recorded (PHP)', 'Estimated Proceeds After Full Change Obligation (PHP)', 'Failure Reason']
       ];
       visibleTransactions.forEach((transaction) => rows.push([
         transaction.tr_number,
@@ -261,7 +271,7 @@ export default function Reports() {
         transaction.changePaid.toFixed(2),
         transaction.changeOwed.toFixed(2),
         transaction.refundPaid.toFixed(2),
-        transaction.netRetained.toFixed(2),
+        transaction.estimatedProceeds.toFixed(2),
         transaction.failure_reason || ''
       ]));
       rows.push([], ['Summary', `Transactions: ${summary.transactions}`, `Completed: ${summary.completed}`, `Failed/partial: ${summary.needsReview}`]);
@@ -280,73 +290,271 @@ export default function Reports() {
     setExporting('pdf');
     setError('');
     try {
-      const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+      const doc = new jsPDF({ orientation: pdfOrientation, unit: 'mm', format: pdfPageSize });
       const pageWidth = doc.internal.pageSize.getWidth();
       const pageHeight = doc.internal.pageSize.getHeight();
       const generatedAt = formatDateTime(new Date(), timeZone);
+      const margin = 12;
+      const usableWidth = pageWidth - margin * 2;
+      const outcomeRows = [
+        { label: 'Completed', key: 'completed', color: [16, 150, 111] },
+        { label: 'Partial success', key: 'partial', color: [217, 143, 24] },
+        { label: 'Failed / cancelled', key: 'failed', color: [204, 69, 69] },
+        { label: 'Change owed', key: 'change', color: [209, 139, 26] },
+        { label: 'Refunded', key: 'refunded', color: [40, 130, 181] },
+        { label: 'Other / pending', key: 'other', color: [120, 135, 151] }
+      ].map((row) => ({
+        ...row,
+        count: visibleTransactions.filter((transaction) => getStatusInfo(transaction).key === row.key).length
+      }));
+
+      const narrative = summary.needsReview > 0 || summary.changeOwed > 0
+        ? `${summary.transactions} transactions were recorded: ${summary.completed} completed and ${summary.needsReview} failed or partial. ${currency(summary.changeOwed)} in change remains unpaid and needs follow-up; ${currency(summary.changePaid)} change was paid and ${currency(summary.refundPaid)} in refunds were recorded. Estimated proceeds after the full change obligation and recorded refunds are ${currency(summary.estimatedProceeds)}; this is an operational estimate, not audited revenue.`
+        : `${summary.transactions} transactions were recorded, including ${summary.completed} completed orders. ${currency(summary.changePaid)} change was paid and ${currency(summary.refundPaid)} in refunds were recorded. Estimated proceeds after recorded change obligations and refunds are ${currency(summary.estimatedProceeds)}. This is an operational estimate, not audited revenue.`;
+      const reportNarrative = itemType === 'all'
+        ? narrative
+        : `${narrative} Settlement values reflect whole orders, while item details are filtered to ${itemType}.`;
+
+      doc.setFillColor(9, 23, 35);
+      doc.roundedRect(margin, 9, usableWidth, 20, 3, 3, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(pdfOrientation === 'landscape' ? 17 : 15);
+      doc.setTextColor(252, 251, 221);
+      doc.text('PAPER VENDO', margin + 6, 17);
+      doc.setFontSize(9);
+      doc.setTextColor(147, 214, 205);
+      doc.text('OPERATIONS REPORT', margin + 6, 23);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(255, 255, 255);
+      doc.text(`${startDate} to ${endDate}  |  ${timeZone}`, pageWidth - margin - 5, 17, { align: 'right' });
+      doc.text(`Generated ${generatedAt}`, pageWidth - margin - 5, 23, { align: 'right' });
+      doc.setFontSize(6.5);
+      doc.setTextColor(220, 238, 235);
+      const searchLabel = searchQuery.trim();
+      const filterLabel = `Filters: ${itemType} · ${statusFilter} · Search: ${searchLabel ? `${searchLabel.slice(0, 24)}${searchLabel.length > 24 ? '…' : ''}` : 'none'}`;
+      doc.text(filterLabel, margin + 6, 27);
+
+      const cards = [
+        { label: 'TRANSACTIONS', value: String(summary.transactions), note: `${summary.completed} completed · ${summary.needsReview} failed/partial`, fill: [238, 247, 245] },
+        { label: 'CREDITS RECEIVED', value: currency(summary.creditReceived), note: `${currency(summary.changePaid)} change paid`, fill: [238, 247, 245] },
+        { label: 'CHANGE STILL OWED', value: currency(summary.changeOwed), note: 'Outstanding customer balance', fill: [255, 246, 225] },
+        { label: 'ESTIMATED PROCEEDS', value: currency(summary.estimatedProceeds), note: 'After full change obligation/refunds', fill: [238, 247, 245] }
+      ];
+      const cardGap = 4;
+      const cardWidth = (usableWidth - cardGap * (cards.length - 1)) / cards.length;
+      cards.forEach((card, index) => {
+        const x = margin + index * (cardWidth + cardGap);
+        doc.setFillColor(...card.fill);
+        doc.roundedRect(x, 34, cardWidth, 25, 2.5, 2.5, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.setTextColor(71, 85, 105);
+        doc.text(card.label, x + 4, 40);
+        doc.setFontSize(pdfOrientation === 'portrait' ? 12 : 13);
+        doc.setTextColor(15, 53, 57);
+        doc.text(card.value, x + 4, 48);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6.5);
+        doc.setTextColor(71, 85, 105);
+        doc.text(doc.splitTextToSize(card.note, cardWidth - 8), x + 4, 55);
+      });
+
+      doc.setFillColor(248, 250, 252);
+      doc.roundedRect(margin, 63, usableWidth, 28, 2.5, 2.5, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(15, 83, 92);
+      doc.text('REPORT NARRATIVE', margin + 4, 69);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(51, 65, 85);
+      doc.text(doc.splitTextToSize(reportNarrative, usableWidth - 8), margin + 4, 75);
+
+      const chartTop = 96;
+      const chartBottom = pageHeight - 16;
+      const chartHeight = chartBottom - chartTop;
+      const chartGap = 6;
+      const chartWidth = (usableWidth - chartGap) / 2;
+      const leftX = margin;
+      const rightX = margin + chartWidth + chartGap;
+      [leftX, rightX].forEach((x) => {
+        doc.setDrawColor(220, 229, 232);
+        doc.setFillColor(255, 255, 255);
+        doc.roundedRect(x, chartTop, chartWidth, chartHeight, 2.5, 2.5, 'FD');
+      });
 
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(17);
-      doc.setTextColor(15, 23, 42);
-      doc.text('PAPER VENDO | TRANSACTION REPORT', 12, 15);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8.5);
-      doc.setTextColor(71, 85, 105);
-      doc.text(`Period: ${startDate} to ${endDate} (${timeZone})`, 12, 22);
-      doc.text(`Filters: ${itemType === 'all' ? 'All products' : itemType} · ${statusFilter === 'all' ? 'All statuses' : statusFilter}`, 12, 27);
-      doc.text(`Generated: ${generatedAt}`, 12, 32);
-      doc.text(`Records: ${summary.transactions}   Completed: ${summary.completed}   Failed/partial: ${summary.needsReview}`, 12, 39);
-      doc.text(`Credits received: ${currency(summary.creditReceived)}   Change paid: ${currency(summary.changePaid)}   Refunds recorded: ${currency(summary.refundPaid)}`, 12, 45);
-      doc.text(`Net retained: ${currency(summary.netRetained)}   Change still owed: ${currency(summary.changeOwed)}   Requested units: ${summary.requestedUnits}   Dispensed output: ${summary.dispensedQty}`, 12, 51);
+      doc.setFontSize(9);
+      doc.setTextColor(15, 53, 57);
+      doc.text('ORDER OUTCOMES', leftX + 5, chartTop + 8);
+      const maxOutcome = Math.max(1, ...outcomeRows.map((row) => row.count));
+      const rowHeight = Math.min(11, (chartHeight - 21) / outcomeRows.length);
+      const rowStartY = chartTop + 16 + Math.max(0, (chartHeight - 21 - rowHeight * outcomeRows.length) / 2);
+      const barX = leftX + chartWidth * 0.48;
+      const barMaxWidth = chartWidth * 0.38;
+      outcomeRows.forEach((row, index) => {
+        const y = rowStartY + index * rowHeight;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(51, 65, 85);
+        doc.text(row.label, leftX + 5, y + 3.5);
+        doc.setFillColor(235, 241, 243);
+        doc.roundedRect(barX, y, barMaxWidth, 4.5, 1.5, 1.5, 'F');
+        if (row.count > 0) {
+          doc.setFillColor(...row.color);
+          doc.roundedRect(barX, y, Math.max(1.5, barMaxWidth * row.count / maxOutcome), 4.5, 1.5, 1.5, 'F');
+        }
+        doc.setFont('helvetica', 'bold');
+        doc.text(String(row.count), barX + barMaxWidth + 3, y + 3.5);
+      });
 
-      autoTable(doc, {
-        startY: 58,
-        margin: { left: 10, right: 10, bottom: 14 },
-        head: [[
-          'TR / ID', 'Date & Time', 'Status / Issue', 'Items', 'Units', 'Output',
-          'Credits', 'Change Due / Paid / Owed', 'Refund', 'Net Retained'
-        ]],
-        body: visibleTransactions.map((transaction) => [
-          `${transaction.tr_number || '—'}\n${transaction.transaction_id || ''}`,
-          formatDateTime(transaction.transaction_date, timeZone),
-          `${getStatusInfo(transaction).label}${transaction.failure_reason ? `\n${transaction.failure_reason}` : ''}`,
-          transaction.itemSummary,
-          String(transaction.requestedUnits),
-          String(transaction.dispensedQty),
-          currency(transaction.creditReceived),
-          `${currency(transaction.changeDue)} / ${currency(transaction.changePaid)} / ${currency(transaction.changeOwed)}`,
-          currency(transaction.refundPaid),
-          currency(transaction.netRetained)
-        ]),
-        theme: 'striped',
-        headStyles: { fillColor: [15, 83, 92], textColor: [255, 255, 255], fontSize: 7.5 },
-        alternateRowStyles: { fillColor: [241, 248, 246] },
-        styles: { font: 'helvetica', fontSize: 7, cellPadding: 2.2, overflow: 'linebreak', valign: 'middle' },
-        columnStyles: {
-          0: { cellWidth: 24 },
-          1: { cellWidth: 32 },
-          2: { cellWidth: 36 },
-          3: { cellWidth: 45 },
-          4: { cellWidth: 12, halign: 'center' },
-          5: { cellWidth: 12, halign: 'center' },
-          6: { cellWidth: 22, halign: 'right' },
-          7: { cellWidth: 36, halign: 'right' },
-          8: { cellWidth: 21, halign: 'right' },
-          9: { cellWidth: 24, halign: 'right' }
-        },
-        didDrawPage: () => {
-          doc.setFontSize(7.5);
-          doc.setTextColor(100, 116, 139);
-          doc.text(`Paper Vendo · ${timeZone}`, 10, pageHeight - 6);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(15, 53, 57);
+      doc.text('TRANSACTION ACTIVITY', rightX + 5, chartTop + 8);
+      const rangeStart = new Date(`${startDate}T00:00:00`);
+      const rangeEnd = new Date(`${endDate}T00:00:00`);
+      const spanDays = Math.max(1, Math.round((rangeEnd - rangeStart) / 86400000) + 1);
+      const bucketMode = spanDays <= 45 ? 'day' : spanDays <= 540 ? 'month' : 'quarter';
+      const bucketKey = (date) => {
+        const year = date.getFullYear();
+        if (bucketMode === 'day') return localDateKey(date);
+        const month = date.getMonth() + 1;
+        if (bucketMode === 'month') return `${year}-${String(month).padStart(2, '0')}`;
+        return `${year}-Q${Math.ceil(month / 3)}`;
+      };
+      const activity = new Map();
+      visibleTransactions.forEach((transaction) => {
+        const date = new Date(transaction.transaction_date);
+        if (Number.isFinite(date.getTime())) {
+          const key = bucketKey(date);
+          activity.set(key, (activity.get(key) || 0) + 1);
         }
       });
+      const periodKeys = new Set(activity.keys());
+      if (bucketMode === 'day') {
+        const cursor = new Date(rangeStart);
+        while (cursor <= rangeEnd) {
+          periodKeys.add(bucketKey(cursor));
+          cursor.setDate(cursor.getDate() + 1);
+        }
+      } else if (bucketMode === 'month') {
+        const cursor = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+        while (cursor <= rangeEnd) {
+          periodKeys.add(bucketKey(cursor));
+          cursor.setMonth(cursor.getMonth() + 1);
+        }
+      } else {
+        const quarterMonth = Math.floor(rangeStart.getMonth() / 3) * 3;
+        const cursor = new Date(rangeStart.getFullYear(), quarterMonth, 1);
+        while (cursor <= rangeEnd) {
+          periodKeys.add(bucketKey(cursor));
+          cursor.setMonth(cursor.getMonth() + 3);
+        }
+      }
+      const activityEntries = Array.from(periodKeys).sort().map((key) => [key, activity.get(key) || 0]);
+      const plotLeft = rightX + 12;
+      const plotRight = rightX + chartWidth - 8;
+      const plotTop = chartTop + 19;
+      const plotBottom = chartBottom - 12;
+      const plotHeight = Math.max(12, plotBottom - plotTop);
+      const plotWidth = plotRight - plotLeft;
+      const maxActivity = Math.max(1, ...activityEntries.map(([, count]) => count));
+      doc.setDrawColor(225, 232, 235);
+      doc.line(plotLeft, plotBottom, plotRight, plotBottom);
+      [0.5, 1].forEach((fraction) => {
+        const y = plotBottom - plotHeight * fraction;
+        doc.setDrawColor(238, 242, 244);
+        doc.line(plotLeft, y, plotRight, y);
+      });
+      if (activityEntries.length) {
+        const slotWidth = plotWidth / activityEntries.length;
+        activityEntries.forEach(([label, count], index) => {
+          const barWidth = Math.max(1, Math.min(6, slotWidth * 0.62));
+          const height = Math.max(1, plotHeight * count / maxActivity);
+          const x = plotLeft + slotWidth * index + (slotWidth - barWidth) / 2;
+          doc.setFillColor(41, 151, 153);
+          doc.roundedRect(x, plotBottom - height, barWidth, height, 0.7, 0.7, 'F');
+        });
+        const labelIndexes = [...new Set([0, Math.floor((activityEntries.length - 1) / 2), activityEntries.length - 1])];
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6.5);
+        doc.setTextColor(71, 85, 105);
+        labelIndexes.forEach((index) => {
+          const shortLabel = bucketMode === 'day'
+            ? formatActivityLabel(activityEntries[index][0], timeZone)
+            : activityEntries[index][0];
+          const x = plotLeft + plotWidth * index / Math.max(1, activityEntries.length - 1);
+          doc.text(shortLabel, x, plotBottom + 7, { align: index === 0 ? 'left' : index === activityEntries.length - 1 ? 'right' : 'center' });
+        });
+      } else {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(100, 116, 139);
+        doc.text('No activity in this range.', plotLeft, plotTop + 12);
+      }
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text(bucketMode === 'day' ? 'Transactions per day' : bucketMode === 'month' ? 'Transactions per month' : 'Transactions per quarter', rightX + 5, chartBottom - 3);
+
+      if (includeLedger) {
+        doc.addPage(pdfPageSize, pdfOrientation);
+        const landscape = pdfOrientation === 'landscape';
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(12);
+        doc.setTextColor(15, 53, 57);
+        doc.text('TRANSACTION LEDGER', 9, 14);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(71, 85, 105);
+        doc.text(`${startDate} to ${endDate} · ${timeZone} · ${visibleTransactions.length} records`, 9, 20);
+        autoTable(doc, {
+          startY: 26,
+          margin: { left: 9, right: 9, top: 26, bottom: 13 },
+          head: [[
+            'TR / DATE', 'OUTCOME / REASON', 'ITEMS', 'REQ. / OUT.',
+            'CREDIT / REFUND', 'CHANGE DUE / PAID / OWED'
+          ]],
+          body: visibleTransactions.map((transaction) => [
+            `${transaction.tr_number || '—'}\n${formatDateTime(transaction.transaction_date, timeZone)}`,
+            `${getStatusInfo(transaction).label}${transaction.failure_reason ? `\n${transaction.failure_reason.replaceAll('_', ' ')}` : ''}`,
+            transaction.itemSummary,
+            `${transaction.requestedUnits} / ${transaction.dispensedQty}`,
+            `${currency(transaction.creditReceived)} / ${currency(transaction.refundPaid)}`,
+            `${currency(transaction.changeDue)} / ${currency(transaction.changePaid)} / ${currency(transaction.changeOwed)}`
+          ]),
+          theme: 'striped',
+          headStyles: { fillColor: [15, 83, 92], textColor: [255, 255, 255], fontSize: 7 },
+          alternateRowStyles: { fillColor: [241, 248, 246] },
+          styles: { font: 'helvetica', fontSize: landscape ? 7 : 6.5, cellPadding: landscape ? 2.2 : 1.8, overflow: 'linebreak', valign: 'middle' },
+          columnStyles: landscape ? {
+            0: { cellWidth: 39 },
+            1: { cellWidth: 51 },
+            2: { cellWidth: 67 },
+            3: { cellWidth: 23, halign: 'center' },
+            4: { cellWidth: 35, halign: 'right' },
+            5: { cellWidth: 48, halign: 'right' }
+          } : {
+            0: { cellWidth: 31 },
+            1: { cellWidth: 35 },
+            2: { cellWidth: 43 },
+            3: { cellWidth: 16, halign: 'center' },
+            4: { cellWidth: 30, halign: 'right' },
+            5: { cellWidth: 35, halign: 'right' }
+          },
+          showHead: 'everyPage'
+        });
+      }
 
       const pageCount = doc.internal.getNumberOfPages();
       for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
         doc.setPage(pageNumber);
         doc.setFontSize(7.5);
         doc.setTextColor(100, 116, 139);
-        doc.text(`Page ${pageNumber} of ${pageCount}`, pageWidth - 10, pageHeight - 6, { align: 'right' });
+        doc.text(`Paper Vendo · ${timeZone}`, 9, pageHeight - 5);
+        doc.text(`Page ${pageNumber} of ${pageCount}`, pageWidth - 9, pageHeight - 5, { align: 'right' });
       }
       doc.save(`${filenameBase}.pdf`);
     } catch (exportError) {
@@ -445,9 +653,9 @@ export default function Reports() {
           <p className="mt-1 text-xs text-slate-500">{summary.completed} completed · {summary.needsReview} failed or partial</p>
         </div>
         <div className={cardClass}>
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Net retained · estimate</p>
-          <p className="mt-2 font-display text-2xl font-extrabold text-emerald-600 dark:text-emerald-400">{currency(summary.netRetained)}</p>
-          <p className="mt-1 text-xs text-slate-500">Credits received less change paid and refunds recorded</p>
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">After obligations · estimate</p>
+          <p className="mt-2 font-display text-2xl font-extrabold text-emerald-600 dark:text-emerald-400">{currency(summary.estimatedProceeds)}</p>
+          <p className="mt-1 text-xs text-slate-500">Credits less full change due and recorded refunds</p>
         </div>
         <div className={cardClass}>
           <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Change still owed</p>
@@ -465,6 +673,31 @@ export default function Reports() {
         <div className="px-2 py-1"><p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Credits received</p><p className="mt-1 text-sm font-bold text-slate-700 dark:text-slate-200">{currency(summary.creditReceived)}</p></div>
         <div className="border-slate-200 px-2 py-1 sm:border-l sm:pl-5 dark:border-white/[0.08]"><p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Change paid</p><p className="mt-1 text-sm font-bold text-slate-700 dark:text-slate-200">{currency(summary.changePaid)}</p></div>
         <div className="border-slate-200 px-2 py-1 sm:border-l sm:pl-5 dark:border-white/[0.08]"><p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Refunds recorded</p><p className="mt-1 text-sm font-bold text-slate-700 dark:text-slate-200">{currency(summary.refundPaid)}</p></div>
+      </section>
+
+      <section className={`${cardClass} flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between`}>
+        <div>
+          <h2 className="font-display text-base font-bold text-slate-800 dark:text-white">Printable PDF settings</h2>
+          <p className="mt-1 text-xs text-slate-500">The PDF begins with a summary page and can include the transaction ledger.</p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Paper size
+            <select value={pdfPageSize} onChange={(event) => setPdfPageSize(event.target.value)} className="mt-1 block h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium normal-case tracking-normal text-slate-800 dark:border-white/[0.08] dark:bg-slate-900 dark:text-white">
+              <option value="a4">A4</option>
+              <option value="letter">Letter</option>
+            </select>
+          </label>
+          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Orientation
+            <select value={pdfOrientation} onChange={(event) => setPdfOrientation(event.target.value)} className="mt-1 block h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium normal-case tracking-normal text-slate-800 dark:border-white/[0.08] dark:bg-slate-900 dark:text-white">
+              <option value="landscape">Landscape</option>
+              <option value="portrait">Portrait</option>
+            </select>
+          </label>
+          <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600 dark:border-white/[0.08] dark:text-slate-300">
+            <input type="checkbox" checked={includeLedger} onChange={(event) => setIncludeLedger(event.target.checked)} className="accent-primary-600" />
+            Include ledger
+          </label>
+        </div>
       </section>
 
       <section className={`${cardClass} space-y-5`}>
@@ -540,7 +773,7 @@ export default function Reports() {
       </section>
 
       <p className="text-xs leading-relaxed text-slate-400">
-        “Net retained” is an estimate calculated from recorded credits received minus recorded change paid and refunds. Matching an item category filters line items, while settlement values remain transaction-level. Transactions without a sales line are not included in this sales report.
+        “After obligations” is an estimate calculated as recorded credits received minus the full change due and recorded refunds. It is not audited revenue. Matching an item category filters line items, while settlement values remain transaction-level. Transactions without a sales line are not included in this sales report.
       </p>
     </div>
   );
