@@ -64,57 +64,23 @@ int dispensePenFromUno(int channel, int quantity) {
 
 int releaseVerifiedChange(int changeCents) {
   if (changeCents <= 0) return 0;
-  bool previousBlocked = (digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW);
-  Serial.print("HOPPER: starting sensor state = ");
-  Serial.println(previousBlocked ? "BLOCKED (LOW)" : "CLEAR (HIGH)");
-  if (previousBlocked) {
+  if (digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW) {
     Serial.println("HOPPER WARNING: exit sensor is LOW at start.");
-    Serial.println("HOPPER: waiting for a clear-to-blocked transition; a coin already blocking the beam will not count yet.");
   }
   const int expectedCoins = changeCents / 100;
   int countedCoins = 0;
-  bool coinInBeam = false;
-  Serial.print("HOPPER: requested change=P");
-  Serial.print(changeCents / 100.0, 2);
-  Serial.print("; expected coin pulses=");
-  Serial.println(expectedCoins);
+  bool previousBlocked = false;
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_ON);
-  Serial.println("HOPPER: relay ON; monitoring D23 (LOW=beam blocked).");
   unsigned long lastCoinAt = millis();
   while (countedCoins < expectedCoins && millis() - lastCoinAt < CHANGE_COIN_TIMEOUT_MS) {
     bool blocked = (digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW);
     if (blocked && !previousBlocked) {
-      coinInBeam = true;
+      countedCoins++;
       lastCoinAt = millis();
-      Serial.println("HOPPER SENSOR: beam blocked; coin entered sensor.");
-    } else if (!blocked && previousBlocked) {
-      if (coinInBeam) {
-        countedCoins++;
-        coinInBeam = false;
-        lastCoinAt = millis();
-        Serial.print("HOPPER SENSOR: beam cleared; coin passage confirmed ");
-        Serial.print(countedCoins);
-        Serial.print("/");
-        Serial.println(expectedCoins);
-        BALLPEN_SERIAL.println("BEEP:2000:70"); // Coin passage confirmed
-      } else {
-        Serial.println("HOPPER SENSOR: beam clear; ready for coin.");
-      }
+      BALLPEN_SERIAL.println("BEEP:2000:70"); // Coin detected by hopper IR sensor
     }
     previousBlocked = blocked;
   }
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
-  Serial.println("HOPPER: relay OFF.");
-  if (countedCoins < expectedCoins) {
-    Serial.print("HOPPER TIMEOUT: confirmed ");
-    Serial.print(countedCoins);
-    Serial.print("/");
-    Serial.print(expectedCoins);
-    Serial.println(" coins before timeout.");
-  } else {
-    Serial.print("HOPPER COMPLETE: sensor confirmed ");
-    Serial.print(countedCoins);
-    Serial.println(" coin(s).");
-  }
   return countedCoins * 100;
 }

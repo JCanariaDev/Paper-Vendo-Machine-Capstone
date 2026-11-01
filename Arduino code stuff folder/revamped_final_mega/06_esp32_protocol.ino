@@ -1,109 +1,6 @@
 // ESP32 PROTOCOL
 // Split from revamped_final_mega.ino for readability.
 
-void handleSerialOrderCommand(String cmd) {
-  cmd.trim();
-  if (cmd == "SERIAL_ORDER CANCEL") {
-    serialOrderType = "";
-    serialOrderExpiresAt = 0;
-    Serial.println("SERIAL ORDER: pending live order cancelled.");
-    return;
-  }
-
-  if (cmd == "SERIAL_ORDER CONFIRM") {
-    if (!serialOrderType.length() || (long)(millis() - serialOrderExpiresAt) >= 0) {
-      serialOrderType = "";
-      Serial.println("SERIAL ORDER: no unexpired preview. Start with SERIAL_ORDER PAPER <bay> <qty> or PEN <bay> <qty>.");
-      return;
-    }
-    if (!uiWifiConnected || !catalogLoaded || orderInProgress || pendingCoinAcceptorOff || cartCount != 0) {
-      serialOrderType = "";
-      Serial.println("SERIAL ORDER: confirmation refused; recheck Wi-Fi, catalog, transaction/coin state, and empty cart.");
-      return;
-    }
-
-    addToCart(serialOrderType, serialOrderId, serialOrderName.c_str(), serialOrderPrice, serialOrderQty);
-    if (cartCount != 1 || credits < serialOrderPrice * serialOrderQty) {
-      cartCount = 0;
-      serialOrderType = "";
-      Serial.println("SERIAL ORDER: confirmation refused; cart or credit validation failed.");
-      return;
-    }
-
-    Serial.println("SERIAL ORDER: submitting REAL cloud-backed order. This may charge credits and dispense product/change.");
-    Serial.print("SERIAL ORDER: credits P"); Serial.print(credits);
-    Serial.print("; local item total P"); Serial.println(serialOrderPrice * serialOrderQty, 2);
-    serialOrderType = "";
-    serialOrderExpiresAt = 0;
-    startOrder();
-    return;
-  }
-
-  if (!cmd.startsWith("SERIAL_ORDER ")) {
-    Serial.println("Usage: SERIAL_ORDER PAPER <bay 1-2> <qty> | PEN <bay 1> <qty>");
-    return;
-  }
-  if (!uiWifiConnected || !catalogLoaded) {
-    Serial.println("SERIAL ORDER refused: wait for Wi-Fi and catalog sync to complete.");
-    return;
-  }
-  if (orderInProgress || pendingCoinAcceptorOff || cartCount != 0) {
-    Serial.println("SERIAL ORDER refused: finish current activity and empty the on-screen cart first.");
-    return;
-  }
-
-  String args = cmd.substring(12);
-  args.trim();
-  int firstSpace = args.indexOf(' ');
-  int secondSpace = firstSpace < 0 ? -1 : args.indexOf(' ', firstSpace + 1);
-  if (firstSpace < 0 || secondSpace < 0 || args.indexOf(' ', secondSpace + 1) >= 0) {
-    Serial.println("Usage: SERIAL_ORDER PAPER <bay 1-2> <qty> | PEN <bay 1> <qty>");
-    return;
-  }
-
-  String type = args.substring(0, firstSpace);
-  int bay = args.substring(firstSpace + 1, secondSpace).toInt();
-  int qty = args.substring(secondSpace + 1).toInt();
-  CatalogItem *item = nullptr;
-  int bayCount = 0;
-  if (type == "PAPER") {
-    bayCount = PAPER_COUNT;
-    if (bay >= 1 && bay <= bayCount) item = &paperCatalog[bay - 1];
-    type = "paper";
-  } else if (type == "PEN") {
-    bayCount = BALLPEN_COUNT;
-    if (bay >= 1 && bay <= bayCount) item = &ballpenCatalog[bay - 1];
-    type = "pen";
-  }
-  if (!item || qty < 1 || qty > 20 || !item->isPaperPresent || item->price <= 0) {
-    Serial.println("SERIAL ORDER refused: invalid bay/quantity or selected bay is unavailable.");
-    return;
-  }
-  if (type == "pen" && (qty < minimumBallpensPerTransaction || qty > maximumBallpensPerTransaction)) {
-    Serial.print("SERIAL ORDER refused: pen quantity must be ");
-    Serial.print(minimumBallpensPerTransaction); Serial.print("-");
-    Serial.println(maximumBallpensPerTransaction);
-    return;
-  }
-  float total = item->price * qty;
-  if (credits < minimumCreditsToStart || credits < total) {
-    Serial.println("SERIAL ORDER refused: insufficient real machine credits. Insert coins normally first.");
-    return;
-  }
-
-  serialOrderType = type;
-  serialOrderId = item->id;
-  serialOrderName = item->name;
-  serialOrderQty = qty;
-  serialOrderPrice = item->price;
-  serialOrderExpiresAt = millis() + 30000UL;
-  Serial.println("SERIAL ORDER PREVIEW (not submitted yet):");
-  Serial.print("  "); Serial.print(serialOrderName); Serial.print(" x"); Serial.println(qty);
-  Serial.print("  Local total: P"); Serial.print(total, 2);
-  Serial.print(" | Current credits: P"); Serial.println(credits);
-  Serial.println("If change is due, the real release stage will run. Enter SERIAL_ORDER CONFIRM within 30 seconds to submit, or SERIAL_ORDER CANCEL.");
-}
-
 void startOrder() {
   if (ballpenCartQuantity() > maximumBallpensPerTransaction) {
     tftUiShowError("Max " + String(maximumBallpensPerTransaction) + " ballpens");
@@ -120,7 +17,6 @@ void startOrder() {
   setCoinAcceptance(false);
   orderSummaryText = "";
   orderTotalCost = cartTotal();
-  Serial.println("ORDER: sending real cart/credit reservation to ESP32.");
   for (int i = 0; i < cartCount; i++) {
     if (orderSummaryText.length()) orderSummaryText += "\n";
     orderSummaryText += cart[i].name + " x" + String(cart[i].qty) +
@@ -179,12 +75,26 @@ void executeDispensePlan(String message) {
 
   activeTransactionId = transactionId;
   activeTrNumber = trNumber;
+  const long acceptedCreditCents = (long)credits * 100L;
+  long locallyCalculatedChangeCents = acceptedCreditCents - subtotalCents;
+  if (locallyCalculatedChangeCents < 0) locallyCalculatedChangeCents = 0;
+  const bool changeAmountConsistent = locallyCalculatedChangeCents == changeDueCents;
+  Serial.print("CHANGE CHECK: credit=P");
+  Serial.print(acceptedCreditCents / 100.0, 2);
+  Serial.print(" subtotal=P");
+  Serial.print(subtotalCents / 100.0, 2);
+  Serial.print(" calculated due=P");
+  Serial.print(locallyCalculatedChangeCents / 100.0, 2);
+  Serial.print(" server due=P");
+  Serial.print(changeDueCents / 100.0, 2);
+  Serial.print(" expected one-peso coins=");
+  Serial.println(changeDueCents / 100);
+  if (!changeAmountConsistent) {
+    Serial.println("CHANGE WARNING: local and server amounts differ; hopper release will be skipped for safety.");
+  }
   activeChangeDueCents = changeDueCents;
   activeChangePaidCents = 0;
   orderTotalCost = subtotalCents / 100.0;
-  Serial.print("TRANSACTION RESERVED: "); Serial.print(trNumber);
-  Serial.print(" | subtotal=P"); Serial.print(orderTotalCost, 2);
-  Serial.print(" | change due=P"); Serial.println(changeDueCents / 100.0, 2);
 
   // Transition screen state so summary animation stops completely
   currentScreen = SCREEN_DISPENSING;
@@ -243,26 +153,20 @@ void executeDispensePlan(String message) {
   if (millis() - planStartedAt >= DISPENSE_PLAN_TIMEOUT_MS) {
     Serial.println("Skipping change release after dispense plan timeout.");
     activeChangePaidCents = 0;
+  } else if (activeChangeDueCents > 0 && !changeAmountConsistent) {
+    activeChangePaidCents = 0;
   } else if (activeChangeDueCents > 0) {
-    Serial.print("CHANGE STAGE: releasing P");
-    Serial.print(activeChangeDueCents / 100.0, 2);
-    Serial.print("; expecting ");
-    Serial.print(activeChangeDueCents / 100);
-    Serial.println(" one-peso coin(s) from hopper sensor.");
     delay(200); // Allow 12V power rail to settle after NEMA motor de-energization
     tft.fillRect(0, 110, tft.width(), 80, COL_BACKGROUND);
     printCenteredStyled("Releasing Change...", tft.width() / 2, 130, COL_TEXT, true, true);
     int verifiedChange = releaseVerifiedChange(activeChangeDueCents);
     activeChangePaidCents = max(0, verifiedChange);
-    Serial.print("CHANGE STAGE RESULT: sensor-confirmed P");
-    Serial.println(activeChangePaidCents / 100.0, 2);
   } else {
     activeChangePaidCents = 0;
   }
 
   // -- STEP 3: NOTIFY ESP32 CLOUD GATEWAY --
   CLOUD_SERIAL.println("FINISH:" + activeTransactionId + ":" + results + ":" + String(activeChangePaidCents));
-  Serial.println("TRANSACTION: dispense results and sensor-confirmed change sent to ESP32 for finalization.");
   finishSentAt = millis(); // Start safety timeout for FINISHED: response
 }
 
@@ -296,11 +200,6 @@ void finishUiAfterTransaction(String message) {
       paidCents = message.substring(p5 + 1).toInt();
     }
   }
-
-  Serial.print("TRANSACTION FINALIZED: "); Serial.print(trNum);
-  Serial.print(" | status="); Serial.print(transactionStatus);
-  Serial.print(" | change due=P"); Serial.print(dueCents / 100.0, 2);
-  Serial.print(" | sensor-confirmed change=P"); Serial.println(paidCents / 100.0, 2);
 
   credits = 0;
   orderInProgress = false;

@@ -1,33 +1,5 @@
 # Revamped Mega Firmware Notes
 
-## Live Serial Order and Hopper Test
-
-Use the Mega Serial Monitor at 115200 baud with a newline line ending. Wait for
-Wi-Fi and catalog sync, then insert real coins until the displayed/serial
-credit balance is greater than the selected product price. With the TFT
-connected but not being used, enter a live order preview such as:
-
-- `SERIAL_ORDER PAPER 1 1` to preview one item from paper Bay 1.
-- `SERIAL_ORDER PEN 1 1` to preview one pen from Bay 1.
-- `SERIAL_ORDER CONFIRM` to submit the preview as a real ESP32/cloud order.
-- `SERIAL_ORDER CANCEL` to discard the preview.
-
-The preview expires after 30 seconds. Confirmation reserves the current real
-credits and may charge them, dispense the selected product, and release change.
-This is not an unbilled test. To exercise the hopper, ensure the paid amount is
-greater than the actual cloud price so the returned plan includes change. The
-Mega Serial Monitor reports the reservation, `CHANGE STAGE`, hopper relay
-state, D23 sensor edges/count, timeout or completion, and cloud finalization.
-The hopper motor supply must be connected for this live test; keep hands clear
-of the mechanism and secure the coin outlet. Do not use `HOPPER ON` for this
-test because it bypasses the sensor-counted transaction flow.
-
-The current hopper sensor input is Mega D23, active LOW (LOW=beam blocked,
-HIGH=clear). For a sensor-only bench test, keep hopper motor power disconnected
-and power the sensor module from a regulated 5V peripheral rail. Connect its
-OUT to D23 and its GND to Mega GND. Do not connect 12V to the sensor VCC or join
-the sensor buck's +5V output to the Mega's USB-powered +5V rail.
-
 ## Paper Hardware Test Command
 
 From the Mega Serial Monitor (115200 baud, newline line ending), enter:

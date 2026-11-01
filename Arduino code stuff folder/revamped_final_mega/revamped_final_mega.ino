@@ -147,12 +147,6 @@ bool diagTftOk = false;
 bool diagTouchOk = false;
 bool hopperManualRunning = false;
 unsigned long hopperManualStartedAt = 0;
-String serialOrderType = "";
-String serialOrderName = "";
-int serialOrderId = 0;
-int serialOrderQty = 0;
-float serialOrderPrice = 0;
-unsigned long serialOrderExpiresAt = 0;
 
 enum IndicatorState { INDICATOR_READY, INDICATOR_ACTIVE, INDICATOR_ERROR };
 IndicatorState indicatorState = INDICATOR_READY;
@@ -207,7 +201,6 @@ void addToCart(String type, int id, const char* name, float price, int qty);
 int ballpenCartQuantity();
 int ballpenPendingQuantity();
 void startOrder();
-void handleSerialOrderCommand(String cmd);
 void tftUiBegin();
 void tftUiSetCredits();
 void tftUiSetWifiStatus(int status);
@@ -345,8 +338,6 @@ void setup() {
   UNO_SERIAL.setTimeout(500);
   BALLPEN_SERIAL.setTimeout(500);
   Serial.println("--- REVAMPED SMART PAPER VENDO FIRMWARE (OPTION A) STARTING ---");
-  Serial.println("Serial live-order test: SERIAL_ORDER PAPER <bay> <qty> or PEN <bay> <qty>, then SERIAL_ORDER CONFIRM.");
-  Serial.println("Hopper-only manual commands remain HOPPER ON / HOPPER OFF; these can energize the relay.");
 
   tftUiBegin();
   diagTftOk = true;
@@ -518,8 +509,7 @@ void loop() {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
     cmd.toUpperCase();
-    if (cmd.startsWith("SERIAL_ORDER")) handleSerialOrderCommand(cmd);
-    else if (cmd == "DIAG") runDiagnostics();
+    if (cmd == "DIAG") runDiagnostics();
     else if (cmd == "STATUS") printHardwareStatus();
     else if (cmd.startsWith("PAPER_TEST ")) {
       String args = cmd.substring(11);
