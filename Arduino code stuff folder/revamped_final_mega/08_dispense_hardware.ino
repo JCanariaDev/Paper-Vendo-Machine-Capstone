@@ -64,12 +64,9 @@ int dispensePenFromUno(int channel, int quantity) {
 
 int releaseVerifiedChange(int changeCents) {
   if (changeCents <= 0) return 0;
-  if (digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW) {
-    Serial.println("HOPPER WARNING: exit sensor is LOW at start.");
-  }
+  bool previousBlocked = (digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW);
   const int expectedCoins = changeCents / 100;
   int countedCoins = 0;
-  bool previousBlocked = false;
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_ON);
   unsigned long lastCoinAt = millis();
   while (countedCoins < expectedCoins && millis() - lastCoinAt < CHANGE_COIN_TIMEOUT_MS) {
@@ -77,6 +74,10 @@ int releaseVerifiedChange(int changeCents) {
     if (blocked && !previousBlocked) {
       countedCoins++;
       lastCoinAt = millis();
+      Serial.print("HOPPER DETECTED: D23 LOW; coin ");
+      Serial.print(countedCoins);
+      Serial.print("/");
+      Serial.println(expectedCoins);
       BALLPEN_SERIAL.println("BEEP:2000:70"); // Coin detected by hopper IR sensor
     }
     previousBlocked = blocked;

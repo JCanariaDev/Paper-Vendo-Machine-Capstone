@@ -40,10 +40,14 @@ void tftUiSetWifiStatus(int status) {
   } else if (status != WIFI_STATUS_CONNECTED) {
     setCoinAcceptance(false);
   }
-  // Heartbeats update state, but repaint only the affected UI when it changes.
+  // Redraw on actual state transitions only; this avoids heartbeat flicker while
+  // keeping the full screen and status badge synchronized after Wi-Fi changes.
   if (changed) {
-    drawTftWifiBadge();
-    if (currentScreen == SCREEN_IDLE) drawIdleContent();
+    if (currentScreen == SCREEN_IDLE || currentScreen == SCREEN_MAIN) {
+      redrawCurrentScreen();
+    } else {
+      drawTftStatusBar();
+    }
   }
 }
 

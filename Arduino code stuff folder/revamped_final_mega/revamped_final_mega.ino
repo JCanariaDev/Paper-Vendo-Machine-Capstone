@@ -147,6 +147,8 @@ bool diagTftOk = false;
 bool diagTouchOk = false;
 bool hopperManualRunning = false;
 unsigned long hopperManualStartedAt = 0;
+bool hopperSensorMonitorEnabled = false;
+bool hopperSensorMonitorWasBlocked = false;
 
 enum IndicatorState { INDICATOR_READY, INDICATOR_ACTIVE, INDICATOR_ERROR };
 IndicatorState indicatorState = INDICATOR_READY;
@@ -192,6 +194,7 @@ int dispensePenFromUno(int channel, int quantity);
 void handleBallpenMessage(String msg);
 int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName);
 int releaseVerifiedChange(int changeCents);
+void updateStandaloneHopperSensorMonitor();
 void handleCloudCommand(String msg);
 void handleUnoMessage(String msg);
 void coinInterrupt();
@@ -201,6 +204,7 @@ void addToCart(String type, int id, const char* name, float price, int qty);
 int ballpenCartQuantity();
 int ballpenPendingQuantity();
 void startOrder();
+void handleSerialOrderCommand(String cmd);
 void tftUiBegin();
 void tftUiSetCredits();
 void tftUiSetWifiStatus(int status);
@@ -369,6 +373,7 @@ void setup() {
 
 void loop() {
   unsigned long now = millis();
+  updateStandaloneHopperSensorMonitor();
 
   // HW RESET (A8) - Requires holding button continuously for 800ms to ignore motor EMF/noise spikes
   static unsigned long hwResetPressedAt = 0;
@@ -509,7 +514,50 @@ void loop() {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
     cmd.toUpperCase();
-    if (cmd == "DIAG") runDiagnostics();
+    if (cmd.startsWith("ORDER ")) handleSerialOrderCommand(cmd);
+    else if (cmd == "HOPPER MONITOR ON") {
+      if (orderInProgress) {
+        Serial.println("HOPPER MONITOR refused: transaction is active.");
+      } else {
+        hopperSensorMonitorWasBlocked = (digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW);
+        hopperSensorMonitorEnabled = true;
+        Serial.println("HOPPER MONITOR ON: passive D23 detection armed; relay unchanged.");
+      }
+    } else if (cmd == "HOPPER MONITOR OFF") {
+      hopperSensorMonitorEnabled = false;
+      Serial.println("HOPPER MONITOR OFF.");
+    }
+    else if (cmd.startsWith("CREDIT ADD ")) {
+      String amountText = cmd.substring(11);
+      long amount = amountText.toInt();
+      if (amount <= 0 || String(amount) != amountText) {
+        Serial.println("Usage: CREDIT ADD <whole_pesos>");
+      } else if (orderInProgress || pendingCoinAcceptorOff) {
+        Serial.println("CREDIT ADD refused: finish the active transaction/coin burst first.");
+      } else {
+        uint16_t currentCredits;
+        uint16_t newCredits;
+        bool withinCreditLimit;
+        noInterrupts();
+        currentCredits = credits;
+        withinCreditLimit = (unsigned long)currentCredits + (unsigned long)amount <= maximumCreditsAllowed;
+        newCredits = withinCreditLimit ? currentCredits + (uint16_t)amount : currentCredits;
+        if (withinCreditLimit) credits = newCredits;
+        interrupts();
+
+        if (!withinCreditLimit) {
+          Serial.println("CREDIT ADD refused: amount would exceed the machine credit limit.");
+        } else {
+          setCoinAcceptance(newCredits < maximumCreditsAllowed);
+          Serial.print("SIMULATED CREDIT ADDED: P");
+          Serial.print(amount);
+          Serial.print("; machine balance=P");
+          Serial.println(newCredits);
+          Serial.println("No coin was inserted. Any order placed with this balance will still use the normal cloud transaction flow.");
+        }
+      }
+    }
+    else if (cmd == "DIAG") runDiagnostics();
     else if (cmd == "STATUS") printHardwareStatus();
     else if (cmd.startsWith("PAPER_TEST ")) {
       String args = cmd.substring(11);
@@ -578,6 +626,16 @@ void loop() {
       if (coins > 0) releaseVerifiedChange(coins * 100);
     }
   }
+}
+
+void updateStandaloneHopperSensorMonitor() {
+  if (!hopperSensorMonitorEnabled || orderInProgress) return;
+
+  bool blocked = (digitalRead(CHANGE_HOPPER_SENSOR_PIN) == LOW);
+  if (blocked && !hopperSensorMonitorWasBlocked) {
+    Serial.println("HOPPER DETECTED: standalone D23 monitor saw LOW.");
+  }
+  hopperSensorMonitorWasBlocked = blocked;
 }
 
 // Releases verified change using Coin Hopper (Non-blocking fallback)

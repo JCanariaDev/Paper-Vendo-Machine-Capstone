@@ -1,6 +1,75 @@
 // ESP32 PROTOCOL
 // Split from revamped_final_mega.ino for readability.
 
+void handleSerialOrderCommand(String cmd) {
+  if (!uiWifiConnected || !catalogLoaded) {
+    Serial.println("SERIAL ORDER refused: wait for Wi-Fi and catalog sync.");
+    return;
+  }
+  if (orderInProgress || pendingCoinAcceptorOff || cartCount != 0) {
+    Serial.println("SERIAL ORDER refused: finish current activity and empty the cart first.");
+    return;
+  }
+
+  String args = cmd.substring(6);
+  args.trim();
+  int firstSpace = args.indexOf(' ');
+  int secondSpace = firstSpace < 0 ? -1 : args.indexOf(' ', firstSpace + 1);
+  if (firstSpace < 0 || secondSpace < 0 || args.indexOf(' ', secondSpace + 1) >= 0) {
+    Serial.println("Usage: ORDER PAPER <bay> <qty> | ORDER PEN <bay> <qty>");
+    return;
+  }
+
+  String type = args.substring(0, firstSpace);
+  String bayText = args.substring(firstSpace + 1, secondSpace);
+  String qtyText = args.substring(secondSpace + 1);
+  int bay = bayText.toInt();
+  int qty = qtyText.toInt();
+  if (String(bay) != bayText || String(qty) != qtyText || qty < 1 || qty > 20) {
+    Serial.println("SERIAL ORDER refused: bay and quantity must be whole numbers; quantity max is 20.");
+    return;
+  }
+
+  CatalogItem* item = nullptr;
+  if (type == "PAPER" && bay >= 1 && bay <= PAPER_COUNT) {
+    item = &paperCatalog[bay - 1];
+    type = "paper";
+  } else if (type == "PEN" && bay >= 1 && bay <= BALLPEN_COUNT) {
+    item = &ballpenCatalog[bay - 1];
+    type = "pen";
+  }
+  if (!item || !item->isPaperPresent || item->price <= 0) {
+    Serial.println("SERIAL ORDER refused: invalid or unavailable bay.");
+    return;
+  }
+  if (type == "pen" &&
+      (qty < minimumBallpensPerTransaction || qty > maximumBallpensPerTransaction)) {
+    Serial.print("SERIAL ORDER refused: pen quantity must be ");
+    Serial.print(minimumBallpensPerTransaction);
+    Serial.print("-");
+    Serial.println(maximumBallpensPerTransaction);
+    return;
+  }
+
+  float total = item->price * qty;
+  if (credits < minimumCreditsToStart || credits < total) {
+    Serial.println("SERIAL ORDER refused: insufficient machine credits.");
+    return;
+  }
+
+  addToCart(type, item->id, item->name, item->price, qty);
+  if (cartCount != 1) {
+    cartCount = 0;
+    Serial.println("SERIAL ORDER refused: could not add the item to the cart.");
+    return;
+  }
+
+  Serial.print("SERIAL ORDER: submitting through normal checkout; item total=P");
+  Serial.println(total, 2);
+  Serial.println("This creates a normal cloud transaction and may release change.");
+  startOrder();
+}
+
 void startOrder() {
   if (ballpenCartQuantity() > maximumBallpensPerTransaction) {
     tftUiShowError("Max " + String(maximumBallpensPerTransaction) + " ballpens");
@@ -10,6 +79,7 @@ void startOrder() {
     tftUiShowError("Minimum " + String(minimumBallpensPerTransaction) + " ballpens");
     return;
   }
+  hopperSensorMonitorEnabled = false;
   digitalWrite(CHANGE_HOPPER_MOTOR_PIN, HOPPER_RELAY_OFF);
   hopperManualRunning = false;
   orderInProgress = true;
