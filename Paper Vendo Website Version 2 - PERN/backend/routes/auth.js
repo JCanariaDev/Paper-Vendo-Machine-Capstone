@@ -1,6 +1,7 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import { authenticateToken, authorizeRoles, getJwtSecret } from '../middleware/auth.js';
 
 export function createAuthRouter(supabase) {
   const router = express.Router();
@@ -9,7 +10,7 @@ export function createAuthRouter(supabase) {
   router.post('/login', async (req, res) => {
     const { username, password } = req.body;
 
-    if (!username || !password) {
+    if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {
       return res.status(400).json({ message: 'Username and password are required.' });
     }
 
@@ -17,7 +18,7 @@ export function createAuthRouter(supabase) {
       // Query admins table in Supabase
       const { data: admins, error } = await supabase
         .from('admins')
-        .select('*')
+        .select('id, username, password, role')
         .eq('username', username);
 
       if (error) {
@@ -41,7 +42,7 @@ export function createAuthRouter(supabase) {
       // Generate JWT Access Token
       const token = jwt.sign(
         { id: user.id, username: user.username, role: user.role },
-        process.env.JWT_SECRET || 'fallback_secret_key',
+        getJwtSecret(),
         { expiresIn: '24h' }
       );
 
@@ -61,19 +62,25 @@ export function createAuthRouter(supabase) {
     }
   });
 
-  // REGISTER ENDPOINT
-  router.post('/register', async (req, res) => {
+  // Account creation is restricted to superadmins. Public self-registration
+  // would grant staff access to transaction adjustment actions.
+  router.post('/register', authenticateToken, authorizeRoles('superadmin'), async (req, res) => {
     const { username, password, role } = req.body;
 
-    if (!username || !password) {
+    if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {
       return res.status(400).json({ message: 'Username and password are required.' });
     }
 
-    // Public sign-up must not be able to mint privileged accounts.  A seeded
-    // superadmin manages protected functions such as network configuration.
-    const userRole = 'staff';
-    if (role && role !== 'staff') {
-      return res.status(403).json({ message: 'Superadmin accounts must be created by an administrator.' });
+    const normalizedUsername = String(username).trim();
+    const userRole = role || 'staff';
+    if (!['staff', 'viewer'].includes(userRole)) {
+      return res.status(400).json({ message: 'New accounts may only be staff or viewer.' });
+    }
+    if (normalizedUsername.length < 3 || normalizedUsername.length > 64) {
+      return res.status(400).json({ message: 'Username must be between 3 and 64 characters.' });
+    }
+    if (password.length < 12) {
+      return res.status(400).json({ message: 'Password must be at least 12 characters.' });
     }
 
     try {
@@ -81,7 +88,7 @@ export function createAuthRouter(supabase) {
       const { data: existingUser, error: checkError } = await supabase
         .from('admins')
         .select('username')
-        .eq('username', username);
+        .eq('username', normalizedUsername);
 
       if (checkError) {
         throw checkError;
@@ -97,8 +104,8 @@ export function createAuthRouter(supabase) {
       // Insert new user
       const { data: newUser, error: insertError } = await supabase
         .from('admins')
-        .insert([{ username, password: hashedPassword, role: userRole }])
-        .select('*');
+        .insert([{ username: normalizedUsername, password: hashedPassword, role: userRole }])
+        .select('id, username, role');
 
       if (insertError) {
         throw insertError;
@@ -128,7 +135,7 @@ export function createAuthRouter(supabase) {
     const token = authHeader.split(' ')[1];
 
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_key');
+      const decoded = jwt.verify(token, getJwtSecret());
       return res.status(200).json({
         valid: true,
         user: {

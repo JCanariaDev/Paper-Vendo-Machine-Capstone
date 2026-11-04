@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { AlertCircle, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Filter, HandCoins, Info, RefreshCw, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../App';
 
 const PAGE_SIZE = 10;
 const AUTO_REFRESH_MS = 15000;
@@ -59,6 +60,7 @@ function groupTransactions(lines) {
 }
 
 export default function Transactions() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [sales, setSales] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -185,8 +187,8 @@ export default function Transactions() {
                 const changeOwed = Math.max(0, changeDue - changePaid);
                 const refundPaid = Number(transaction.refund_paid_cents || 0) / 100;
                 const refundableCredit = Math.max(0, Number(transaction.credit_received || 0) - changePaid - refundPaid);
-                const canReleaseChange = transaction.status === 'COMPLETED_CHANGE_OWED' && changeOwed > 0;
-                const canRecordRefund = transaction.status === 'FAILED_DISPENSE' && transaction.totalDispensed === 0 && refundableCredit > 0;
+                const canReleaseChange = user?.role !== 'viewer' && transaction.status === 'COMPLETED_CHANGE_OWED' && changeOwed > 0;
+                const canRecordRefund = user?.role !== 'viewer' && transaction.status === 'FAILED_DISPENSE' && transaction.totalDispensed === 0 && refundableCredit > 0;
                 const trNumber = transaction.tr_number || `TR-${String(transaction.transaction_id || transaction.id).slice(0, 5).toUpperCase()}`;
                 const transactionId = transaction.transaction_id;
 
@@ -261,7 +263,16 @@ export default function Transactions() {
             </div></section>
           )) : <div className="py-16 text-center font-semibold text-slate-400">No transaction records found for the selected filters.</div>}
         </div>
-        <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-4 dark:border-white/[0.06] sm:flex-row sm:items-center sm:justify-between"><p className="text-xs font-semibold text-slate-400">Page {Math.min(page, totalPages)} of {totalPages}</p><div className="flex items-center gap-1.5"><button type="button" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-500 transition hover:border-primary-300 hover:text-primary-600 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:text-slate-300"><ChevronLeft className="h-4 w-4" />Previous</button>{Array.from({ length: totalPages }, (_, index) => index + 1).map((pageNumber) => <button key={pageNumber} type="button" onClick={() => setPage(pageNumber)} className={`h-9 min-w-9 rounded-lg px-2 text-xs font-extrabold transition ${pageNumber === page ? 'bg-primary-500 text-white shadow-sm' : 'border border-slate-200 text-slate-500 hover:border-primary-300 hover:text-primary-600 dark:border-white/[0.08] dark:text-slate-300'}`}>{pageNumber}</button>)}<button type="button" disabled={page >= totalPages} onClick={() => setPage((current) => Math.min(totalPages, current + 1))} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-500 transition hover:border-primary-300 hover:text-primary-600 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:text-slate-300">Next<ChevronRight className="h-4 w-4" /></button></div></div>
+        <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-4 dark:border-white/[0.06] sm:flex-row sm:items-start sm:justify-between">
+          <p className="shrink-0 text-xs font-semibold text-slate-400">Page {Math.min(page, totalPages)} of {totalPages}</p>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:flex-1 sm:justify-end">
+            <button type="button" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))} className="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-500 transition hover:border-primary-300 hover:text-primary-600 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:text-slate-300"><ChevronLeft className="h-4 w-4" />Previous</button>
+            {Array.from({ length: totalPages }, (_, index) => index + 1).map((pageNumber) => (
+              <button key={pageNumber} type="button" onClick={() => setPage(pageNumber)} className={`h-9 min-w-9 shrink-0 rounded-lg px-2 text-xs font-extrabold transition ${pageNumber === page ? 'bg-primary-500 text-white shadow-sm' : 'border border-slate-200 text-slate-500 hover:border-primary-300 hover:text-primary-600 dark:border-white/[0.08] dark:text-slate-300'}`}>{pageNumber}</button>
+            ))}
+            <button type="button" disabled={page >= totalPages} onClick={() => setPage((current) => Math.min(totalPages, current + 1))} className="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-500 transition hover:border-primary-300 hover:text-primary-600 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:text-slate-300">Next<ChevronRight className="h-4 w-4" /></button>
+          </div>
+        </div>
       </div>
     </div>
   );

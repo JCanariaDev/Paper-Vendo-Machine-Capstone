@@ -1,64 +1,27 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useAuth } from '../App';
-import { KeyRound, ShieldAlert, CheckCircle, Eye, EyeOff, Lock, User, UserPlus } from 'lucide-react';
+import { KeyRound, ShieldAlert, CheckCircle, Eye, EyeOff, Lock, User } from 'lucide-react';
 
 export default function Login() {
   const { login } = useAuth();
-  const [isRegister, setIsRegister] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
-
-  const toggleMode = () => {
-    setIsRegister(!isRegister);
-    setError('');
-    setSuccess('');
-    setUsername('');
-    setPassword('');
-    setConfirmPassword('');
-  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setSuccess('');
 
-    // Sign Up validation
-    if (isRegister) {
-      if (password !== confirmPassword) {
-        setError('Passwords do not match.');
-        return;
-      }
-      if (password.length < 6) {
-        setError('Password must be at least 6 characters.');
-        return;
-      }
-    }
-
     setLoading(true);
 
     try {
-      if (isRegister) {
-        // Register API call
-        const response = await axios.post('/api/auth/register', { username, password });
-        setSuccess(response.data.message || 'Registration successful! You can now log in.');
-        // Reset forms and toggle to login mode after 2 seconds
-        setTimeout(() => {
-          setIsRegister(false);
-          setSuccess('');
-          setPassword('');
-          setConfirmPassword('');
-        }, 2500);
-      } else {
-        // Login API call
-        const response = await axios.post('/api/auth/login', { username, password });
-        login(response.data.token, response.data.user);
-      }
+      const response = await axios.post('/api/auth/login', { username, password });
+      login(response.data.token, response.data.user);
     } catch (err) {
       console.error('Authentication error:', err);
       setError(err.response?.data?.message || 'Authentication failed. Please verify connection.');
@@ -135,10 +98,10 @@ export default function Login() {
               <img src="/logo.png" alt="P&B V Machine Logo" className="w-full h-full object-contain" />
             </div>
             <h1 className="font-display font-extrabold text-2xl text-slate-800 tracking-tight">
-              {isRegister ? 'Create Account' : 'Welcome Back'}
+              Welcome Back
             </h1>
             <p className="text-sm text-slate-500 mt-1">
-              {isRegister ? 'Register as superadmin or staff' : 'Sign in to your Cloud Vendo Panel'}
+              Sign in to your Cloud Vendo Panel
             </p>
           </div>
 
@@ -203,26 +166,6 @@ export default function Login() {
               </div>
             </div>
 
-            {/* Confirm Password Input - Displayed ONLY in Register mode */}
-            {isRegister && (
-              <div className="space-y-1.5 animate-[fadeIn_0.2s_ease-out]">
-                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">Confirm Password</label>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
-                    <Lock className="w-4.5 h-4.5" />
-                  </span>
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Re-enter Password"
-                    className="w-full h-12 pl-11 pr-11 rounded-xl text-sm bg-slate-50/70 border border-slate-200 text-slate-800 placeholder-slate-400 focus:bg-white focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 outline-none transition-all duration-200"
-                    required
-                  />
-                </div>
-              </div>
-            )}
-
             {/* Submit Button */}
             <button
               type="submit"
@@ -232,22 +175,13 @@ export default function Login() {
               {loading ? (
                 <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white"></div>
               ) : (
-                <span>{isRegister ? 'Create Account' : 'Sign In'}</span>
+                <span>Sign In</span>
               )}
             </button>
           </form>
 
-          {/* Mode Toggle Link */}
           <div className="mt-8 text-center border-t border-slate-100 pt-6">
-            <button
-              type="button"
-              onClick={toggleMode}
-              className="text-xs text-slate-500 hover:text-primary-600 transition-colors font-medium outline-none"
-            >
-              {isRegister 
-                ? 'Already have an account? Sign In' 
-                : "Don't have an account? Sign Up"}
-            </button>
+            <p className="text-xs text-slate-500 font-medium">Accounts are issued by a superadmin.</p>
           </div>
         </div>
 

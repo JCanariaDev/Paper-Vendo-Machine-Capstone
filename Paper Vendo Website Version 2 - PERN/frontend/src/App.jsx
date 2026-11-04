@@ -141,9 +141,10 @@ export default function App() {
   };
 
   // Admin Router Wrapper (Superadmin only)
-  const AdminRoute = ({ children }) => {
+  const AdminRoute = ({ children, allowViewer = false }) => {
     const { user } = useAuth();
-    if (user && user.role !== 'superadmin') {
+    const allowedRoles = allowViewer ? ['superadmin', 'viewer'] : ['superadmin'];
+    if (user && !allowedRoles.includes(user.role)) {
       return <Navigate to="/dashboard" replace />;
     }
     return children;
@@ -212,7 +213,7 @@ export default function App() {
             path="/analytics" 
             element={
               <ProtectedRoute>
-                <AdminRoute>
+                <AdminRoute allowViewer>
                   <Analytics />
                 </AdminRoute>
               </ProtectedRoute>
@@ -222,7 +223,7 @@ export default function App() {
             path="/reports" 
             element={
               <ProtectedRoute>
-                <AdminRoute>
+                <AdminRoute allowViewer>
                   <Reports />
                 </AdminRoute>
               </ProtectedRoute>

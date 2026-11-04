@@ -30,12 +30,14 @@ export default function Sidebar({ isOpen, onClose }) {
     { to: '/logs',        label: 'Machine Logs',  icon: ScrollText },
   ];
 
-  if (user?.role === 'superadmin') {
+  if (user?.role === 'superadmin' || user?.role === 'viewer') {
     navItems.push(
       { to: '/analytics', label: 'Advance Analytics', icon: TrendingUp },
-      { to: '/reports', label: 'Reports', icon: FileSpreadsheet },
-      { to: '/machine-configuration', label: 'Machine Configuration', icon: Settings }
+      { to: '/reports', label: 'Reports', icon: FileSpreadsheet }
     );
+  }
+  if (user?.role === 'superadmin') {
+    navItems.push({ to: '/machine-configuration', label: 'Machine Configuration', icon: Settings });
   }
 
   return (

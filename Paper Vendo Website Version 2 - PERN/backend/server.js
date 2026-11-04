@@ -12,9 +12,25 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Enable CORS
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  console.error('CRITICAL: Set JWT_SECRET to a random value of at least 32 characters.');
+  process.exit(1);
+}
+
+const allowedOrigins = new Set(
+  (process.env.WEBAPP_ORIGINS || 'http://localhost:5173,https://paper-vendo-machine-capstone.vercel.app')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
+
+// Allow browser traffic only from explicitly trusted webapp origins. Requests
+// without an Origin header are still used by the machine firmware.
 app.use(cors({
-  origin: '*', // Allow all origins for easy development, can restrict to Vercel domain later
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    return callback(new Error('Origin is not allowed by CORS.'));
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'apikey']
 }));

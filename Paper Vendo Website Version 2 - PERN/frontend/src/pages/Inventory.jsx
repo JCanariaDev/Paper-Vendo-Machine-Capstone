@@ -228,7 +228,7 @@ export default function Inventory() {
             </span>
           </div>
           <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-            {user?.role === 'staff' 
+            {user?.role !== 'superadmin'
               ? 'Monitor machine dispenser bays, PAD stock volumes, and presence sensors.' 
               : 'Dynamically assign items to dispenser bays, refill PADs from storage, and manage pricing.'}
           </p>
@@ -344,7 +344,7 @@ export default function Inventory() {
                   </div>
                 </div>
 
-                {user?.role !== 'staff' && (
+                {user?.role === 'superadmin' && (
                   <div className="mt-5">
                     <button
                       onClick={() => openBayModal('paper', bay)}
@@ -406,7 +406,7 @@ export default function Inventory() {
                   </div>
                 </div>
 
-                {user?.role !== 'staff' && (
+                {user?.role === 'superadmin' && (
                   <div className="mt-5">
                     <button
                       onClick={() => openBayModal('pen', bay)}
@@ -442,7 +442,7 @@ export default function Inventory() {
                 When you refill a machine bay, whole PADs are transferred from storage into the active compartment.
               </p>
             </div>
-            {user?.role !== 'staff' && (
+            {user?.role === 'superadmin' && (
               <button
                 onClick={() => openMasterAddModal('paper')}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-primary-500 px-3.5 py-2.5 text-xs font-bold text-white shadow-lg shadow-primary-500/20 transition hover:bg-primary-600"
@@ -467,7 +467,7 @@ export default function Inventory() {
                         <p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">{item.paper_size}</p>
                       </div>
                     </div>
-                    {user?.role !== 'staff' && <div className="flex items-center gap-1">
+                    {user?.role === 'superadmin' && <div className="flex items-center gap-1">
                       <button onClick={() => openMasterEditModal('paper', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title="Edit paper product"><Edit3 className="h-4 w-4" /></button>
                       <button onClick={() => toggleMasterActive('paper', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title={isActive ? 'Archive paper product' : 'Restore paper product'}>{isActive ? <Archive className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}</button>
                     </div>}
@@ -495,7 +495,7 @@ export default function Inventory() {
               <span>Master Ballpen Inventory</span>
               <span className="text-xs bg-blue-500/10 text-blue-500 px-2.5 py-0.5 rounded-full font-sans font-bold">Pieces Management</span>
             </h2>
-            {user?.role !== 'staff' && (
+            {user?.role === 'superadmin' && (
               <button
                 onClick={() => openMasterAddModal('pen')}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-blue-500 px-3.5 py-2.5 text-xs font-bold text-white shadow-lg shadow-blue-500/20 transition hover:bg-blue-600"
@@ -513,7 +513,7 @@ export default function Inventory() {
               <article key={item.id} className={`rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-blue-300 hover:bg-blue-50/30 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-blue-500/50 dark:hover:bg-blue-500/[0.05] ${!isActive ? 'opacity-65' : ''}`}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-start gap-2.5"><span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${isActive ? 'bg-blue-500' : 'bg-slate-400'}`} /><div className="min-w-0"><h3 className="truncate text-base font-extrabold text-slate-800 dark:text-white">{item.item_name}</h3><p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Ballpen product</p></div></div>
-                  {user?.role !== 'staff' && <div className="flex items-center gap-1"><button onClick={() => openMasterEditModal('pen', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title="Edit ballpen product"><Edit3 className="h-4 w-4" /></button><button onClick={() => toggleMasterActive('pen', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title={isActive ? 'Archive ballpen product' : 'Restore ballpen product'}>{isActive ? <Archive className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}</button></div>}
+                  {user?.role === 'superadmin' && <div className="flex items-center gap-1"><button onClick={() => openMasterEditModal('pen', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title="Edit ballpen product"><Edit3 className="h-4 w-4" /></button><button onClick={() => toggleMasterActive('pen', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title={isActive ? 'Archive ballpen product' : 'Restore ballpen product'}>{isActive ? <Archive className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}</button></div>}
                 </div>
                 {!isActive && <span className="mt-3 inline-flex rounded-full bg-slate-200 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:bg-white/[0.08] dark:text-slate-300">Archived · history preserved</span>}
                 <div className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-200/80 pt-3 dark:border-white/[0.07]"><div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cost / piece</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">₱{item.cost_per_unit}</p></div><div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Storage</p><p className="mt-1 inline-flex items-center gap-1 text-sm font-extrabold text-slate-800 dark:text-white"><Package className="h-3.5 w-3.5 text-blue-500" />{item.storage_stock_pieces} pcs</p></div></div>
