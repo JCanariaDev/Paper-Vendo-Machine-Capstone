@@ -171,12 +171,21 @@ void parseMachineOptions(String msg) {
   tftUiSetCredits();
 }
 
-int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName) {
+int dispensePaperFromUno(int bayNumber, int sheetCount, const char *paperName) {
   if (bayNumber < 1 || bayNumber > PAPER_COUNT) return 0;
-  String command = "DISPENSE:" + String(bayNumber) + ":" + String(sheetCount) + ":" + paperName;
-  Serial.print("Paper Uno <- ");
-  Serial.println(command);
-  UNO_SERIAL.println(command);
+  if (!paperName) paperName = "";
+  Serial.print(F("Paper Uno <- DISPENSE:"));
+  Serial.print(bayNumber);
+  Serial.print(':');
+  Serial.print(sheetCount);
+  Serial.print(':');
+  Serial.println(paperName);
+  UNO_SERIAL.print(F("DISPENSE:"));
+  UNO_SERIAL.print(bayNumber);
+  UNO_SERIAL.print(':');
+  UNO_SERIAL.print(sheetCount);
+  UNO_SERIAL.print(':');
+  UNO_SERIAL.println(paperName);
 
   unsigned long startedAt = millis();
   const unsigned long timeoutMs = min(

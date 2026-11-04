@@ -192,7 +192,7 @@ void drawStatusScreen(String headline, String message);
 void refreshMachineAvailability(bool sound = false);
 int dispensePenFromUno(int channel, int quantity);
 void handleBallpenMessage(String msg);
-int dispensePaperFromUno(int bayNumber, int sheetCount, const String &paperName);
+int dispensePaperFromUno(int bayNumber, int sheetCount, const char *paperName);
 int releaseVerifiedChange(int changeCents);
 void updateStandaloneHopperSensorMonitor();
 void handleCloudCommand(String msg);
