@@ -467,7 +467,7 @@ export default function MachineMonitor() {
       </div>
 
       {/* ── Current Activity + Recent Log ── */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 items-start gap-6">
         <div className={`relative p-6 rounded-2xl border overflow-hidden transition-all duration-500 ${activeState.border} ${activeState.bgGlow}`}>
           <div className={`absolute -top-10 -right-10 w-40 h-40 rounded-full blur-2xl opacity-25 ${activeState.ringColor}`} />
           <div className="relative">
@@ -579,12 +579,17 @@ export default function MachineMonitor() {
           </div>
         </div>
 
-        <div className="p-6 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#161F30] shadow-sm">
-          <div className="flex items-center justify-between mb-5">
+        <div className="flex max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/[0.08] dark:bg-[#161F30]">
+          <div className="mb-5 flex shrink-0 items-center justify-between">
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Recent Activity Log</p>
-            <span className="text-[10px] text-slate-400 font-semibold">Last 5 transactions</span>
+            <span className="text-[10px] text-slate-400 font-semibold">Scroll for older transactions</span>
           </div>
-          <div className="space-y-2">
+          <div
+            className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-2"
+            role="region"
+            aria-label="Recent transactions"
+            tabIndex={0}
+          >
             {transactions.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-slate-400">
                 <Activity className="w-8 h-8 mb-2 opacity-40" />
