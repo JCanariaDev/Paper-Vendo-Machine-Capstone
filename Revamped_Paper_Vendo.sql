@@ -97,6 +97,7 @@ CREATE TABLE paper_inventory (
     paper_size TEXT NOT NULL,
     cost_per_unit_cents INTEGER NOT NULL CHECK (cost_per_unit_cents > 0),
     sheets_per_unit INTEGER NOT NULL CHECK (sheets_per_unit > 0),
+    sheets_per_pad INTEGER CHECK (sheets_per_pad IS NULL OR sheets_per_pad > 0),
     stock_pads INTEGER NOT NULL DEFAULT 0 CHECK (stock_pads >= 0),
     location_status TEXT NOT NULL DEFAULT 'In stock' CHECK (location_status IN ('In compartment', 'In stock', 'Out of stock')),
     active BOOLEAN NOT NULL DEFAULT TRUE,

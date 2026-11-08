@@ -75,7 +75,7 @@ export default function Inventory() {
     setEditingMasterItem(type);
     setIsCreatingMaster(true);
     setFormData(type === 'paper'
-      ? { brand_name: '', paper_size: '', sheets_per_unit: 1, cost_per_unit: 1, stock_pads: 0, active: true }
+      ? { brand_name: '', paper_size: '', sheets_per_unit: 1, sheets_per_pad: '', cost_per_unit: 1, stock_pads: 0, active: true }
       : { item_name: '', cost_per_unit: 1, storage_stock_pieces: 0, active: true }
     );
   };
@@ -317,23 +317,35 @@ export default function Inventory() {
                   
                   <div className="mt-2 text-xs text-slate-500 dark:text-slate-400 space-y-1">
                     <div className="flex justify-between">
-                      <span>Rate:</span>
+                      <span>Dispense per unit:</span>
                       <span className="font-bold text-slate-700 dark:text-slate-200">
-                        {bay.sheets_per_unit} sheets / ₱{bay.cost_per_unit}
+                        {bay.sheets_per_unit} sheets per unit / ₱{bay.cost_per_unit}
                       </span>
                     </div>
+                    {bay.assigned_product_id && <div className="flex justify-between">
+                      <span>Nominal sheets / pad:</span>
+                      <span className="font-bold text-slate-700 dark:text-slate-200">{bay.sheets_per_pad ?? 'Unverified'}</span>
+                    </div>}
                     <div className="flex justify-between">
                       <span>Installed pad:</span>
                       <span className={`font-bold ${bayPadStock > 1 ? 'text-amber-600' : 'text-slate-700 dark:text-slate-200'}`}>
                         {!bay.assigned_product_id ? 'None' : bayPadStock > 1 ? `Legacy record: ${bayPadStock} pads` : '1 pad'}
                       </span>
                     </div>
+                    {bay.assigned_product_id && <div className="flex justify-between">
+                      <span>Total sheets loaded:</span>
+                      <span className="font-bold text-slate-700 dark:text-slate-200">{bay.pad_sheets_loaded == null ? 'Count needed' : `${bay.pad_sheets_loaded} sheets`}</span>
+                    </div>}
                     <div className="flex justify-between">
                       <span>Sheets remaining:</span>
                       <span className={`font-bold ${bay.current_pad_sheets_remaining == null && bay.assigned_product_id ? 'text-amber-600' : 'text-slate-700 dark:text-slate-200'}`}>
                         {bay.assigned_product_id ? (bay.current_pad_sheets_remaining == null ? 'Count needed' : `${bay.current_pad_sheets_remaining} sheets`) : '—'}
                       </span>
                     </div>
+                    {bay.assigned_product_id && <div className="flex justify-between">
+                      <span>Available after reservations:</span>
+                      <span className="font-bold text-emerald-700 dark:text-emerald-400">{bay.current_pad_sheets_remaining == null ? 'Unknown' : `${Math.max(0, bay.current_pad_sheets_remaining - (bay.reserved_pad_sheets || 0))} sheets`}</span>
+                    </div>}
                     {bay.reserved_pad_sheets > 0 && <div className="flex justify-between">
                       <span>Reserved for active orders:</span><span className="font-bold text-amber-600">{bay.reserved_pad_sheets} sheets</span>
                     </div>}
@@ -486,10 +498,11 @@ export default function Inventory() {
                     </div>}
                   </div>
                   {!isActive && <span className="mt-3 inline-flex rounded-full bg-slate-200 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:bg-white/[0.08] dark:text-slate-300">Archived · history preserved</span>}
-                  <div className="mt-4 grid grid-cols-3 gap-2 border-t border-slate-200/80 pt-3 dark:border-white/[0.07]">
-                    <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Sheets / pad</p><p className="mt-1 text-sm font-extrabold text-primary-600 dark:text-primary-300">{item.sheets_per_unit}</p></div>
-                    <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Price</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">₱{item.cost_per_unit}</p></div>
-                    <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Storage</p><p className="mt-1 inline-flex items-center gap-1 text-sm font-extrabold text-slate-800 dark:text-white"><Package className="h-3.5 w-3.5 text-primary-500" />{item.stock_pads} pads</p></div>
+                  <div className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-200/80 pt-3 dark:border-white/[0.07] sm:grid-cols-4">
+                    <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Sheets / sale unit</p><p className="mt-1 text-sm font-extrabold text-primary-600 dark:text-primary-300">{item.sheets_per_unit}</p></div>
+                    <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Sheets / pad</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">{item.sheets_per_pad ?? 'Unverified'}</p></div>
+                    <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Price / unit</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">₱{item.cost_per_unit}</p></div>
+                    <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Storage</p><p className="mt-1 inline-flex items-center gap-1 text-sm font-extrabold text-slate-800 dark:text-white"><Package className="h-3.5 w-3.5 text-primary-500" />{item.stock_pads} pads</p><p className="mt-0.5 text-[10px] font-semibold text-slate-500 dark:text-slate-400">{Number.isInteger(item.sheets_per_pad) ? `${item.stock_pads * item.sheets_per_pad} sheets (nominal)` : 'Sheet total unknown'}</p></div>
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-2">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Location</span>
@@ -604,14 +617,14 @@ export default function Inventory() {
                           <label className="mb-1.5 block text-xs font-bold text-slate-600 dark:text-slate-300">Compatible paper product</label>
                           <select value={bayFormData.assigned_product_id} onChange={(event) => setBayFormData({ ...bayFormData, assigned_product_id: event.target.value })} className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-white" required>
                             <option value="">Select product...</option>
-                            {paper.filter((product) => product.active !== false && paperSizeAllowedInBay(editingBay.bay.compartment_number, product.paper_size)).map((product) => <option key={product.id} value={product.id}>{product.brand_name} – {product.paper_size} ({product.stock_pads} pads in storage)</option>)}
+                            {paper.filter((product) => product.active !== false && paperSizeAllowedInBay(editingBay.bay.compartment_number, product.paper_size)).map((product) => <option key={product.id} value={product.id}>{product.brand_name} – {product.paper_size} ({product.stock_pads} pads; {product.sheets_per_pad ?? 'capacity unverified'} sheets/pad)</option>)}
                           </select>
                           <p className="mt-1 text-[10px] text-slate-400">Only Bay {editingBay.bay.compartment_number}-compatible sizes are listed. Each bay holds exactly one pad.</p>
                         </div>
                         <div>
-                          <label className="mb-1.5 block text-xs font-bold text-slate-600 dark:text-slate-300">Actual sheets in the installed pad</label>
-                          <input type="number" min="1" max={selectedProduct?.sheets_per_unit || undefined} value={bayFormData.sheets} onChange={(event) => setBayFormData({ ...bayFormData, sheets: event.target.value })} className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-white" required />
-                          <p className="mt-1 text-[10px] text-slate-400">Enter the physical count, not the advertised pad capacity.</p>
+                          <label className="mb-1.5 block text-xs font-bold text-slate-600 dark:text-slate-300">Total actual sheets in the installed pad</label>
+                          <input type="number" min="1" value={bayFormData.sheets} onChange={(event) => setBayFormData({ ...bayFormData, sheets: event.target.value })} className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-white" required />
+                          <p className="mt-1 text-[10px] text-slate-400">Enter the pad's physical sheet count. This may be greater than the sheets dispensed per sale unit.</p>
                         </div>
                       </>}
                       {action === 'COUNT_SET' && <div>
@@ -772,9 +785,9 @@ export default function Inventory() {
                     </div>
                   </div>
                   
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Sheets / Unit</label>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Sheets dispensed / purchase unit</label>
                       <input
                         type="number"
                         min="1"
@@ -783,6 +796,18 @@ export default function Inventory() {
                         className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
                         required
                       />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Nominal sheets / pad</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={formData.sheets_per_pad ?? ''}
+                        onChange={(e) => setFormData({ ...formData, sheets_per_pad: e.target.value })}
+                        className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-sm text-slate-800 dark:text-white outline-none focus:border-primary-500"
+                        required={isCreatingMaster}
+                      />
+                      <p className="mt-1 text-[10px] text-slate-400">Verified capacity of one full pad. Leave blank for an existing item until verified.</p>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">Cost / Unit (₱)</label>

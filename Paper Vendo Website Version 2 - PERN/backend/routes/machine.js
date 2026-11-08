@@ -82,6 +82,7 @@ function flattenPaperInventory(row, assignedBays = []) {
     cost_per_unit: asMoney(row.cost_per_unit_cents),
     stock_pads: asInt(row.stock_pads),
     sheets_per_unit: asInt(row.sheets_per_unit, 1),
+    sheets_per_pad: row.sheets_per_pad ?? null,
     assigned_bay: bay ? bay.compartment_number : null,
     current_bay_pads: bay ? asInt(bay.current_pad_stock, bay.presence_status === 'HIGH' ? 1 : 0) : 0,
     current_bay_sheets_remaining: bay?.current_pad_sheets_remaining ?? null,
@@ -98,6 +99,7 @@ function flattenPaperCompartment(row) {
     brand_name: product.brand_name || 'Unassigned',
     paper_size: product.paper_size || '',
     sheets_per_unit: asInt(product.sheets_per_unit, 1),
+    sheets_per_pad: product.sheets_per_pad ?? null,
     cost_per_unit: asMoney(product.cost_per_unit_cents),
     current_pad_stock: asInt(row.current_pad_stock, row.presence_status === 'HIGH' ? 1 : 0),
     pad_sheets_loaded: row.pad_sheets_loaded ?? null,
@@ -796,16 +798,24 @@ export function createMachineRouter(supabase, serviceRoleSupabase) {
   // Master Paper Product Update
   router.put('/paper/:id', authorizeRoles('superadmin'), async (req, res) => {
     const { id } = req.params;
-    const { brand_name, paper_size, cost_per_unit, sheets_per_unit, stock_pads, location_status, active } = req.body;
+    const { brand_name, paper_size, cost_per_unit, sheets_per_unit, sheets_per_pad, stock_pads, location_status, active } = req.body;
     try {
       const { data: existingProduct, error: existingProductError } = await supabase
         .from('paper_inventory')
-        .select('paper_size')
+        .select('paper_size, sheets_per_pad')
         .eq('id', asInt(id))
         .single();
       if (existingProductError) throw existingProductError;
 
       const requestedPaperSize = paper_size ?? existingProduct.paper_size;
+      const parsedSheetsPerPad = sheets_per_pad === undefined
+        ? (existingProduct.sheets_per_pad ?? null)
+        : sheets_per_pad === '' || sheets_per_pad === null
+          ? null
+        : Number(sheets_per_pad);
+      if (parsedSheetsPerPad !== null && (!Number.isInteger(parsedSheetsPerPad) || parsedSheetsPerPad <= 0)) {
+        return res.status(400).json({ message: 'Sheets per pad must be a positive whole number, or left blank until verified.' });
+      }
       const paperSizeChanged = normalizePaperSize(requestedPaperSize) !== normalizePaperSize(existingProduct.paper_size);
       const { data: assignedBay, error: assignedBayError } = await supabase
         .from('paper_compartments')
@@ -830,6 +840,7 @@ export function createMachineRouter(supabase, serviceRoleSupabase) {
           paper_size,
           cost_per_unit_cents: Math.round(Number(cost_per_unit) * 100),
           sheets_per_unit: asInt(sheets_per_unit, 1),
+          sheets_per_pad: parsedSheetsPerPad,
           stock_pads: asInt(stock_pads, 0),
           location_status: location_status || 'In stock',
           active: active !== false,
@@ -847,13 +858,18 @@ export function createMachineRouter(supabase, serviceRoleSupabase) {
   });
 
   router.post('/paper', authorizeRoles('superadmin'), async (req, res) => {
-    const { brand_name, paper_size, cost_per_unit, sheets_per_unit = 1, stock_pads = 0 } = req.body;
+    const { brand_name, paper_size, cost_per_unit, sheets_per_unit = 1, sheets_per_pad, stock_pads = 0 } = req.body;
     try {
+      const parsedSheetsPerPad = Number(sheets_per_pad);
+      if (!Number.isInteger(parsedSheetsPerPad) || parsedSheetsPerPad <= 0) {
+        return res.status(400).json({ message: 'Enter a verified positive whole-number sheet capacity for each pad.' });
+      }
       const { data, error } = await supabase.from('paper_inventory').insert({
         brand_name: String(brand_name || '').trim(),
         paper_size: String(paper_size || '').trim(),
         cost_per_unit_cents: Math.round(Number(cost_per_unit) * 100),
         sheets_per_unit: asInt(sheets_per_unit, 1),
+        sheets_per_pad: parsedSheetsPerPad,
         stock_pads: asInt(stock_pads, 0),
         location_status: 'In stock',
         active: true
