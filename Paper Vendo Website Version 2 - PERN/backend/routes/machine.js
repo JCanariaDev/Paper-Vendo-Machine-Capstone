@@ -211,7 +211,7 @@ async function getTransactionLines(supabase) {
     .sort((a, b) => new Date(b.transaction_date) - new Date(a.transaction_date));
 }
 
-export function createMachineRouter(supabase, networkConfigSupabase) {
+export function createMachineRouter(supabase, serviceRoleSupabase) {
   const router = express.Router();
 
   // Device-only route. It must be registered before the dashboard JWT guard.
@@ -220,12 +220,12 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     if (!deviceTokenMatches(req)) {
       return res.status(401).json({ message: 'Invalid device credentials.' });
     }
-    if (!networkConfigSupabase) {
+    if (!serviceRoleSupabase) {
       return res.status(503).json({ message: 'Network configuration is not enabled on the server.' });
     }
 
     try {
-      const { data, error } = await networkConfigSupabase
+      const { data, error } = await serviceRoleSupabase
         .from('machine_network_config')
         .select('ssid, password_ciphertext, password_iv, password_auth_tag, status, updated_at')
         .eq('id', 1)
@@ -253,7 +253,7 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     if (!deviceTokenMatches(req)) {
       return res.status(401).json({ message: 'Invalid device credentials.' });
     }
-    if (!networkConfigSupabase) {
+    if (!serviceRoleSupabase) {
       return res.status(503).json({ message: 'Network configuration is not enabled on the server.' });
     }
 
@@ -261,7 +261,7 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     if (!version) return res.status(400).json({ message: 'Configuration version is required.' });
 
     try {
-      const { data, error } = await networkConfigSupabase
+      const { data, error } = await serviceRoleSupabase
         .from('machine_network_config')
         .update({ status: 'APPLIED' })
         .eq('id', 1)
@@ -570,11 +570,11 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
   // Wi-Fi credentials are staged here for a future device-configuration flow.
   // The password is encrypted before it reaches Supabase and is never returned.
   router.get('/network-config', authorizeRoles('superadmin'), async (_req, res) => {
-    if (!networkConfigSupabase) {
+    if (!serviceRoleSupabase) {
       return res.status(503).json({ message: 'Network configuration is not enabled on the server yet.' });
     }
     try {
-      const { data, error } = await networkConfigSupabase
+      const { data, error } = await serviceRoleSupabase
         .from('machine_network_config')
         .select('ssid, status, configured_at, updated_at')
         .eq('id', 1)
@@ -598,13 +598,13 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     if (password.length < 8 || password.length > 63) {
       return res.status(400).json({ message: 'Wi-Fi password must contain between 8 and 63 characters.' });
     }
-    if (!networkConfigSupabase) {
+    if (!serviceRoleSupabase) {
       return res.status(503).json({ message: 'Network configuration is not enabled on the server yet.' });
     }
 
     try {
       const encrypted = encryptNetworkPassword(password);
-      const { data, error } = await networkConfigSupabase
+      const { data, error } = await serviceRoleSupabase
         .from('machine_network_config')
         .upsert([{
           id: 1,
@@ -638,6 +638,9 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     const { action, assigned_product_id, sheets, reason } = req.body;
 
     try {
+      if (!serviceRoleSupabase) {
+        return res.status(503).json({ message: 'Paper pad management requires the backend service-role database key.' });
+      }
       if (![1, 2].includes(compartmentNumber)) {
         return res.status(400).json({ message: 'Paper bay must be Bay 1 or Bay 2.' });
       }
@@ -654,7 +657,7 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
         return res.status(400).json({ message: 'Add a short reason for this removal, replacement, or count correction.' });
       }
 
-      const { error } = await supabase.rpc('admin_manage_paper_pad', {
+      const { error } = await serviceRoleSupabase.rpc('admin_manage_paper_pad', {
         p_compartment_number: compartmentNumber,
         p_action: String(action || '').toUpperCase(),
         p_product_id: productId,
