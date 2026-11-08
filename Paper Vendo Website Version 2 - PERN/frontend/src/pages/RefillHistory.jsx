@@ -19,8 +19,24 @@ export default function RefillHistory() {
   const loadHistory = async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
     try {
-      const response = await axios.get('/api/machine/inventory/refill-history');
-      setHistory(response.data || []);
+      const [refillResult, padResult] = await Promise.allSettled([
+        axios.get('/api/machine/inventory/refill-history'),
+        axios.get('/api/machine/inventory/paper-pad-history')
+      ]);
+      const refills = refillResult.status === 'fulfilled' ? refillResult.value.data || [] : [];
+      const padEvents = padResult.status === 'fulfilled' ? (padResult.value.data || []).map((entry) => ({
+        ...entry,
+        id: `pad-${entry.id}`,
+        item_type: 'paper',
+        operation: entry.event_type,
+        quantity_added: entry.quantity_sheets,
+        quantity_unit: 'sheets',
+        previous_compartment_stock: entry.previous_sheets ?? 'Unknown',
+        resulting_compartment_stock: entry.resulting_sheets ?? 'Removed',
+        history_kind: 'pad'
+      })) : [];
+      setHistory([...refills, ...padEvents].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+      if (refillResult.status === 'rejected') throw refillResult.reason;
     } catch (error) {
       console.error('Could not load refill history:', error);
     } finally {
@@ -49,7 +65,7 @@ export default function RefillHistory() {
         || (dateFilter === 'week' && entryDate >= weekStart)
         || (dateFilter === 'month' && entryDate >= monthStart)
         || (dateFilter === 'day' && specificDate === entryDay);
-      const searchable = [entry.product_name, entry.compartment_number, entry.operation, entry.performed_by]
+      const searchable = [entry.product_name, entry.previous_product_name, entry.compartment_number, entry.operation, entry.reason, entry.performed_by, entry.transaction_id]
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
@@ -66,7 +82,7 @@ export default function RefillHistory() {
             "><img src="/logo.png" alt="P&B V Machine Logo" className="h-full w-full object-contain" /></div>
             <h1 className="font-display text-3xl font-extrabold leading-tight text-slate-800 dark:text-white md:text-4xl">Refill History</h1>
           </div>
-          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Track pads and ballpen pieces loaded into each machine compartment.</p>
+          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Audit paper-pad installs, replacements, sheet corrections and confirmed dispensing, alongside ballpen refills.</p>
         </div>
         <button type="button" onClick={() => loadHistory(true)} disabled={refreshing} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-primary-200 bg-primary-50 px-4 text-xs font-extrabold text-primary-700 transition hover:bg-primary-100 disabled:cursor-wait disabled:opacity-60 dark:border-primary-800/50 dark:bg-primary-950/30 dark:text-primary-300">
           <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
@@ -94,7 +110,7 @@ export default function RefillHistory() {
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-white/[0.06] dark:bg-[#161F30] sm:p-6">
-        {loading ? <div className="flex h-48 items-center justify-center"><div className="h-9 w-9 animate-spin rounded-full border-4 border-primary-200 border-t-primary-500" /></div> : visibleHistory.length === 0 ? <div className="flex h-48 flex-col items-center justify-center text-center text-slate-400"><Boxes className="mb-3 h-10 w-10" /><p className="font-semibold">No refill records found.</p><p className="mt-1 text-xs">New records will appear after a compartment is restocked.</p></div> : <div className="max-h-[720px] space-y-3 overflow-y-auto pr-1">{visibleHistory.map((entry) => { const isPaper = entry.item_type === 'paper'; return <article key={entry.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-primary-300 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-primary-500/50"><div className="flex items-start justify-between gap-4"><div className="flex min-w-0 items-start gap-3"><div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${isPaper ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300' : 'bg-blue-100 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300'}`}><PackagePlus className="h-5 w-5" /></div><div className="min-w-0"><h2 className="truncate font-extrabold text-slate-800 dark:text-white">{entry.product_name}</h2><p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{isPaper ? 'Paper' : 'Ballpen'} compartment {entry.compartment_number}</p></div></div><span className="shrink-0 rounded-full border border-primary-200 bg-primary-50 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-primary-700 dark:border-primary-800/50 dark:bg-primary-950/30 dark:text-primary-300">{entry.operation}</span></div><div className="mt-4 grid gap-3 border-t border-slate-200/80 pt-3 text-xs dark:border-white/[0.07] sm:grid-cols-3"><div><p className="font-bold uppercase tracking-wider text-slate-400">Added</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">{entry.quantity_added} {entry.quantity_unit}</p></div><div><p className="font-bold uppercase tracking-wider text-slate-400">Bay stock</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">{entry.previous_compartment_stock} → {entry.resulting_compartment_stock} {entry.quantity_unit}</p></div><div><p className="flex items-center gap-1 font-bold uppercase tracking-wider text-slate-400"><CalendarDays className="h-3.5 w-3.5" /> Recorded</p><p className="mt-1 text-sm font-semibold text-slate-600 dark:text-slate-300">{formatDate(entry.created_at)}</p></div></div></article>; })}</div>}
+        {loading ? <div className="flex h-48 items-center justify-center"><div className="h-9 w-9 animate-spin rounded-full border-4 border-primary-200 border-t-primary-500" /></div> : visibleHistory.length === 0 ? <div className="flex h-48 flex-col items-center justify-center text-center text-slate-400"><Boxes className="mb-3 h-10 w-10" /><p className="font-semibold">No inventory activity found.</p><p className="mt-1 text-xs">Pad installs, replacements, count corrections, dispenses, and refills appear here.</p></div> : <div className="max-h-[720px] space-y-3 overflow-y-auto pr-1">{visibleHistory.map((entry) => { const isPaper = entry.item_type === 'paper'; const paperEvent = entry.history_kind === 'pad'; const quantityLabel = paperEvent ? ({ LOAD: 'Sheets loaded', REPLACE: 'New pad sheets', REMOVE: 'Sheets at removal', COUNT_SET: 'Corrected remaining', DISPENSE: 'Sheets dispensed', LEGACY_RECONCILE: 'Sheets recorded' }[entry.operation] || 'Sheets') : 'Added'; return <article key={entry.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-primary-300 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-primary-500/50"><div className="flex items-start justify-between gap-4"><div className="flex min-w-0 items-start gap-3"><div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${isPaper ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300' : 'bg-blue-100 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300'}`}><PackagePlus className="h-5 w-5" /></div><div className="min-w-0"><h2 className="truncate font-extrabold text-slate-800 dark:text-white">{entry.product_name}</h2><p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{isPaper ? 'Paper' : 'Ballpen'} compartment {entry.compartment_number}{paperEvent && entry.previous_product_name && entry.previous_product_name !== entry.product_name ? ` · replaced ${entry.previous_product_name}` : ''}</p></div></div><span className="shrink-0 rounded-full border border-primary-200 bg-primary-50 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-primary-700 dark:border-primary-800/50 dark:bg-primary-950/30 dark:text-primary-300">{entry.operation}</span></div><div className="mt-4 grid gap-3 border-t border-slate-200/80 pt-3 text-xs dark:border-white/[0.07] sm:grid-cols-3"><div><p className="font-bold uppercase tracking-wider text-slate-400">{quantityLabel}</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">{entry.quantity_added ?? 0} {entry.quantity_unit}</p></div><div><p className="font-bold uppercase tracking-wider text-slate-400">Sheets / bay stock</p><p className="mt-1 text-sm font-extrabold text-slate-800 dark:text-white">{entry.previous_compartment_stock} → {entry.resulting_compartment_stock} {entry.quantity_unit}</p></div><div><p className="flex items-center gap-1 font-bold uppercase tracking-wider text-slate-400"><CalendarDays className="h-3.5 w-3.5" /> Recorded</p><p className="mt-1 text-sm font-semibold text-slate-600 dark:text-slate-300">{formatDate(entry.created_at)}</p></div></div>{(entry.reason || entry.transaction_id) && <p className="mt-3 border-t border-slate-200/80 pt-3 text-xs text-slate-500 dark:border-white/[0.07] dark:text-slate-400">{entry.reason && <span>Reason: {entry.reason}</span>}{entry.reason && entry.transaction_id && ' · '}{entry.transaction_id && <span>Transaction: {entry.transaction_id}</span>}</p>}</article>; })}</div>}
       </div>
     </div>
   );

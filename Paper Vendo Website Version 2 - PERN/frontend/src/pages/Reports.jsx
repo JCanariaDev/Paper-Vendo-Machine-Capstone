@@ -636,7 +636,7 @@ export default function Reports() {
             </select>
           </label>
           <div className="flex items-end">
-            <button onClick={generateReport} disabled={loading} className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary-500 text-sm font-bold text-white shadow-md shadow-primary-500/10 transition-colors hover:bg-primary-600 disabled:opacity-60">
+            <button title="Load transactions within the selected dates and filters." onClick={generateReport} disabled={loading} className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary-500 text-sm font-bold text-white shadow-md shadow-primary-500/10 transition-colors hover:bg-primary-600 disabled:opacity-60">
               {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
               {loading ? 'Loading report' : 'Run report'}
             </button>
@@ -682,19 +682,19 @@ export default function Reports() {
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Paper size
-            <select value={pdfPageSize} onChange={(event) => setPdfPageSize(event.target.value)} className="mt-1 block h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium normal-case tracking-normal text-slate-800 dark:border-white/[0.08] dark:bg-slate-900 dark:text-white">
+            <select title="Choose the printable PDF page size." value={pdfPageSize} onChange={(event) => setPdfPageSize(event.target.value)} className="mt-1 block h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium normal-case tracking-normal text-slate-800 dark:border-white/[0.08] dark:bg-slate-900 dark:text-white">
               <option value="a4">A4</option>
               <option value="letter">Letter</option>
             </select>
           </label>
           <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Orientation
-            <select value={pdfOrientation} onChange={(event) => setPdfOrientation(event.target.value)} className="mt-1 block h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium normal-case tracking-normal text-slate-800 dark:border-white/[0.08] dark:bg-slate-900 dark:text-white">
+            <select title="Choose portrait or landscape PDF page orientation." value={pdfOrientation} onChange={(event) => setPdfOrientation(event.target.value)} className="mt-1 block h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium normal-case tracking-normal text-slate-800 dark:border-white/[0.08] dark:bg-slate-900 dark:text-white">
               <option value="landscape">Landscape</option>
               <option value="portrait">Portrait</option>
             </select>
           </label>
           <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600 dark:border-white/[0.08] dark:text-slate-300">
-            <input type="checkbox" checked={includeLedger} onChange={(event) => setIncludeLedger(event.target.checked)} className="accent-primary-600" />
+            <input title="Include the transaction detail table in the PDF." type="checkbox" checked={includeLedger} onChange={(event) => setIncludeLedger(event.target.checked)} className="accent-primary-600" />
             Include ledger
           </label>
         </div>
@@ -711,10 +711,10 @@ export default function Reports() {
               <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search TR, item, issue..." className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-10 pr-3 text-sm text-slate-800 outline-none focus:border-primary-500 dark:border-white/[0.08] dark:bg-slate-900 dark:text-white" />
             </label>
-            <button onClick={exportCSV} disabled={!visibleTransactions.length || loading || exporting !== null} className="flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 dark:border-white/[0.08] dark:text-slate-300 dark:hover:bg-white/[0.04]">
+            <button title="Download the filtered report as a spreadsheet-friendly CSV." onClick={exportCSV} disabled={!visibleTransactions.length || loading || exporting !== null} className="flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 dark:border-white/[0.08] dark:text-slate-300 dark:hover:bg-white/[0.04]">
               {exporting === 'csv' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} CSV
             </button>
-            <button onClick={exportPDF} disabled={!visibleTransactions.length || loading || exporting !== null} className="flex h-10 items-center justify-center gap-2 rounded-xl bg-[#0F535C] px-3 text-xs font-bold text-white transition hover:bg-[#0B4148] disabled:opacity-50">
+            <button title="Generate a printable PDF using the selected page size, orientation, and detail options." onClick={exportPDF} disabled={!visibleTransactions.length || loading || exporting !== null} className="flex h-10 items-center justify-center gap-2 rounded-xl bg-[#0F535C] px-3 text-xs font-bold text-white transition hover:bg-[#0B4148] disabled:opacity-50">
               {exporting === 'pdf' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />} PDF
             </button>
           </div>

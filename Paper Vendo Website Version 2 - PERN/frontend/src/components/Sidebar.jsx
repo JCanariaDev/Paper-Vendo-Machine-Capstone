@@ -15,7 +15,8 @@ import {
   Moon, 
   User,
   X,
-  Settings
+  Settings,
+  BookOpen
 } from 'lucide-react';
 
 export default function Sidebar({ isOpen, onClose }) {
@@ -27,7 +28,8 @@ export default function Sidebar({ isOpen, onClose }) {
     { to: '/inventory', label: 'Inventory',        icon: Boxes },
     { to: '/refill-history', label: 'Refill History', icon: PackagePlus },
     { to: '/transactions', label: 'Sales History', icon: History },
-    { to: '/logs',        label: 'Machine Logs',  icon: ScrollText },
+    { to: '/logs',        label: 'System Logs',  icon: ScrollText },
+    { to: '/help',        label: 'Instructions & Help', icon: BookOpen },
   ];
 
   if (user?.role === 'superadmin' || user?.role === 'viewer') {

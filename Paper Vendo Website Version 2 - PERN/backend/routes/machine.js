@@ -84,6 +84,7 @@ function flattenPaperInventory(row, assignedBays = []) {
     sheets_per_unit: asInt(row.sheets_per_unit, 1),
     assigned_bay: bay ? bay.compartment_number : null,
     current_bay_pads: bay ? asInt(bay.current_pad_stock, bay.presence_status === 'HIGH' ? 1 : 0) : 0,
+    current_bay_sheets_remaining: bay?.current_pad_sheets_remaining ?? null,
     presence_status: bay ? bay.presence_status : 'N/A'
   };
 }
@@ -99,6 +100,9 @@ function flattenPaperCompartment(row) {
     sheets_per_unit: asInt(product.sheets_per_unit, 1),
     cost_per_unit: asMoney(product.cost_per_unit_cents),
     current_pad_stock: asInt(row.current_pad_stock, row.presence_status === 'HIGH' ? 1 : 0),
+    pad_sheets_loaded: row.pad_sheets_loaded ?? null,
+    current_pad_sheets_remaining: row.current_pad_sheets_remaining ?? null,
+    reserved_pad_sheets: asInt(row.reserved_pad_sheets),
     presence_status: row.presence_status || 'HIGH', // 'HIGH' (Has Paper) or 'LOW' (Empty)
     motor_channel: row.motor_channel,
     sensor_channel: row.sensor_channel,
@@ -409,6 +413,34 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     }
   });
 
+  router.get('/inventory/paper-pad-history', async (_req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('paper_pad_history')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(500);
+      if (error) throw error;
+      const productIds = [...new Set((data || []).flatMap((entry) => [entry.product_id, entry.previous_product_id]).filter(Boolean))];
+      const { data: products, error: productsError } = productIds.length
+        ? await supabase.from('paper_inventory').select('id, brand_name, paper_size').in('id', productIds)
+        : { data: [], error: null };
+      if (productsError) throw productsError;
+      const productNames = new Map((products || []).map((product) => [product.id, `${product.brand_name} – ${product.paper_size}`]));
+      return res.status(200).json((data || []).map((entry) => ({
+        ...entry,
+        product_name: productNames.get(entry.product_id) || productNames.get(entry.previous_product_id) || 'Paper pad',
+        previous_product_name: productNames.get(entry.previous_product_id) || null
+      })));
+    } catch (err) {
+      console.error('Error fetching paper pad history:', err);
+      if (err.code === 'PGRST205' || err.code === '42P01') {
+        return res.status(503).json({ message: 'Paper pad history is unavailable until its additive database migration is applied.' });
+      }
+      return res.status(500).json({ message: 'Failed to retrieve paper pad history.' });
+    }
+  });
+
   router.get('/transactions', async (req, res) => {
     const { limit, startDate, endDate, startAt, endAt, itemType, status } = req.query;
     try {
@@ -600,137 +632,45 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
     }
   });
 
-  // Reassign / Refill Paper Compartment Bay (1-2)
+  // Manage a single installed pad. Storage and compartment changes are atomic in SQL.
   router.put('/paper-compartments/:compartment_number', authorizeRoles('superadmin'), async (req, res) => {
     const compartmentNumber = asInt(req.params.compartment_number);
-    const { assigned_product_id, pads_refilled = 0, presence_status = 'HIGH', physical_status = 'Good' } = req.body;
+    const { action, assigned_product_id, sheets, reason } = req.body;
 
     try {
       if (![1, 2].includes(compartmentNumber)) {
         return res.status(400).json({ message: 'Paper bay must be Bay 1 or Bay 2.' });
       }
-
       const productId = assigned_product_id ? asInt(assigned_product_id) : null;
-      const pads = asInt(pads_refilled, 0);
-      const { data: beforeComp } = await supabase
-        .from('paper_compartments')
-        .select('assigned_product_id, current_pad_stock')
-        .eq('compartment_number', compartmentNumber)
-        .single();
-
-      if (productId !== null) {
-        const { data: product, error: productError } = await supabase
-          .from('paper_inventory')
-          .select('paper_size')
-          .eq('id', productId)
-          .single();
-        if (productError || !product) {
-          return res.status(400).json({ message: 'Selected paper product was not found.' });
-        }
-
-        const isExistingAssignment = beforeComp?.assigned_product_id === productId;
-        if (!isExistingAssignment && !paperSizeAllowedInBay(compartmentNumber, product.paper_size)) {
-          const allowed = compartmentNumber === 1 ? '1_whole or crosswise' : 'lengthwise or 1/4';
-          return res.status(400).json({ message: `Paper Bay ${compartmentNumber} only accepts ${allowed} paper.` });
-        }
+      const sheetCount = sheets === undefined || sheets === null || sheets === '' ? null : Number(sheets);
+      if (sheetCount !== null && (!Number.isInteger(sheetCount) || sheetCount < 0)) {
+        return res.status(400).json({ message: 'Sheet count must be a whole number of zero or more.' });
+      }
+      if (['LOAD', 'REPLACE'].includes(String(action || '').toUpperCase())
+          && (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(sheetCount) || sheetCount <= 0)) {
+        return res.status(400).json({ message: 'Choose a paper product and enter the new pad’s starting sheet count.' });
+      }
+      if (['REMOVE', 'REPLACE', 'COUNT_SET'].includes(String(action || '').toUpperCase()) && !String(reason || '').trim()) {
+        return res.status(400).json({ message: 'Add a short reason for this removal, replacement, or count correction.' });
       }
 
-      // Call database procedure to reassign and deduct pads safely
-      const { error: rpcError } = await supabase.rpc('admin_reassign_paper_bay', {
+      const { error } = await supabase.rpc('admin_manage_paper_pad', {
         p_compartment_number: compartmentNumber,
-        p_new_product_id: productId,
-        p_pads_refilled: pads,
-        p_presence_status: presence_status
+        p_action: String(action || '').toUpperCase(),
+        p_product_id: productId,
+        p_sheets: sheetCount,
+        p_reason: String(reason || '').trim() || null,
+        p_performed_by: req.user?.username || req.user?.id || 'admin'
       });
-
-      if (rpcError) {
-        console.warn('RPC admin_reassign_paper_bay error, using direct table fallback:', rpcError.message);
-        const { data: comp } = await supabase.from('paper_compartments').select('*').eq('compartment_number', compartmentNumber).single();
-        const oldProductId = comp?.assigned_product_id;
-        const currentBayPads = comp?.current_pad_stock !== undefined ? asInt(comp.current_pad_stock) : (comp?.presence_status === 'HIGH' ? 1 : 0);
-        const isReassign = (oldProductId && productId && oldProductId !== productId);
-
-        // If reassigning to a different product:
-        if (isReassign) {
-          // Return all N pads currently in the bay back to the old product's storage
-          if (currentBayPads > 0) {
-            const { data: oldProd } = await supabase.from('paper_inventory').select('stock_pads').eq('id', oldProductId).single();
-            if (oldProd) {
-              await supabase.from('paper_inventory').update({
-                stock_pads: oldProd.stock_pads + currentBayPads,
-                updated_at: new Date().toISOString()
-              }).eq('id', oldProductId);
-            }
-          }
-
-          // Check if old product is assigned to any other paper bay
-          const { data: otherComp } = await supabase.from('paper_compartments').select('id').eq('assigned_product_id', oldProductId).neq('compartment_number', compartmentNumber);
-          if (!otherComp || otherComp.length === 0) {
-            const { data: oldProd } = await supabase.from('paper_inventory').select('stock_pads').eq('id', oldProductId).single();
-            await supabase.from('paper_inventory').update({
-              location_status: (oldProd?.stock_pads > 0) ? 'In stock' : 'Out of stock',
-              updated_at: new Date().toISOString()
-            }).eq('id', oldProductId);
-          }
+      if (error) {
+        if (error.code === 'PGRST202' || error.code === '42883') {
+          return res.status(503).json({ message: 'Paper pad management migration is not applied yet; no inventory changes were made.' });
         }
-
-        const basePads = isReassign ? 0 : currentBayPads;
-        let newBayPads = basePads + pads;
-        if (presence_status === 'LOW' && pads === 0) {
-          newBayPads = 0;
-        }
-
-        if (productId) {
-          if (pads > 0) {
-            const { data: prod } = await supabase.from('paper_inventory').select('stock_pads').eq('id', productId).single();
-            if (prod && prod.stock_pads >= pads) {
-              await supabase.from('paper_inventory').update({
-                stock_pads: prod.stock_pads - pads,
-                location_status: 'In compartment',
-                updated_at: new Date().toISOString()
-              }).eq('id', productId);
-            }
-          } else {
-            await supabase.from('paper_inventory').update({
-              location_status: 'In compartment',
-              updated_at: new Date().toISOString()
-            }).eq('id', productId);
-          }
-        }
-        await supabase.from('paper_compartments').update({
-          assigned_product_id: productId,
-          current_pad_stock: newBayPads,
-          presence_status: newBayPads > 0 ? 'HIGH' : presence_status,
-          physical_status,
-          updated_at: new Date().toISOString()
-        }).eq('compartment_number', compartmentNumber);
+        const status = ['22023', '23514', '23503'].includes(error.code) ? 400 : 500;
+        return res.status(status).json({ message: error.message || 'Paper pad update failed; no inventory changes were made.' });
       }
 
-      const { data: afterComp } = await supabase
-        .from('paper_compartments')
-        .select('assigned_product_id, current_pad_stock')
-        .eq('compartment_number', compartmentNumber)
-        .single();
-      const { data: product } = productId
-        ? await supabase.from('paper_inventory').select('brand_name, paper_size').eq('id', productId).single()
-        : { data: null };
-      const wasReassigned = beforeComp?.assigned_product_id && productId && beforeComp.assigned_product_id !== productId;
-      if (pads > 0 || wasReassigned) {
-        await recordRefillHistory(supabase, {
-          item_type: 'paper',
-          compartment_number: compartmentNumber,
-          product_id: productId,
-          product_name: product ? `${product.brand_name} ${product.paper_size}` : 'Unassigned paper bay',
-          operation: wasReassigned ? 'REASSIGNMENT' : 'REFILL',
-          quantity_added: pads,
-          quantity_unit: 'pads',
-          previous_compartment_stock: asInt(beforeComp?.current_pad_stock),
-          resulting_compartment_stock: asInt(afterComp?.current_pad_stock),
-          performed_by: req.user?.username || null
-        });
-      }
-
-      return res.status(200).json({ message: `Paper Compartment ${compartmentNumber} updated successfully.` });
+      return res.status(200).json({ message: `Paper Bay ${compartmentNumber} updated successfully.` });
     } catch (err) {
       console.error('Error updating paper compartment:', err);
       return res.status(500).json({ message: 'Failed to update paper compartment.' });
@@ -925,7 +865,7 @@ export function createMachineRouter(supabase, networkConfigSupabase) {
 
   router.patch('/paper/:id/archive', authorizeRoles('superadmin'), async (req, res) => {
     try {
-      const { data: bay } = await supabase.from('paper_compartments').select('compartment_number').eq('assigned_product_id', asInt(req.params.id)).gt('current_pad_stock', 0).maybeSingle();
+      const { data: bay } = await supabase.from('paper_compartments').select('compartment_number').eq('assigned_product_id', asInt(req.params.id)).maybeSingle();
       if (bay) return res.status(409).json({ message: `Remove the product from Paper Bay ${bay.compartment_number} before archiving it.` });
       const { data, error } = await supabase.from('paper_inventory').update({ active: false, location_status: 'Out of stock', updated_at: new Date().toISOString() }).eq('id', asInt(req.params.id)).select().single();
       if (error) throw error;

@@ -13,6 +13,7 @@ import Inventory from './pages/Inventory';
 import RefillHistory from './pages/RefillHistory';
 import Transactions from './pages/Transactions';
 import Logs from './pages/Logs';
+import Help from './pages/Help';
 import Analytics from './pages/Analytics';
 import Reports from './pages/Reports';
 import MachineConfiguration from './pages/MachineConfiguration';
@@ -206,6 +207,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Logs />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/help"
+            element={
+              <ProtectedRoute>
+                <Help />
               </ProtectedRoute>
             }
           />
