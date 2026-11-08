@@ -2,8 +2,10 @@ import React, { useState, useEffect, createContext, useContext } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 
-// Configure Axios default base URL for production deployments
-axios.defaults.baseURL = import.meta.env.VITE_API_URL || '';
+// Keep production API requests pointed at the backend even if Vercel's build
+// environment is missing VITE_API_URL. The timeout prevents endless auth spinners.
+axios.defaults.baseURL = import.meta.env.VITE_API_URL || 'https://paper-vendo-backend.onrender.com';
+axios.defaults.timeout = 15000;
 
 // Import Pages
 import Login from './pages/Login';
@@ -100,7 +102,7 @@ export default function App() {
           setLoading(false);
         })
         .catch(err => {
-          console.warn('Session expired. Logging out.');
+          console.warn('Session verification failed.', err);
           logout();
           setLoading(false);
         });

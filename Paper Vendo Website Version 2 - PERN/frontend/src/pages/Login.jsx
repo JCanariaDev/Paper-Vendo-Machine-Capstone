@@ -24,7 +24,9 @@ export default function Login() {
       login(response.data.token, response.data.user);
     } catch (err) {
       console.error('Authentication error:', err);
-      setError(err.response?.data?.message || 'Authentication failed. Please verify connection.');
+      setError(err.response?.data?.message || (err.code === 'ECONNABORTED'
+        ? 'The server did not respond in time. Check the backend service and try again.'
+        : 'Authentication failed. Please verify the server connection and try again.'));
     } finally {
       setLoading(false);
     }
