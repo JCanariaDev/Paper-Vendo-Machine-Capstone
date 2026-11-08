@@ -23,11 +23,13 @@ const sections = [
     icon: Boxes,
     tone: 'amber',
     steps: [
-      'Use Inventory to check the product size, storage count, assigned bay, presence state, and recorded sheet count.',
+      'In the paper product card, Sheets / sale unit is the quantity dispensed for one paid unit. For example, 3 means one paid unit dispenses 3 sheets; two units dispense 6.',
+      'Sheets / pad is the verified nominal capacity of one full physical pad. Storage sheets are an estimate: storage pads multiplied by sheets per pad. Existing products marked Unverified need a physical capacity check before you enter a value.',
       'Bay 1 accepts 1_whole or crosswise paper. Bay 2 accepts lengthwise or 1/4 paper.',
       'Each bay is designed for one installed pad. Remove or replace the existing pad before loading another.',
-      'When installing a pad, count the sheets physically and enter that actual starting count. Do not assume the catalog capacity is the physical count.',
-      'Use Correct sheet count only after a physical recount or confirmed failed dispense. Add a reason so the audit trail explains the change.',
+      'When loading or replacing a pad, physically count the sheets and enter Total actual sheets in the installed pad. This is the starting count for that specific pad; it may be lower than nominal capacity if the pad is partial.',
+      'Inventory shows Total sheets loaded, Sheets remaining, and Available after reservations. Available after reservations is remaining sheets minus those already reserved for active orders.',
+      'Use Correct sheet count only after a physical recount or confirmed failed dispense. It changes the current remaining count, not the nominal pad capacity or sheets dispensed per sale unit. Add a reason for the audit trail.',
       'A removed or replaced partial pad is not automatically returned to storage. Discard it or keep it separate and reconcile storage deliberately.'
     ]
   },
