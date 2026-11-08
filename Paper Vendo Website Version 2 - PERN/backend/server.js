@@ -12,11 +12,6 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
-  console.error('CRITICAL: Set JWT_SECRET to a random value of at least 32 characters.');
-  process.exit(1);
-}
-
 const allowedOrigins = new Set(
   (process.env.WEBAPP_ORIGINS || 'http://localhost:5173,https://paper-vendo-machine-capstone.vercel.app')
     .split(',')
