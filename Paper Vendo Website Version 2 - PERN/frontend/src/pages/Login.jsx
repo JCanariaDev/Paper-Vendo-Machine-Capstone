@@ -20,12 +20,12 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const response = await axios.post('/api/auth/login', { username, password });
+      const response = await axios.post('/api/auth/login', { username, password }, { timeout: 60000 });
       login(response.data.token, response.data.user);
     } catch (err) {
       console.error('Authentication error:', err);
       setError(err.response?.data?.message || (err.code === 'ECONNABORTED'
-        ? 'The server did not respond in time. Check the backend service and try again.'
+        ? 'The backend did not respond within 60 seconds. Check its service status and try again.'
         : 'Authentication failed. Please verify the server connection and try again.'));
     } finally {
       setLoading(false);

@@ -93,7 +93,7 @@ export default function App() {
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       
       // Background verification of token
-      axios.get('/api/auth/verify')
+      axios.get('/api/auth/verify', { timeout: 60000 })
         .then(res => {
           if (res.data.valid) {
             setUser(res.data.user);
