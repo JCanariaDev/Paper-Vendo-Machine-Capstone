@@ -468,7 +468,7 @@ export default function Inventory() {
 
           <div className="grid gap-3 md:grid-cols-2">
             {filteredPaper.map((item) => {
-              const isInBay = item.location_status === 'In compartment';
+              const isInBay = Boolean(item.assigned_bay);
               const isActive = item.active !== false;
               return (
                 <article key={item.id} className={`rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-primary-300 hover:bg-primary-50/30 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-primary-500/50 dark:hover:bg-primary-500/[0.05] ${!isActive ? 'opacity-65' : ''}`}>
@@ -476,8 +476,8 @@ export default function Inventory() {
                     <div className="flex min-w-0 items-start gap-2.5">
                       <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${!isActive ? 'bg-slate-400' : isInBay ? 'bg-emerald-500' : 'bg-slate-300'}`} />
                       <div className="min-w-0">
-                        <h3 className="truncate text-base font-extrabold text-slate-800 dark:text-white">{item.brand_name}</h3>
-                        <p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">{item.paper_size}</p>
+                        <h3 className={`truncate text-base font-extrabold ${isInBay ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-800 dark:text-white'}`}>{item.brand_name}</h3>
+                        <p className={`mt-0.5 text-xs font-semibold ${isInBay ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'}`}>{item.paper_size}</p>
                       </div>
                     </div>
                     {user?.role === 'superadmin' && <div className="flex items-center gap-1">
@@ -522,10 +522,11 @@ export default function Inventory() {
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {filteredPen.map((item) => {
               const isActive = item.active !== false;
+              const isInBay = Boolean(item.assigned_bay);
               return (
               <article key={item.id} className={`rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-blue-300 hover:bg-blue-50/30 dark:border-white/[0.07] dark:bg-white/[0.025] dark:hover:border-blue-500/50 dark:hover:bg-blue-500/[0.05] ${!isActive ? 'opacity-65' : ''}`}>
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-start gap-2.5"><span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${isActive ? 'bg-blue-500' : 'bg-slate-400'}`} /><div className="min-w-0"><h3 className="truncate text-base font-extrabold text-slate-800 dark:text-white">{item.item_name}</h3><p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Ballpen product</p></div></div>
+                  <div className="flex min-w-0 items-start gap-2.5"><span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${isActive ? 'bg-blue-500' : 'bg-slate-400'}`} /><div className="min-w-0"><h3 className={`truncate text-base font-extrabold ${isInBay ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-800 dark:text-white'}`}>{item.item_name}</h3><p className={`mt-0.5 text-xs font-semibold ${isInBay ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'}`}>Ballpen product</p></div></div>
                   {user?.role === 'superadmin' && <div className="flex items-center gap-1"><button onClick={() => openMasterEditModal('pen', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title="Edit ballpen product"><Edit3 className="h-4 w-4" /></button><button onClick={() => toggleMasterActive('pen', item)} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white hover:text-primary-500 dark:hover:bg-white/[0.06]" title={isActive ? 'Archive ballpen product' : 'Restore ballpen product'}>{isActive ? <Archive className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}</button></div>}
                 </div>
                 {!isActive && <span className="mt-3 inline-flex rounded-full bg-slate-200 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:bg-white/[0.08] dark:text-slate-300">Archived · history preserved</span>}
