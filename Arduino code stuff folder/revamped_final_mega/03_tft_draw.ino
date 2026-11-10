@@ -302,8 +302,36 @@ void drawIdleContent() {
   // Wi-Fi transitions repaint this region only, preserving the status bar and mascot.
   tft.fillRect(0, 90, tft.width(), 160, COL_BACKGROUND);
   if (wifiStatus == WIFI_STATUS_CONNECTED && catalogLoaded) {
-    printCenteredStyled("Insert Coins", tft.width() / 2, 140, COL_TEXT, true, true);
-    printCenteredStyled("to use.", tft.width() / 2, 165, COL_TEXT);
+    printCenteredStyled("PRODUCT PRICES", tft.width() / 2, 96, COL_TEXT, false, true);
+    printCenteredStyled("Please insert correct amount",
+                        tft.width() / 2, 113, COL_GOLD);
+
+    const int rowY[3] = { 126, 157, 188 };
+    for (int i = 0; i < PAPER_COUNT; i++) {
+      const bool available = paperCatalog[i].isPaperPresent;
+      tft.fillRoundRect(8, rowY[i], tft.width() - 16, 27, 6, COL_PANEL);
+      tft.drawRoundRect(8, rowY[i], tft.width() - 16, 27, 6,
+                        available ? COL_CYAN : COL_GOLD);
+      printModernAt("B" + String(i + 1) + ": " + String(paperCatalog[i].name),
+                    16, rowY[i] + 19, COL_TEXT, false, 140);
+      printModernRightAt("P" + String(catalogDisplayPrice(i), 2),
+                         tft.width() - 15, rowY[i] + 19,
+                         available ? COL_GREEN : COL_GOLD);
+    }
+
+    const int penY = rowY[2];
+    const bool penAvailable = ballpenCatalogStock[0] > 0;
+    tft.fillRoundRect(8, penY, tft.width() - 16, 27, 6, COL_PANEL);
+    tft.drawRoundRect(8, penY, tft.width() - 16, 27, 6,
+                      penAvailable ? COL_CYAN : COL_GOLD);
+    printModernAt("Ballpen: " + String(ballpenCatalog[0].name),
+                  16, penY + 19, COL_TEXT, false, 140);
+    printModernRightAt("P" + String(ballpenCatalog[0].price, 2),
+                       tft.width() - 15, penY + 19,
+                       penAvailable ? COL_GREEN : COL_GOLD);
+
+    printCenteredStyled("Insert coins, then choose items",
+                        tft.width() / 2, 232, COL_TEXT);
     return;
   }
 
