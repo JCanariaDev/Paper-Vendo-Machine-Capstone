@@ -210,7 +210,7 @@ bool feedOneSheet(int bayIndex) {
   int blockedStreak = 0;
   int clearStreak = 0;
   const int NOISE_FILTER_STEPS = 30;
-  const long MAX_STEPS = 10000; // ~16 seconds nominal max per sheet at 800us timing
+  const long MAX_STEPS = 13000; // ~16 seconds nominal max per sheet at 800us timing
   
   for (long step = 0; step < MAX_STEPS; step++) {
     // Non-blocking serial check for emergency STOP without freezing the stepper loop
@@ -272,16 +272,18 @@ void sendStatus() {
   Serial.println(levelMsg);
 }
 
-void syncPaperStock(int bayNum, int padStock, int unitSheets) {
+void syncPaperStock(int bayNum, int padStock, int sheetsPerPadValue) {
   const int idx = bayNum - 1;
   if (idx < 0 || idx >= MOTOR_COUNT) return;
   const bool sameStockSnapshot = remainingSheets[idx] >= 0 &&
                                  paperPadStock[idx] == max(0, padStock) &&
-                                 sheetsPerPad[idx] == max(1, unitSheets);
+                                 sheetsPerPad[idx] == max(0, sheetsPerPadValue);
   paperPadStock[idx] = max(0, padStock);
-  sheetsPerPad[idx] = max(1, unitSheets);
+  sheetsPerPad[idx] = max(0, sheetsPerPadValue);
   if (!sameStockSnapshot) {
-    remainingSheets[idx] = (long)paperPadStock[idx] * sheetsPerPad[idx];
+    remainingSheets[idx] = sheetsPerPad[idx] > 0
+      ? (long)paperPadStock[idx] * sheetsPerPad[idx]
+      : -1;
   }
   sendStatus();
   showPaperDashboardPage();
@@ -321,7 +323,7 @@ void dispensePaper(int bayNum, int requestedSheets) {
   }
 
   disableAllDrivers();
-  if (remainingSheets[idx] >= 0) {
+  if (remainingSheets[idx] >= 0 && sheetsPerPad[idx] > 0) {
     remainingSheets[idx] = max(0L, remainingSheets[idx] - sheetsDispensed);
     paperPadStock[idx] = (remainingSheets[idx] + sheetsPerPad[idx] - 1) / sheetsPerPad[idx];
   }

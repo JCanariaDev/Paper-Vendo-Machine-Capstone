@@ -38,7 +38,7 @@ void parsePaperBay(String msg) {
   }
 
   const int normalizedPadStock = max(0, currentPadStock);
-  const int normalizedSheetsPerPad = max(1, sheetsPerPad);
+  const int normalizedSheetsPerPad = max(0, sheetsPerPad);
   const bool sameStockSnapshot = paperRemainingSheets[idx] >= 0 &&
                                  paperCatalog[idx].currentPadStock == normalizedPadStock &&
                                  paperCatalog[idx].sheetsPerPad == normalizedSheetsPerPad;
@@ -48,7 +48,9 @@ void parsePaperBay(String msg) {
   paperCatalog[idx].currentPadStock = normalizedPadStock;
   paperCatalog[idx].sheetsPerPad = normalizedSheetsPerPad;
   if (!sameStockSnapshot) {
-    paperRemainingSheets[idx] = (long)paperCatalog[idx].currentPadStock * paperCatalog[idx].sheetsPerPad;
+    paperRemainingSheets[idx] = normalizedSheetsPerPad > 0
+      ? (long)paperCatalog[idx].currentPadStock * normalizedSheetsPerPad
+      : -1;
   }
   paperCatalog[idx].isPaperPresent = currentPadStock > 0;
   name.toCharArray(paperCatalogNames[idx], 32);
@@ -209,8 +211,8 @@ int dispensePaperFromUno(int bayNumber, int sheetCount, const char *paperName) {
         // Format: DONE:<bay>:<count>
         int second = response.indexOf(':', 5);
         int count = response.substring(second + 1).toInt();
-        const int sheetsPerPad = max(1, paperCatalog[bayNumber - 1].sheetsPerPad);
-        if (paperRemainingSheets[bayNumber - 1] >= 0) {
+        const int sheetsPerPad = paperCatalog[bayNumber - 1].sheetsPerPad;
+        if (paperRemainingSheets[bayNumber - 1] >= 0 && sheetsPerPad > 0) {
           paperRemainingSheets[bayNumber - 1] = max(
             0L,
             paperRemainingSheets[bayNumber - 1] - count

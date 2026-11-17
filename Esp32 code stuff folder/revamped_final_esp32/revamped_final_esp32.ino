@@ -474,7 +474,7 @@ void syncLiveCatalogToMega() {
   delay(60);
 
   // 1. Fetch Paper Compartments
-  String url = String(SUPABASE_URL) + "/rest/v1/paper_compartments?select=compartment_number,assigned_product_id,presence_status,current_pad_stock,paper_inventory(brand_name,paper_size,sheets_per_unit,cost_per_unit_cents)&compartment_number=lte.2&order=compartment_number.asc";
+  String url = String(SUPABASE_URL) + "/rest/v1/paper_compartments?select=compartment_number,assigned_product_id,presence_status,current_pad_stock,paper_inventory(brand_name,paper_size,sheets_per_pad,cost_per_unit_cents)&compartment_number=lte.2&order=compartment_number.asc";
   if (http.begin(client, url)) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
@@ -508,10 +508,13 @@ void syncLiveCatalogToMega() {
           fullName.replace('\r', ' ');
           fullName.replace('\n', ' ');
 
-          int sheets = inv.isNull() ? 1 : (inv["sheets_per_unit"] | 1);
+          // Physical sheets per pad is distinct from sheets per paid unit.
+          // Send 0 when unset so controllers do not infer a whole pad is empty
+          // after dispensing one sale unit.
+          int sheetsPerPad = inv.isNull() ? 0 : (inv["sheets_per_pad"] | 0);
           int price = inv.isNull() ? 100 : (inv["cost_per_unit_cents"] | 100);
           // Format: PAPER_BAY:<bay>:<product>:<legacy_presence>:<sheets_per_pad>:<pad_stock>:<price_cents>:<name>
-          MEGA_SERIAL.println("PAPER_BAY:" + String(bayNum) + ":" + String(prodId) + ":" + presence + ":" + String(sheets) + ":" + String(padStock) + ":" + String(price) + ":" + fullName);
+          MEGA_SERIAL.println("PAPER_BAY:" + String(bayNum) + ":" + String(prodId) + ":" + presence + ":" + String(sheetsPerPad) + ":" + String(padStock) + ":" + String(price) + ":" + fullName);
           delay(60);
         }
       } else {
